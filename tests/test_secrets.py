@@ -68,7 +68,7 @@ class _SecretCheck(Check):
     """A check type that resolves one secret reference at construction."""
 
     def __init__(self, *, token: str = TOKEN_REF, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+        super().__init__(config_keys=("token",), **kwargs)
         self.token = self.resolve_secret(token)
         self.ran = False
 

@@ -53,7 +53,8 @@ class _Shaped(Check):
 
     def __init__(self, *, blocks: Mapping[str, Any] | None = None,
                  **kwargs: Any) -> None:
-        super().__init__(gradings=self.GRADINGS, **kwargs)
+        # The blocks it reads are the keys its file takes (ADR-0151).
+        super().__init__(gradings=self.GRADINGS, config_keys=self.BLOCKS, **kwargs)
         blocks = blocks or {}
         self.graded: dict[str, Graded] = {
             name: self.grading_block(name).read(blocks.get(name), name)

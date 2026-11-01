@@ -1,7 +1,7 @@
 # ADR-0128 — Where a node's first look comes from: `chips`, `fold_ok` and `reason_cap`
 
 - **Status:** Accepted
-- **Date:** 2026-10-25 (accepted 2026-10-11)
+- **Date:** 2026-11-01 (accepted 2026-10-11)
 - **Related:** [ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)
   (the tree whose first look this decides), [ADR-0012](0012-node-metadata.md) and
   [ADR-0017](0017-node-title.md) (`nodes.yaml`, by path, above everything a check
@@ -21,7 +21,9 @@
   addition does not move the epoch),
   [ADR-0029](0029-per-user-presentation-preferences.md) (the looks that are the
   viewer's), [ADR-0015](0015-check-discovery-union.md) (the subtree a check owns beneath
-  a mount it shares)
+  a mount it shares),
+  [ADR-0151](0151-a-type-states-the-keys-its-file-takes-and-any-other-stops-the-start.md)
+  (a key a check's file writes that nothing takes — decision 7 amended)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -179,9 +181,12 @@ In a check's file the booleans are strict flags and `reason_cap` is read as
 bad value warns and gives way to the library's own. In `nodes.yaml` it keeps what a bad
 entry does there today, a note at startup and the file unread. A type's declaration is
 code, held by its tests, and one of the wrong kind refuses the check's construction,
-naming its entry, as its `show_when_quiet` does. In each of them a key the loader does
-not know warns at startup, naming the key and its file — for a type's declaration, the
-type — where it was ignored in silence.
+naming its entry, as its `show_when_quiet` does. In a check's file a key the loader does
+not know stops the start, naming the file, the key and what its place takes — in a
+`subnodes:` entry and a `children:` block as at the top level
+([ADR-0151](0151-a-type-states-the-keys-its-file-takes-and-any-other-stops-the-start.md)
+decision 3); in `nodes.yaml`, `settings.yaml` and a type's declaration it warns at
+startup, naming the key and its file — for a type's declaration, the type.
 
 ### 8. A level nobody spoke for starts as chips once it is big
 

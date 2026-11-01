@@ -12,7 +12,8 @@ the record it reads by the dotted name a template addresses it by, and a kind:
 * a **pair** of levels over a number, ``<key>_warn`` and ``<key>_error``, beside
   ``<key>_reason`` and with ``<key>: null`` switching the judgment off, a level written
   with its unit: a ``max_…`` pair fails above its level and a ``min_…`` pair below it,
-  so that a level is the last value that passes (decisions 2 and 3);
+  so that a level is the last value that passes, and a minimum of 0 over a count, a
+  size or a share, which could never fire, is refused (decisions 2 and 3);
 * a **set** of accepted values under its key — ``http``'s ``expected_status`` — any
   other value grading the code the type declares for it;
 * a **judgment** the type makes in its own code, which a deployment gives a sentence,
@@ -38,11 +39,11 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from little_sister.codes import StatusCode, worst_of
 from little_sister.errors import CheckError
-from little_sister.limits import format_weight
 from little_sister.reasons import Entry, derived_slug, plain
 from little_sister.spans import format_duration
 
@@ -104,6 +105,12 @@ _DECLARED: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     JUDGMENT: (frozenset({"sentence", "kind", "field"}), frozenset({"rules"})),
     SINCE: (frozenset({"sentence", "kind"}), frozenset({"warn", "error", "rules"})),
 }
+
+#: The units whose values are never below 0, each as a refusal names one, so that a
+#: minimum's level of 0 over one could never fire (decision 3). Not an amount, since a
+#: month's cost goes below zero where its credits exceed its charges, nor a number,
+#: which may be negative; a duration's level is a second at least already.
+_NEVER_BELOW_ZERO = {COUNT: "a count", SIZE: "a size", SHARE: "a share"}
 
 #: How a refusal says what a level of each unit is.
 _UNIT_SAYS = {
@@ -273,6 +280,9 @@ def _declared(name: str, entry: object, where: str) -> Grading:
                 else _level(held["warn"], grading.unit, f"{where}.warn"))
         error = (None if held.get("error") is None
                  else _level(held["error"], grading.unit, f"{where}.error"))
+        instead = f"declare no level, and '{key}: null' switches the judgment off"
+        _reachable(grading, warn, f"{where}.warn", instead)
+        _reachable(grading, error, f"{where}.error", instead)
         _ordered(grading, warn, error, f"{where}.error", f"{where}.warn")
         grading = replace(grading, warn=warn, error=error)
     elif kind == MAP:
@@ -520,6 +530,9 @@ def _read_levels(grading: Grading, block: Mapping[str, Any],
         return Levels(off=True)
     warn = _optional(block, f"{key}_warn", grading.unit, where)
     error = _optional(block, f"{key}_error", grading.unit, where)
+    instead = f"write '{key}: null' to switch the judgment off"
+    _reachable(grading, warn, _at(where, f"{key}_warn"), instead)
+    _reachable(grading, error, _at(where, f"{key}_error"), instead)
     _ordered(grading, warn, error, _at(where, f"{key}_error"),
              _at(where, f"{key}_warn"))
     reason = _reason(block, f"{key}_reason", where)
@@ -534,6 +547,21 @@ def _optional(block: Mapping[str, Any], key: str, unit: str,
               where: str) -> float | None:
     value = block.get(key)
     return None if value is None else _level(value, unit, _at(where, key))
+
+
+def _reachable(grading: Grading, level: float | None, at: str, instead: str) -> None:
+    """Refuse a minimum's level that could never fire (decision 3): 0 over a unit whose
+    values are never below it, a count, a size or a share. ``null`` switches a judgment
+    off, and a zero that looked like a level would be a judgment switched off while it
+    still looked set. ``instead`` says what to write in its place."""
+    if level is None or level != 0 or grading.most:
+        return
+    noun = _NEVER_BELOW_ZERO.get(grading.unit)
+    if noun is None:
+        return
+    written = grading.written(level)
+    raise GradingError(f"{at} ({written}) could never be said: {noun} is never below "
+                       f"{written} — {instead}")
 
 
 def _ordered(grading: Grading, warn: float | None, error: float | None,
@@ -588,30 +616,55 @@ def _level(value: object, unit: str, where: str) -> float:
     return float(seconds)
 
 
-#: The units a configured size is written back in, largest first: the binary ones,
-#: then the decimal ones, as the library's size grammar reads them.
-_SIZE_WRITTEN = (("PiB", 1024 ** 5), ("TiB", 1024 ** 4), ("GiB", 1024 ** 3),
-                 ("MiB", 1024 ** 2), ("KiB", 1024), ("PB", 10 ** 15),
-                 ("TB", 10 ** 12), ("GB", 10 ** 9), ("MB", 10 ** 6), ("kB", 10 ** 3))
+#: The units a configured size may be written back in, smallest first: every unit the
+#: library's size grammar reads, decimal and binary, after bytes.
+_SIZE_WRITTEN = (("kB", 10 ** 3), ("KiB", 1024), ("MB", 10 ** 6), ("MiB", 1024 ** 2),
+                 ("GB", 10 ** 9), ("GiB", 1024 ** 3), ("TB", 10 ** 12),
+                 ("TiB", 1024 ** 4), ("PB", 10 ** 15), ("PiB", 1024 ** 5))
 
 
 def _written(unit: str, value: float) -> str:
-    """A level as its unit writes it back: a duration as it is configured, a size in
-    the largest unit it divides exactly — as somebody would have typed it — a share
-    with its sign."""
+    """A level as its unit writes it back, as somebody would have typed it: a duration
+    as it is configured; a size in the unit that writes it shortest (:func:`_size`); a
+    share with its sign; an amount with two decimals; and a count or a number whole
+    where it is, and otherwise exactly, never in an exponent (:func:`_figure`)."""
     if unit == DURATION:
         return format_duration(int(value))
     if unit == SIZE:
-        size = int(value)
-        for name, factor in _SIZE_WRITTEN:
-            if size and size % factor == 0:
-                return f"{size // factor} {name}"
-        return format_weight(size) if size >= 1024 else f"{size} B"
+        return _size(int(value))
     if unit == SHARE:
-        return f"{value:g}%"
+        return f"{_figure(value)}%"
     if unit == AMOUNT:
         return f"{value:,.2f}"
-    return f"{value:g}"
+    return _figure(value)
+
+
+def _figure(value: float) -> str:
+    """A number as a configuration writes it: whole where it is — ``1000000``, where
+    the general format wrote ``1e+06`` — and otherwise its shortest exact decimal,
+    ``1234567.5`` and ``0.0000001`` alike."""
+    if float(value).is_integer():
+        return str(int(value))
+    return format(Decimal(repr(float(value))), "f")
+
+
+def _size(size: int) -> str:
+    """A size in the unit that writes it in the fewest figures, as it would have been
+    typed — ``500 GB``, ``1.5 GB``, ``2 TiB`` — where the largest unit that divided it
+    exactly wrote ``488281250 KiB`` and ``1500 MB``. A unit is a candidate where the
+    size is at least one of it and is written in it with three decimals at most, so
+    that the figure reads back as the same number of bytes; the larger unit takes a
+    tie, ``1000 KiB`` over ``1024 kB``, and bytes are what is left."""
+    best = str(size)
+    unit = "B"
+    for name, factor in _SIZE_WRITTEN:
+        if size < factor or (size * 1000) % factor:
+            continue
+        whole, part = divmod(size * 1000 // factor, 1000)
+        figure = f"{whole}.{part:03d}".rstrip("0") if part else str(whole)
+        if len(figure) <= len(best):
+            best, unit = figure, name
+    return f"{best} {unit}"
 
 
 def _words(value: Mapping[Any, Any], where: str) -> Words:

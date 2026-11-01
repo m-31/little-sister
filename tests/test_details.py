@@ -234,7 +234,8 @@ class CheckFileTests(TestCase):
 
     def test_an_aspects_details_are_a_key_the_library_knows(self):
         config = {"subnodes": {"response": {"details": {"a": "b"}, "detail": {}}}}
-        self.assertEqual(unknown_check_keys(config), ["subnodes.response.detail"])
+        self.assertEqual(unknown_check_keys(config),
+                         [("subnodes.response", ["detail"], STATED_SUBNODE_KEYS)])
         self.assertIn("details", STATED_SUBNODE_KEYS)
         self.assertEqual(parse_subnode_details(config), {"response": (("a", "b"),)})
 

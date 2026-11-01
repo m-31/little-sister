@@ -21,7 +21,11 @@ from little_sister.checks.base import (
     config_markdown,
     register,
 )
-from little_sister.checks.ssh.base import SshScriptCheck, parse_output_config
+from little_sister.checks.ssh.base import (
+    OUTPUT_KEYS,
+    SshScriptCheck,
+    parse_output_config,
+)
 
 
 @register("ssh-script")
@@ -30,7 +34,7 @@ class ScriptCheck(SshScriptCheck):
 
     def __init__(self, *, capture: str, max_chars: int, keep: str,
                  **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+        super().__init__(config_keys=("interpreter", *OUTPUT_KEYS), **kwargs)
         self.capture = capture
         self.max_chars = max_chars
         self.keep = keep

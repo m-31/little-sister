@@ -85,7 +85,7 @@ class ConfigTests(TestCase):
             self.assertNotIn("unknown key", said)
 
     def test_branch_cap_is_named_as_no_longer_read(self):
-        # the interactive wall's flip took *+N more* away (backlog #91 §3.4): a file
+        # the interactive wall's flip took *+N more* away (ADR-0127 decision 6): a file
         # that still says `branch_cap` hears what took its place, in a line of its own
         # and not among the keys nothing ever read
         with tempfile.TemporaryDirectory() as directory:
@@ -255,7 +255,7 @@ class ConfigTests(TestCase):
                             for line in logs.output))
 
     def test_a_key_nothing_reads_is_named_with_its_file(self):
-        # A misspelt key did nothing and said nothing (backlog #91 §7.10).
+        # A misspelt key did nothing and said nothing.
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.yaml"
             path.write_text("reason_cap: 4\nchip: aligned\ninspection-card: off\n")

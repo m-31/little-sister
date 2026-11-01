@@ -235,8 +235,8 @@ class MaintenanceTests(_PageCase):
         self.assertEqual(response.status_code, 302)
         self.assertIsNone(self.tree.maintenance_entry(EXPORT))
         self.assertIsNone(self.tree.snapshot(EXPORT))
-        self.assertIn("Nothing is handled: no node or line is in maintenance, seen "
-                      "or held by a rule.", self._get("/handled"))
+        self.assertIn("Nothing is handled: no node or line is in maintenance, done, "
+                      "seen, silenced or held by a rule.", self._get("/handled"))
 
     def test_an_edit_keeps_it_and_makes_no_node(self) -> None:
         pin = _pin(self.tree, EXPORT)
@@ -259,11 +259,22 @@ class MaintenanceTests(_PageCase):
         self.assertEqual(section.all(tag="form"), [])
         self.assertTrue(section.has("pin-node--suspended"))
 
-    def test_the_strip_counts_only_what_is_silenced_now(self) -> None:
-        # a suspended pin silences nothing, so the wall's pill does not count it
+    def test_the_strip_counts_it_and_its_row_says_it_is_not_reported_now(
+            self) -> None:
+        # a pin stands whether or not its node is reported now, and holds nothing
+        # until it is: the pill counts what stands, its row saying the node is gone
         _pin(self.tree, EXPORT)
         self.tree.prune(JOBS, {"import"})
-        self.assertNotIn(EXPORT, self._get("/status"))
+        wall = parse(self._get("/status"))
+        pill = wall.one("maintenance-pill")
+        self.assertEqual(pill.attrs.get("title"), "1 handled: 1 node in maintenance")
+        source = self._get("/status")
+        row = re.search(r'<li class="maintenance-pop__item">.*?</li>', source)
+        assert row is not None
+        item = parse(row.group(0))
+        self.assertEqual(item.one("maintenance-pop__path").text(), EXPORT)
+        self.assertEqual(" ".join(item.one("maintenance-pop__lines").text().split()),
+                         "not reported now")
 
 
 class HistoryTests(TestCase):

@@ -1,12 +1,13 @@
 """A configured rule on the wall, in Chromium (ADR-0137 decision 10).
 
-Its block stands where its rule changes a count, its note behind the note mark, which
-opens it in the card a pin's note opens in (ADR-0135 decision 3) — the node, the
-block's sentence, the note whole and where the rule is configured — and nothing on
-it, for an admin either, is a button: a configured rule is changed in the
-configuration. A line it counts otherwise keeps its color and carries § before its
-words, without moving them. What the pages say is ``tests/test_aggregation_pages.py``'s;
-this file is what only a browser can tell.
+Its block stands where its rule changes a count while *◇ details* is on, the link that
+opens the drawer at it, as a pin's does (ADR-0147 decision 7) — the node's *Notes*
+tab at the rule's block, its note whole and where the rule is configured — and nothing
+on it, for an admin either, is a button: a configured rule is changed in the
+configuration. A line it counts otherwise keeps its color and carries § at its top
+right (ADR-0143), level with its words' first line, without moving them or making the
+line taller. What the pages say is ``tests/test_aggregation_pages.py``'s; this file is
+what only a browser can tell.
 
 Skipped wherever Playwright or a Chromium binary is unavailable
 (``docs/testing-the-gui.md``, Mode 5).
@@ -26,16 +27,13 @@ from little_sister.aggregation import AggregationRule, RuleSet, Table
 from little_sister.checks import Entry
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
+from tests.browser_binary import chromium
 from tests.browser_server import PageServer
 
 try:  # pragma: no cover - environment probe
     from playwright.sync_api import sync_playwright
 except ImportError:  # pragma: no cover
     sync_playwright = None  # type: ignore[assignment]
-
-#: A sandbox pins one browser build; a Playwright from the lock may expect another,
-#: so the one that is there is what runs (as ``tests/sweep_contrast.py`` does).
-_SANDBOX_CHROMIUM = Path("/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
 
 #: Bootstrap as ``tests/sweep_contrast.py`` vendors it (``docs/testing-the-gui.md``,
 #: Mode 4), where there is a copy; the CDN otherwise.
@@ -80,6 +78,7 @@ def _estate() -> StatusTree:
         _rule("ec2 heals", _HEALED, Table(((WARN, OK),)), 1, lines=("*",)))))
     tree.upsert(f"{_CAPPED}/lambda/fn", ERROR, "timed out after 30s")
     tree.upsert(_HEALED, WARN, [
+        Entry("i-0c3", "i-0c3: low", code=WARN),
         Entry("i-0a1", "i-0a1: CPU credit balance low", code=WARN),
         Entry("i-0b2", "i-0b2: within its limits", code=OK)], members=True)
     return tree
@@ -107,8 +106,7 @@ class ConfiguredBlockBrowserTests(unittest.TestCase):
         try:
             cls.playwright = sync_playwright().start()
             cls.browser = cls.playwright.chromium.launch(
-                executable_path=(str(_SANDBOX_CHROMIUM) if _SANDBOX_CHROMIUM.is_file()
-                                 else None))
+                executable_path=chromium())
         except Exception as error:  # pragma: no cover - no browser here
             if cls.playwright is not None:
                 cls.playwright.stop()
@@ -133,6 +131,9 @@ class ConfiguredBlockBrowserTests(unittest.TestCase):
         context = self.browser.new_context(viewport={"width": 1200, "height": 800},
                                            reduced_motion="reduce")
         self.addCleanup(context.close)
+        # *◇ details* on, as the band's switch leaves it (ADR-0147 decision 6)
+        context.add_cookies(
+            [{"name": "handled_details", "value": "1", "url": self.base}])
         page = context.new_page()
         page.route("https://cdn.jsdelivr.net/**", self._vendored)
         page.goto(f"{self.base}/login")
@@ -157,42 +158,35 @@ class ConfiguredBlockBrowserTests(unittest.TestCase):
             '#status-grid .rule-block[data-rule="aggregation"]'
             f'[data-rule-name="{name}"]')
 
-    def _apart(self, card: Any, block: Any) -> bool:
-        """Whether the card stands clear of the block, above or below it."""
-        mine, theirs = card.bounding_box(), block.bounding_box()
-        return (mine["y"] + mine["height"] <= theirs["y"] + 1
-                or mine["y"] >= theirs["y"] + theirs["height"] - 1)
-
-    def test_its_note_opens_from_its_mark_in_the_note_card(self):
+    def test_its_block_opens_the_drawer_at_it(self):
         page = self.page
         page.goto(f"{self.base}/status")
         block = self._block("develop advises")
         self.assertEqual(block.count(), 1)
-        card = page.locator("#note-card")
-        self.assertTrue(card.is_hidden())
-        mark = block.locator(".rule-note-mark")
-        self.assertEqual(urlsplit(mark.get_attribute("href")).path,
-                         "/status/aws/develop")
-        mark.click()
-        card.wait_for(state="visible")
+        self.assertEqual(block.evaluate("block => block.tagName"), "A")
+        href = urlsplit(block.get_attribute("href"))
+        self.assertEqual((href.path, href.query, href.fragment),
+                         ("/notes/aws/develop", "at=rule&rule=develop+advises", "at"))
+        block.click()
+        page.wait_for_function(
+            "(function () { var f = document.querySelector('.ls-drawer__frame');"
+            " var d = f && f.contentDocument;"
+            " return document.getElementById('ls-drawer').open && d"
+            " && d.readyState === 'complete' && d.querySelector('#at') !== null; })()")
         self.assertEqual(urlsplit(page.url).path, "/status")
-        # the node, the block's sentence, the note whole and where the rule is
-        # written — and no button anywhere in it
-        self.assertEqual(card.locator(".inspect-card__title").inner_text(), "develop")
-        self.assertTrue(" ".join(card.locator(".note-card__sentence").inner_text()
-                                 .split()).endswith("by the rule develop advises"))
-        self.assertEqual(card.locator(".note-card__note").inner_text().strip(),
+        # the rule's block under what stands: its sentence, its note whole and where
+        # it is written — and no button anywhere in it
+        at = page.frame_locator(".ls-drawer__frame").locator("#at")
+        self.assertEqual(at.get_attribute("data-rule-name"), "develop advises")
+        self.assertEqual(at.locator(".rule-block__note").inner_text().strip(),
                          _NOTE_READ)
-        self.assertEqual(card.locator(".note-card__record").inner_text().strip(),
+        self.assertEqual(at.locator(".rule-block__record").inner_text().strip(),
                          "Configured in config/aggregation.yaml since 2026-09-05.")
-        self.assertEqual(card.locator("button, form, input, textarea").count(), 0)
-        page.wait_for_timeout(50)
-        self.assertTrue(self._apart(card, block))
-        # Escape closes it and gives the mark the focus back
+        self.assertEqual(at.locator("button, form, input, textarea").count(), 0)
+        # Escape closes it and gives the block the focus back
         page.keyboard.press("Escape")
-        card.wait_for(state="hidden")
-        self.assertTrue(page.evaluate(
-            "document.activeElement.classList.contains('rule-note-mark')"))
+        page.wait_for_function("!document.getElementById('ls-drawer').open")
+        self.assertTrue(block.evaluate("block => block === document.activeElement"))
 
     def test_an_admin_finds_no_button_on_it(self):
         page = self.page
@@ -200,7 +194,7 @@ class ConfiguredBlockBrowserTests(unittest.TestCase):
         block = self._block("develop advises")
         block.hover()
         page.wait_for_timeout(50)
-        # the pin's pencil and its editor are a pin's; a configured rule has none
+        # a pin's editor is the drawer's; a configured rule has none anywhere
         self.assertEqual(block.locator("button, form, details, .rule-block__edit")
                          .count(), 0)
         # and on the node's page, where a pin's block says *Edit* and *Clear*
@@ -221,17 +215,64 @@ class ConfiguredBlockBrowserTests(unittest.TestCase):
         mark = line.locator(".line-rule")
         self.assertEqual(mark.get_attribute("title"),
                          "Counts as ok by the rule ec2 heals")
-        # § stands before the words, on their first line, and moves none of them
-        # onto a line of their own
+        # § ends the row's rail at its top right (ADR-0143), level with the words'
+        # first line and right of them, and moves none of them onto a line of
+        # their own
         mine = mark.bounding_box()
         first = line.evaluate(_FIRST_GLYPH)
         self.assertLess(abs(mine["y"] + mine["height"] / 2
                             - (first["y"] + first["height"] / 2)), first["height"])
-        self.assertLessEqual(mine["x"] + mine["width"], first["x"] + 1)
+        self.assertGreater(mine["x"], first["x"])
+        row = line.bounding_box()
+        self.assertGreater(mine["x"] + mine["width"], row["x"] + row["width"] * 0.75)
         # the line it does not change carries no mark
         calm = page.locator(".check-reason").filter(
             has=page.locator(".check-reason__body", has_text="i-0b2"))
         self.assertEqual(calm.locator(".line-rule").count(), 0)
+
+    def test_in_a_box_its_mark_takes_no_room_of_the_line_s_words(self):
+        page = self.page
+        page.goto(f"{self.base}/status/aws/prod")
+        lines = page.locator("#status-grid .status-node__reason")
+        short, long = (lines.filter(has_text=name) for name in ("i-0c3", "i-0a1"))
+        short.wait_for(state="visible")
+        mark = short.locator(".line-rule").bounding_box()
+        row = short.bounding_box()
+        # § at the line's top right (ADR-0143), level with its words' first line
+        self.assertLess(mark["y"] - row["y"], mark["height"])
+        self.assertGreater(mark["x"] + mark["width"], row["x"] + row["width"] * 0.9)
+        # and the line as tall as its words, or as its mark's target where that is
+        # taller: a mark in the flow, or the margin of the words' last block kept
+        # since they are no longer the line's last child, makes it taller still
+        measure = """(line) => {
+            const style = getComputedStyle(line);
+            const words = line.querySelector(':scope > p').getBoundingClientRect();
+            const edges = ['paddingTop', 'paddingBottom', 'borderTopWidth',
+                           'borderBottomWidth'].map(edge => parseFloat(style[edge]));
+            return [line.getBoundingClientRect().height,
+                    words.height + edges.reduce((sum, edge) => sum + edge, 0)];
+        }"""
+        tall, needs = short.evaluate(measure)
+        self.assertLess(needs, 23, "the short line's words fill a target already")
+        self.assertLessEqual(abs(tall - 24), 1, (tall, needs))
+        tall, needs = long.evaluate(measure)
+        self.assertGreater(needs, 25, "the long line's words fit in a target")
+        self.assertLessEqual(abs(tall - needs), 1, (tall, needs))
+
+    def test_on_the_wall_its_mark_is_a_target_no_neighbor_s_overlaps(self):
+        # WCAG 2.2's 2.5.8: a link 24 pixels square at the least, its own box and not
+        # a pseudo-element's, which the scanners do not count — and the two healed
+        # lines standing one above the other, neither's target over the other's
+        page = self.page
+        page.goto(f"{self.base}/status/aws/prod")
+        lines = page.locator("#status-grid .status-node__reason")
+        lines.first.wait_for(state="visible")
+        first, second = (lines.filter(has_text=name).locator("a.line-rule")
+                         .bounding_box() for name in ("i-0c3", "i-0a1"))
+        for box in (first, second):
+            self.assertGreaterEqual(min(box["width"], box["height"]), 24, box)
+        self.assertLessEqual(first["y"] + first["height"], second["y"],
+                             (first, second))
 
 
 if __name__ == "__main__":

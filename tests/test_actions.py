@@ -346,7 +346,7 @@ class RenderTests(TestCase):
 
 class ChipsWhereTheyStandTests(TestCase):
     """Where the action chips stand today, held through the stages of the interactive
-    wall (backlog #91, its note's §7.1 step 7): through the demo's fillers beside the
+    wall: through the demo's fillers beside the
     library's Copy, as a deployment's chips come. A line's chips stand in its own rail,
     on every surface that lists the line; a node's chip in its head, on a card and on a
     nested box, and in the status line of a leaf's own page; the refresh draws the same;
@@ -449,7 +449,7 @@ class ChipsWhereTheyStandTests(TestCase):
             self._labels(self._row(wall, "/ci/reviews", "status-node__self")
                          .one("node-actions")), [])
         # a leaf's page is framed as a branch's is, and its head's row carries the
-        # node's actions as every head does (backlog #91 §3.5)
+        # node's actions as every head does (ADR-0127 decision 8)
         page = self._page("/status/db")
         head_row = page.one("viewed-head").one("status-node__self")
         self.assertEqual(self._labels(head_row.one("node-actions")), ["file"])

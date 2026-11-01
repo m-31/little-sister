@@ -94,14 +94,15 @@ class QnapMetricsCheckTests(TestCase):
         temps = {c.name: c for c in self._kids(result)["temperature"].children}
         self.assertEqual(temps["drive1"].code, StatusCode.WARN)    # 44 (40..45)
 
-    def test_the_retired_thresholds_name_what_replaces_them(self):
+    def test_the_retired_thresholds_stop_the_start_as_a_key_it_does_not_take(self):
         with tempfile.TemporaryDirectory() as directory, \
                 self.assertRaises(CheckError) as caught:
             self._check(directory,
                         thresholds={"temperature": {"warn": 40, "error": 45}})
-        self.assertTrue(str(caught.exception).endswith(
-            "write max_temperature_warn: 40, max_temperature_error: 45 "
-            "(ADR-0131)"), str(caught.exception))
+        said = str(caught.exception)
+        self.assertIn("unknown key(s) at the top level: thresholds (qnap-metrics "
+                      "takes: ", said)
+        self.assertIn("max_temperature_warn", said)
 
     def test_a_smart_word_says_the_sentence_written_for_the_judgment(self):
         stdout = "drive1_bay=1\ndrive1_smart=Abnormal\ndrive_count=1\n"

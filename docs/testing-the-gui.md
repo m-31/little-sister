@@ -134,7 +134,7 @@ first beat. For the pin
 ([ADR-0107](adr/0107-an-event-is-a-change-of-what-a-node-shows.md)), pin
 `/services/api` for `1m`, stop the demo, and start it once the minute is over: the
 node's first reading writes the pin's end — on `/events` a row with the *maintenance
-ended* chip, and a second one *held back* beside it where the reading moved meanwhile
+ended · at its end* chip, and a second one *held back* beside it where the reading moved meanwhile
 — its History closes the maintenance row at that reading, and its **Time** card says
 *since* then, *when its maintenance ended*.
 
@@ -389,14 +389,21 @@ note ([ADR-0107](adr/0107-an-event-is-a-change-of-what-a-node-shows.md)). Leave 
 pin through a cycle: what the build does beneath it is on Events as rows marked
 *maintenance*, the node's own changes beside them, and the node's History lists only
 what the node showed. Clear the pin while the build is red: the card says *error
-since* that moment, *when a line's maintenance ended*, and the row carries that chip.
+since* that moment, *when a line's maintenance ended*, and the row carries that chip,
+with why — *line's maintenance ended · by hand*. Pin a line that builds, edit its note
+and clear it: three rows that change nothing the node shows, *line's pin set*, *line's
+pin edited* and *line's maintenance ended · by hand*
+([ADR-0145](adr/0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)
+decision 9), and a wait under way (below) goes on through them.
 The healthy lines are emitted deliberately, so `hide_ok` is worth toggling here too:
 the green lines vanish with their node when it reads OK, exactly as an operator who
 asked for problems-only asked.
 
 The same node **waits before it escalates** — `escalate_after: 3` in its YAML, the one
 demo node that does ([ADR-0083](adr/0083-a-node-may-wait-before-it-escalates.md)).
-Each turn for the worse is on the node at once: its card says *1 of 3 to escalate*,
+Each turn for the worse is on the node at once: its card says *1 of 3 to escalate*, a
+rail down its right edge in the color the level above still counts
+([ADR-0143](adr/0143-a-handled-part-carries-its-jobs-mark-and-a-rail-in-the-color-it-counts-as.md)),
 its page *Showing warn — 1 of 3 consecutive readings before this escalates, so the
 level above still counts ok*, and its row on Events is marked *damping*; the level
 above counts it two readings later, which the demo's retry makes a few seconds, and a
@@ -482,8 +489,9 @@ encoded; a very long href is the honest consequence — icon resolution through 
 links registry (the **Nudge** chip wears the deployment's own `phoenix` mark), and
 `under:` scoping (**Runbook** appears on `/security` and nowhere else).
 
-**Coded, in `demo_wsgi.py`.** Two `slots.register` calls against `tests/demo_extension`
-and one `register_assets`. What only this half can show: a provider that **declines**
+**Coded, in `demo_wsgi.py`.** Three `slots.register` calls against `tests/demo_extension`
+— the third the *Notes* tab's, with its draft function, which *The door, the drawer and
+◇ details* below files a ticket with — and one `register_assets`. What only this half can show: a provider that **declines**
 with `None`, so a chip is present on some lines and absent on others — on
 `/ci/reviews` the review waiting on its *author* gets no coded chip while its
 neighbors do, and the configured entry, which has no way to express that, sits on all
@@ -596,51 +604,130 @@ is not reporting answers `404` saying the line is no longer reported, rather tha
 rebuilding it from the pin. And the URL itself is the hand-off's other half: paste
 it into the ticket beside the document.
 
+### The door, the drawer and ◇ details
+
+One door, ◇, stands where ‖ and ✓ stood
+([ADR-0147](adr/0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)):
+every kind is set on a node's *Notes* tab, which ◇ opens in a drawer over the page.
+
+1. **The door on a head.** Every open head ends its icons in ◇, for every reader —
+   *Handle it* for whoever may set something there, *Notes* for whoever may not. Where
+   something is handled at or beneath the node it is lit with the number of parts:
+   pin `/ci/reviews` and mark a line of `/ci/pipelines` seen, and `/ci`'s ◇ says *2*,
+   its tooltip *Handle it — 2 handled: 1 node in maintenance, 1 line seen*, as the
+   chip of a closed `/ci` counts it. Under the library's look, whose buttons show only
+   under the pointer, a lit ◇ stands at the start of the card's state instead, in
+   sight at rest and staying put under the pointer, and the toolbar carries none; a
+   plain one shows with the toolbar. The kiosk draws the lit number as a mark and
+   nothing to click.
+2. **The door on a line.** On `/status/ci/reviews` every member line ends in ◇ in its
+   seat, *Handle this line*, where nothing handles the line, and in the mark of what
+   does where something does. ◇ opens the tab with its form on that line; a mark opens
+   it at the block it marks, its editor open.
+3. **The drawer at a desk.** Click `/ci`'s ◇: the drawer stands over the wall 480
+   pixels wide — at the right, at the left where the card would sit under it — with
+   the node's *Notes* tab in it whole but for the site's bar, rail and band, its head
+   the card's name and state, *Status* and *Notes* leading to the node's page and tab,
+   and ✕. The wall behind it is shaded but for the card, which stays lit, and it waits:
+   the drawer says *updates paused* under the node's name at once, muted, while the line
+   above the grid reads as it did — *updated …*, its width kept, so that nothing on the
+   wall moves however narrow the window — nothing is refreshed, and after a minute the
+   wall dims. ✕, Escape and a click on the wall each close it, the focus back on ◇; a
+   click with Ctrl or ⌘ opens the tab in a new browser tab instead. A leaf's page,
+   which nothing refreshes, opens the same drawer with no *updates paused*.
+4. **A write and a refusal.** Mark the failures under `/ci` seen in the drawer: it
+   closes, and the wall is up to date at once — each part keeps its color under the
+   ringed check, and `/ci`'s ◇ counts them. Open it again and silence a line of
+   `/ci/pipelines` with `45d`: refused, why above the form, the words, the line and the
+   level back in it, and the drawer stays. On a leaf's page, which is not refreshed, a
+   write loads the page again.
+5. **The question.** Type a few words in the form and press Escape: *Discard what you
+   wrote?*, *Keep writing* chosen. Escape again keeps writing, the cursor back in the
+   words; *Discard* closes it. Nothing is kept: the next drawer's form is empty. A
+   click on the wall, ✕ and *Status* in the drawer's head ask the same; words a refusal
+   gave back count as unsent.
+6. **On a phone.** With a phone's device emulation, 390 pixels wide, tap ◇ on a card low
+   on the wall: a sheet rises from the foot, the card scrolled into the strip above it,
+   lit. A tap on the strip closes it.
+7. **◇ details, and the block as the button.** The band's third switch, *◇ details* —
+   its tooltip *Show who handles a part, until when and why, on the wall* — is off: the
+   demo keeps the library's default, `handled_details: false`. A handled part says so by
+   its color and its mark, and ◇ by its number. Turn it on: every block of what handles
+   a part stands on the wall where it stands — the pin on `/ci/reviews`, the seen in
+   `/ci/pipelines`' box, a configured rule's on the nightly while it erupts — each one
+   link, its sentence its name and a chevron at its end, washing under the pointer and
+   ringed under the keyboard. Click one: the drawer opens at that block under
+   *What stands*, its editor open with the note's source and the cursor at its end;
+   *Cancel*, and the block stands whole, its note and who set it, with *Edit* and
+   *Clear*. A configured rule's opens the drawer at the rule's block: its note and its
+   file, and no buttons. Turn the switch off: the blocks go, and nothing that counts
+   moves — ◇'s numbers, a closed chip's ◇ and the band's pill say the same. A reload
+   keeps the switch, as it keeps *hide ok*, in a cookie named `handled_details`, as its
+   query parameter and its key in `settings.yaml` are — `?handled_details=1` turns it on
+   for a link; the kiosk follows the key alone, whatever a browser chose.
+8. **A ticket from the words** ([ADR-0148](adr/0148-a-ticket-is-drafted-from-a-notes-words-by-the-package-that-fills-its-slot.md)). The demo's coded filler fills the
+   *Notes* tab's slot. Open `/ci`'s ◇ and write two lines under *Seen*, the first a
+   summary: *Mark seen* is followed by *File in the tracker ↗*, and beneath the row a
+   line says what it does. Press it: a new tab opens at
+   `https://tracker.example.org/new`, its title `/ci: ` and your first line, its body
+   your words, every failure listed and the tab's own address, `/notes/ci` — the
+   reserved example domain answers nothing, so read the draft in the tab's address bar.
+   Back in the first tab the drawer is still open, *updates paused*, the words still in
+   it and nothing marked; Escape still asks before it drops them. Press Enter in *Until,
+   if it should end sooner*: it marks seen, as the kind's own button does, and files
+   nothing. `/system/installed` lists the filler, *draft* beside its template.
+
 ### Maintenance
 
 Maintenance is not a scenario — a check cannot set a real pin (that is the tree's
-concern). Set one as an admin (`pan` is one) from ‖ at the end of a head's icons —
-on the wall, or in the head of a node's page, where without script the head's own
-**Set maintenance** stands beneath its row — or from the pause mark at the end of a
-line on `/ci/reviews` and `/security/audit`.
+concern). Set one as an admin (`pan` is one) on a node's *Notes* tab, *Maintenance*
+chosen in its form
+([ADR-0147](adr/0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)):
+◇ at the end of a head's icons opens the tab in the drawer — on the wall, or in the
+head of a node's page — and a line's ◇, in its seat at the end of each line of
+`/ci/reviews` and `/security/audit` that nothing handles, opens it with the form on that
+line; where something handles the line, its mark stands in the seat and opens the same
+form. Without script ◇ is a link to the tab.
 
 The read/edit interaction has one concrete walk:
 
-1. Open `/status/security/audit` while its findings are present. Every line ends in a
-   pause mark. Move the pointer down them without clicking: no reason or control
+1. Open `/status/security/audit` while its findings are present. Every line ends in ◇
+   in its seat. Move the pointer down them without clicking: no reason or control
    should move, and no form should appear. Tab through the same controls; each has a
-   visible focus ring, and its name is *Set maintenance for this line*.
-2. Click one mark. Its editor opens beneath the line and moves the lines below it
-   down, its first sentence says it is for this line only and how many keep alarming,
-   and the cursor is in the note. The **Duration or expiry** field names the
-   configured timezone; open *Which formats can I use?* by click and keyboard and
-   confirm the full table fits the editor. Enter
+   visible focus ring, and its name is *handle this line of /security/audit*.
+2. Click the ◇ of a line far down the list. The drawer opens on the node's *Notes*
+   tab, its form on that line, the cursor in the note. Choose *Maintenance*: the line
+   stays chosen under *On*, the form says what a pin does, and the **Duration or
+   expiry** field names the configured timezone; open *Which formats can I use?* by
+   click and keyboard and confirm the full table fits the drawer. Enter
    `**owned** — [ticket](https://example.com/ticket)` plus `Friday` and save. The
-   line stays in place, takes the maintenance tint and carries its block: who put it
-   in maintenance, the resolved expiry with what is left of it, and the bold word and
-   link as rendered HTML. The page comes back **at that line**, ringed — pin one far
-   down the list, where the top of the page would be out of sight of it. Repeat once
-   with `07-10` or a day such as `17` and confirm the displayed boundary is the next
-   future midnight described by the help.
+   drawer closes and the page, which nothing refreshes, loads again where it stood:
+   the line stays in place, takes the maintenance tint and carries its block — who put
+   it in maintenance, the resolved expiry with what is left of it, and the bold word
+   and link as rendered HTML — and its seat holds ‖ where its ◇ stood. Repeat on
+   another line with `07-10` or a day such as `17` and confirm the displayed boundary
+   is the next future midnight described by the help.
 3. Click *Edit* in the block. The textarea contains the exact Markdown source, not text
    recovered from the rendered DOM, with the cursor at its end, and the expiry field
    holds the stored expiry; click into it and all of it is selected. Change the note
    and cancel once — the block returns with the stored note unchanged — then change
    the note alone and save: the expiry in the block has not moved. Edit again, empty
    the expiry field and save: the pin runs for the configured default from now. The
-   line never alarms between the writes, and each save comes back at the line. Then
-   open *Edit* once more and save with **nothing changed**: who pinned it gains no
-   *Last changed* beside it, and the same pin's editor left open in a second tab
-   still saves. *Clear* remains a separate action, and comes back at the line too.
-4. Repeat at node depth: ‖ in the head's row opens the node's editor beneath the row,
-   saying how many lines it puts in maintenance. Pinned, the node's block heads the
-   page's frame, which runs round every line, the line pinned before says *also in
+   line never alarms between the writes, and each save comes back **at the line**,
+   ringed and in view, far down the list as it is. Then open *Edit* once more and
+   save with **nothing changed**: who pinned it gains no *Last changed* beside it, and
+   the same pin's editor left open in a second tab still saves. *Clear* remains a
+   separate action, and comes back at the line too.
+4. Repeat at node depth: ◇ in the head's row opens the drawer at the tab's top, and
+   *Maintenance* there is *On* the node. Pinned, the node's block heads the page's
+   frame, which runs round every line, the line pinned before says *also in
    maintenance on its own*,
    and raw `<script>` entered as a note stays visible as escaped text rather than
-   becoming an element. With scripts disabled, each *Edit* and each mark still opens
-   its editor. A branch's page states its node's pin in its head, above the children,
-   and an admin's ‖ stands there: open `/status/ci`, set a pin from the
-   head and read it back in the block, whose *Edit* fills the expiry field the same
+   becoming an element. With scripts disabled each *Edit* still opens its editor, and
+   ◇ and each mark lead to the tab. A branch's page states its node's pin in its
+   head, above the children, and ◇ stands there: open `/status/ci`, set a pin from the
+   head's ◇ — *On* says *the node and everything beneath it* — and read it back in the
+   block, whose *Edit* fills the expiry field the same
    way. Open `/status/ci/reviews`: its frame is headed by `/ci`'s block too, without
    buttons — *This node is in maintenance from /ci* — whose link leads back to the
    pin. Back on `/status/ci`, edit the node's note once more and read
@@ -650,32 +737,23 @@ The read/edit interaction has one concrete walk:
    ([ADR-0099](adr/0099-a-status-that-still-holds-says-since-when.md) decisions 6 to
    8). *Clear* the pin: the card says *since* that moment, *when its maintenance
    ended*, and History's maintenance row has its end and keeps the note.
-5. On the dashboard, every open head of a node without a pin — a card's and a box's
-   — ends its icons in ‖, shown always, its tooltip *Set maintenance*; Tab to a head's
-   name and on to its toolbar, then → to the end, reaches it without the pointer.
-   Click the services card's. The editor opens **in the card**, which grows to hold
-   it, where the pin's block will stand, and its first sentence names what the pin
-   covers — *services and everything beneath it*; the page holds one editor, outside
-   the grid, and the mark clones it, so the developer tools show no form in any other
-   head. The line above the grid reads *updated … — paused while editing* at once.
-   Type half a sentence and leave it for half a minute: the grid does not refresh and
-   what was typed stays. Press Escape: the editor closes and is gone from the card,
-   the mark has the focus again, the line drops the words, and the next refresh, at
-   most ten seconds on, brings the grid up to date. Open the editor again and leave it
-   for more than a minute: everything but that card dims, as the page does when it
-   loses its server
-   ([ADR-0104](adr/0104-a-pin-is-one-block-on-what-it-silences.md) decision 7);
-   *Cancel*, and the page refreshes at once. Open `web`'s `api` box and click its ‖:
-   the editor opens in the box, after its head's row and before its lines, and holds
-   the refresh as the card's does. Then set the services pin, with *hide idle* on and
-   a depth of your own in the address. The wall comes back as it was asked for, and
-   the card states its pin as the block in its wall's form: who, until when and what is
-   left, and the note behind a speech bubble (the walk below). The pencil after it
-   shows while the pointer is over the card or the keyboard is on it, its editor holds
-   the stored expiry and *Clear* beside *Save changes* and *Cancel*, and the card has
-   no ‖ while it is pinned. With scripts disabled ‖ is a link to the node's page, whose
-   head keeps *Set maintenance*. The kiosk layout and a viewer's wall show the block
-   without a pencil, and no ‖.
+5. On the wall every open head carries ◇ — a box's as a card's — its tooltip *Handle
+   it*; Tab to a head's name and on to its buttons, then → to the last of the head's own
+   icons, reaches it without the pointer. Click the services card's: the drawer opens
+   on `/services`' tab, the card
+   lit behind it and the wall waiting (*The door, the drawer and ◇ details* above walks
+   the drawer itself), and *Maintenance* is *On* *the node and everything beneath it*.
+   Close it and open the `api` box's ◇: the drawer's head names the box, which is what
+   stays lit. Then set the services pin, with *hide idle* on and a depth of your own in
+   the address. The drawer closes and the wall, as it was asked for, is up to date at
+   once: the card blue, and its ◇ lit with *1* beside its state, its tooltip *Handle it
+   — 1 handled: 1 node in maintenance*. With *◇ details* on the card states its pin as
+   the block in its wall's form — who, until when and what is left — one link that
+   opens the drawer at it, its editor open holding the note's source and the stored
+   expiry; *Cancel* there, and the note and *Clear* stand beside *Edit*. With scripts
+   disabled ◇ is a link to the tab. On the kiosk the lit ◇
+   is a mark, and the block — where `handled_details` puts it there — a sentence,
+   neither a link; a viewer's ◇ says *Notes*, and the tab it opens has no form.
 6. Pin a second node, so that two are, and open **Handled**. Under *In maintenance*
    the pins stand under their node's path, the node whose pins have stood longest
    first: *The whole node* first, then its lines in the order the node's own page lists
@@ -694,24 +772,22 @@ The read/edit interaction has one concrete walk:
 need a node's pin with a long note, a line's pin and a branch with something failing
 beneath it:
 
-1. Pin `/services` with a note of several paragraphs — paste three of this page's — and
-   open the wall. The card states the pin in one sentence, *In maintenance by pan until
-   … · 7d left*, and a speech bubble after it; the note itself is not on the wall.
-   Click the bubble: the note opens in a card above the block, in the hover card's
-   look, naming the node, saying the sentence, the note whole and scrolling past a
-   height, who set it and when, and a link to the node's page. Let a refresh pass with
-   the card open: it stays on its block. Escape closes it and gives the bubble the
-   focus back; a click elsewhere, or on the bubble again, closes it too. Choose *Hover
-   card: on a pause* in the settings menu and rest the pointer on the bubble: the card
-   opens after a moment, and leaving the bubble and the card closes it. With scripts
-   disabled the bubble is a link to the node's page, which states the note whole.
+1. Pin `/services` for `7d` with a note of several paragraphs — paste three of this
+   page's — and open the wall with *◇ details* on. The card states the pin in one
+   sentence, *In maintenance by pan until … · 7d left*, a chevron at its end; the note
+   itself is not on the wall. Click the sentence: the drawer opens at the pin's block
+   under *What stands*, for an admin its editor open — who set it and when, the note's
+   source scrolling past a height — and *Cancel* showing the note whole; a viewer's
+   block, which has no editor, shows the note whole at once. With scripts disabled the
+   block is a link to the tab at it. With *◇ details* off the card says the pin by its
+   blue and its lit ◇ alone.
 2. The block's edge is dashed, and the block keeps its blue; nothing else on the wall
-   has a dashed edge. As an admin, point at the card: a pencil shows after the bubble,
-   and its editor carries *Clear* in words beside *Save changes* and *Cancel*.
-3. Pin one red line of `/ci/pipelines` from its page and close `/ci` on the wall: its
-   chip carries a ringed diamond and *1* after its counts, and its tooltip ends *1
-   handled: 1 line in maintenance*. Pin a leaf beneath it whole: it counts as ‖ among
-   the chip's counts, and the diamond still says *1*.
+   has a dashed edge. No underline marks it as a link: it washes under the pointer and
+   is ringed under the keyboard.
+3. Pin one red line of `/ci/pipelines` with its ◇ on its page and close `/ci` on the
+   wall: its chip carries ◇ and *1* after its counts, and its tooltip ends *1 handled:
+   1 line in maintenance*. Pin a leaf beneath it whole: it counts as ‖ among the
+   chip's counts, and the chip's ◇ still says *1*.
 4. Open `/status/ci`. Right after the Time card a card says why the branch has its
    color — *Why error* or *Why warn* while something beneath it fails, listing each
    part that counts with its status and since when, or *Why ok* — and beneath ◇ and
@@ -725,35 +801,60 @@ beneath it:
 
 **A pin whose node is not reported**
 ([ADR-0109](adr/0109-a-node-says-its-children-are-complete.md) decision 4) needs the job
-name that comes and goes. Pin `/ci/jobs/backfill` for `10m` while it is on the wall, and
-open *Handled* once it has left, within two minutes at the latest. Its
+name that comes and goes. Pin `/ci/jobs/backfill` for `10m` from its ◇ while it is on
+the wall, and open *Handled* once it has left, within two minutes at the latest. Its
 section stands under its path, which is no link there, says that the node is not
 reported at present and that its pin holds nothing, and its block opens *The whole
-node, when it is reported,*. The wall's pill does not count it. *Edit* the note in the
-block and save: the page comes back with the section marked, and no node appears on the
-wall. When `backfill` returns it is in maintenance from its first reading —
-`/events?under=/ci/jobs/backfill` shows its return as *maintenance*, and beside it the
-reading its pin holds back — its section reads as any other, and the pill counts it
-again. Pin a line of `/ci/jobs/backfill` instead, with the pause mark at its end, and
-the section says *One of its lines, when it is reported,* and names no line while the
-node is away.
+node, when it is reported,*. It still stands, and is counted where it stands: the
+wall's pill counts it, its row for `/ci/jobs/backfill` saying *not reported now*, and
+`/ci/jobs`' ◇ stays lit, *1 node in maintenance* among its words — the drawer it opens
+lists it beneath what stands, *backfill not reported now · by pan until …*, its link
+opening the page of its path, which states the pin with *Edit* and *Clear*; on
+`/status/ci` the *why* card lists *jobs/backfill not reported now*. *Edit* the note in
+the block on *Handled* and save: the page comes back with the section marked, and no
+node appears on the wall. When `backfill` returns it is in maintenance from its first
+reading — `/events?under=/ci/jobs/backfill` shows its return as *maintenance*, and
+beside it the reading its pin holds back — its section reads as any other, and the
+drawer of `/ci/jobs` lists the pin as `backfill`'s own. Pin a line of
+`/ci/jobs/backfill` instead, with its ◇ on its page, and the section says *One of its
+lines, when it is reported,* and names no line while the node is away, the drawer of
+`/ci/jobs` saying *a line of backfill not reported now*.
+
+**A pin on a line its node does not report now** needs the review `/ci/reviews` merges
+near the end of its 90-second cycle. Before 76 seconds into it, pin #4846 for `10m`
+from its seat on `/status/ci/reviews` — the § of the rule that counts a short queue as
+ok, or ◇ while six wait — *Maintenance* chosen in the drawer, *On* its line. When the
+review is merged its line goes and its pin stays, holding nothing: *Handled* lists
+it under *In maintenance* as *A line not reported now is in maintenance by pan until
+…*, with no link and no slug, and with *Edit* and *Clear*; `reviews`' ◇ stays lit, *1
+line in maintenance* among its words, and the tab it opens lists the same block under
+*What stands*; the band's pill counts it, its row for `/ci/reviews` saying *1 line not
+reported now*, the row's link landing on the node's page, which says the line is no
+longer reported. *Clear* it on *Handled* before the cycle turns: the page comes back
+without it, and so does the tab. Left alone, the pin holds the line again when the
+review comes back next cycle. A silence on the line stands under *Silenced* the same
+way until its deadline, where a seen ends as its line goes.
 
 The **conflict page** needs no code either, only a recipe, because it is about two
 people and one node. Every maintenance form carries the pin's `set_at` as a
-compare-and-set token, and an *empty* token says "I believe nothing is pinned" — so
-the shortest way in is two tabs on an **unpinned** node:
+compare-and-set token, and an *empty* token says "I believe nothing is pinned". A new
+pin is set on the *Notes* tab, which answers such a refusal itself — two tabs on an
+**unpinned** node:
 
-1. Open the same node's page in **two tabs** and open *Set maintenance* in both.
+1. Open the same node's *Notes* tab in **two tabs** and choose *Maintenance* in both.
    Neither form has a token yet.
 2. Submit one of them.
 3. Submit the other. The table now says something is pinned, its empty token no
-   longer matches, and instead of silently overwriting the first pin you land on the
-   conflict page — both reasons side by side, your own words intact.
+   longer matches, and instead of silently overwriting the first pin the tab comes
+   back with why above the form — *This node was put in maintenance since this tab was
+   drawn* — your own words in it, and the first pin under *What stands*.
 
-Editing works the same way with a real token: open an existing pin's edit form in two
-tabs, submit the newer, then the older. An **entry** pin conflicts identically and
-the page carries its slug, so the two tabs can be two per-line pins on the same
-reason of `/ci/reviews`.
+An edit lands on the conflict page itself, with a real token: open an existing pin's
+*Edit* in two tabs — on its node's page, or in the drawer — submit the newer, then the
+older: both reasons side by side, your own words intact; in the drawer the page stands
+in it, and so does each way off it. An **entry** pin conflicts identically and the
+page carries its slug, so the two tabs can be two per-line pins on the same reason of
+`/ci/reviews`.
 
 Do it once from **Handled** as well: open it in two tabs, open the same block's *Edit*
 in both, save one and then the other. The conflict page is answered at the write's own
@@ -761,54 +862,253 @@ address, `/pins/maintenance`, so check each way off it — *Change nothing* abov
 a plain link — loads *Handled* again with that node's section marked, rather than
 staying where it is.
 
+**A pin's schedule, a window set ahead, and the upgrade**
+([ADR-0150](adr/0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md))
+read the demo's state directory, `var/demo/var/state/`, and the envelope, `curl -H
+'Accept: application/json' -H 'Authorization: Bearer demo-token'` on a node's address.
+Set `/services/api` in maintenance for `2m` from its ◇, *Starts* left blank: the drawer
+closes onto a blue box, as it always did, and its entry in `pins.json` keeps a
+`schedule` — `DTSTART;TZID=Europe/Berlin:` the moment it was set and `DTEND:` its end in
+UTC — and no `expires_at`. Copy the entry. Two minutes later the box comes back on its
+own, and `/events?under=/services/api` says *maintenance ended*.
+
+Then a window **set ahead**: on `/services/web`'s ◇ choose *Maintenance*, *Starts* `2m`
+and the end `2m`. The drawer stays open, at the new block under *Planned* beneath *What
+stands*, which takes the focus — *The whole node · Once, from … until … · starts in 1m*,
+with *Edit* and *Clear*, and no blue: it holds nothing yet, and the wall shows nothing
+of it, ◇ counting none. The node's page lists it beneath its head's blocks, a door to
+that block; *Handled* under *Planned*, *1 window on 1 node, the soonest first*; and the
+envelope in the node's `planned`, its `starts_at`, `expires_at`, `until` and the
+`sentence` the page shows. *Edit* opens with *Starts* and the end filled: change the
+note alone and the start stays to the second; a *Starts* typed as a time already past is
+refused, *To start the window now, leave Starts blank*, your words back in the form. At
+its start the box turns blue by itself, *window opened* on the Events page, and
+`/services`' History says *web a window opened*; two minutes later it ends, *a pin
+ended*, its last window being its end, and its entry under *What came before* on the
+*Notes* tab says *Planned as a window by pan · ended: with its window* and *· it ran 2m*,
+where one set from now says how long it stood. Set `/services` itself, which reads
+nothing of its own, in maintenance for `1m`: when it ends, its row on the Events page
+says *nothing of its own*, still found by the *undefined* switch, whose title says so.
+
+**A series on the page**
+([ADR-0150](adr/0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md)
+decisions 13 to 16): on `/services/web`'s ◇ choose *Maintenance* and *Repeats* *Daily* —
+the rest opens in place, and the end field's label reads *Length* — with *Starts* two
+minutes from now, `HH:MM`, *Length* `3m` and *Until* a week on, a date. Beneath the
+fields the next five windows, the first today at that time, and the sentence, *Every day
+from … for 3 minutes, until …*, follow the fields; without script *Preview* draws the
+same in the page, nothing written. *Set maintenance*: the drawer stays open at the new
+block under *Planned* — *Every day from … for 3 minutes, until … · next … · in 1m*, or
+*2m* — its *Edit* the editor filled and its *Clear* asking first, *This ends every
+window of the schedule, those to come*. When its window opens the box turns blue,
+*window opened* on the Events page, and the block is two rows: the window, *by pan until
+… · 2m left*, with *Extend* and *End now*; and the schedule, its sentence and *· next*
+tomorrow's start, with *Edit* and *Clear*, which asks *this one and those to come*. In
+the envelope its `handled` item's `expires_at` is that window's end and its `until` a
+week on. *Extend* by *30 minutes*: the drawer closes on the write, the box stays blue,
+and the block says *until …, extended by pan · 32m left*; an *Extend* whose *Until* is
+before that end is refused, naming *End now*, your words back. *End now*: the box comes
+back, *window closed* on the Events page, and the block stands under *Planned* with
+tomorrow's start and *· 1 window ran, the last closed by hand, by pan*, the entry staying
+in `pins.json` with its `changed`, and its note in `notes.json` with its `tally`. Set a window from
+now on the same node: the form says *— a schedule stands on it* and *this window joins
+it, beside its note*, and the Notes keep *A window joins the schedule, from … until …*;
+while it is open, *Edit* the schedule to *Length* `5m` — *Starts* is the rule's next
+start, not the window's — and the window keeps its end, `pins.json`'s text carrying it
+as an `RDATE` period, the rule starting tomorrow; an edit while one of the rule's own
+windows is open leaves that start out too, an `EXDATE`. For the instance's line, stop
+the demo, take the current year out of `acme`'s `complete` in
+`tests/demo_config/holidays.yaml`, start it, and set a series *Not on* *ACME's company
+holidays*: from the next tick `/little-sister/holidays` says *ACME's company holidays
+(acme) is not complete for …* and that it stops one maintenance entry, and the entry's
+block from when its windows do not apply; put the year back. Then the upgrade: while
+`/services/api` fails, silence it for `1d` and set
+it in maintenance for `2m`, stop the demo, take the entry's `schedule` away and give it
+an `expires_at`, as a release before this one wrote it, and start the demo. The start
+says nothing of it; *Handled* lists the silence and not the entry, and `pins.json`,
+written once the start has read it, no longer holds it.
+
+**The month**
+([ADR-0150](adr/0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md)
+decision 17): on `/services/web`'s ◇ choose *Maintenance*, *Repeats* *Weekly* with
+*Saturday* alone ticked, *Starts* `Sat 22:00`, *Length* `8h` and *Until* two months on,
+a date. Above the next windows stands the month of the first Saturday: its name between
+« ‹ and › », the two before greyed in this month; six weeks from a Monday, each
+Saturday from the first saying *22:00* over *06:00* in maintenance's tint, today ringed,
+the days before it dimmed and those of the months beside it faint. A day's title says
+it — *Saturday, …: a window from 22:00 to 06:00 the next day. A click leaves its window
+out.* Click the second Saturday: its *22:00* is struck, *Left out: the window from …
+22:00:00 ×* is listed beneath, the sentence says *1 left out*, and `pins.json` is
+untouched; click it again and the window is back. Click a Tuesday ahead: *A window from
+… 22:00:00 ×*, the Tuesday saying *22:00* over *06:00*, and its × takes it out. Page
+with › and then »: the name follows, and a year on both are greyed; « comes back. Leave
+the second Saturday out and give the Tuesday a window again, and ✕ asks *Discard what
+you wrote?*; keep writing, and *Set maintenance*: the entry's text in `pins.json` has an
+`EXDATE` for the one and an `RDATE` for the other. On *Handled* the series' editor is
+drawn without its month — the page's source holds no `ls-cal`, however many schedules
+stand — and its *Edit* brings it as it opens, one `POST /pins/maintenance/preview` in
+the network panel and none when it opens again; without script *Preview* brings it,
+each day a button again. On another node, with *Not on*
+*holidays in Bavaria*, page to a month with a Saturday the list names — Saint Stephen's
+Day in December 2026: its title says its name, its *22:00* is struck, and a click adds
+its window back, *A window from …*. From the keyboard the grid is one stop, Tab
+reaching it once, at the first Saturday: the arrow keys move a day or a week, Home and
+End to the week's ends, Page Down the month after on the same day — with Shift a year —
+and Enter does the day, the focus staying on it. At a phone's width each day shows a
+bar instead of its hours, the hours of it a window covers — a Saturday's last twelfth
+and its Sunday's first quarter — and the drawer's sheet does not scroll sideways. A
+series of *Starts* `2027-03-27 12:00`, *Length* `1d`, marks Sunday 28 March *+1h*, its
+title *the clocks go forward an hour at 02:00*. Without script each day and each page
+is a button that sends the editor back with it done. And an open window set once —
+`/services/api` for `2h` — keeps its start when its *Edit* adds an interval beside it:
+*Save changes* writes a `DURATION` and an `RDATE` period, and its block is the two rows
+of a schedule.
+
 ### Seen
 
 A failure marked seen
 ([ADR-0142](adr/0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md))
-needs no code either: an admin marks one with the ringed check, which stands after ‖ in
-a head's icons and just before ‖ at a failing line's end, wherever something fails now.
-The part keeps its color and counts as ok one level up until it changes.
+needs no code either: an admin marks one on the node's *Notes* tab, *Seen* chosen in its
+form — which ◇ on a head opens on *Seen* wherever something fails at or beneath the
+node, and a failing line's ◇ on the line. The part keeps its color and counts as ok one
+level up until it changes. The wall's blocks below stand there with *◇ details* on.
 
 1. **A worsening ends it.** `/services/api` in its amber quarter, 15 to 30 seconds into
-   its minute: its card's ringed check opens the page's one editor in the card, *Mark
-   seen the one failure at api.* Save it with a note: the card stays amber under its
-   block, *Seen by pan at* {warn} *· until it changes*, and `/services` counts it ok —
+   its minute: its box's ◇ opens the drawer on *Seen*, *On* *its own failure*. Save it
+   with a note: the box stays amber, the ringed check beside its state on its own green
+   tint and a green rail down its right edge, its block saying *Seen by pan at* {warn}
+   *· until it changes*, and `/services` counts it ok —
    the configured floor on the gateway counts after the seen, from the ok it passes. At
    30 seconds the gateway turns red, the seen ends and `/services` counts it red;
    `/events?under=/services/api` shows the row *seen* and the row *seen ended · worse*.
    Mark it seen again while it is red: at 54 seconds it recovers, *seen ended ·
    recovered*.
 2. **A line, at its own page.** `/status/ci/pipelines` while the build fails, 32 to 72
-   seconds into its 90: the build's line ends in the ringed check and ‖; mark it seen,
-   and the page comes back at the line, which keeps its red cue under the ringed check
-   with its block beneath it, *This line is marked seen by pan at* {error}. The node is
-   green — the waiting gate is healed by its rule — and at 72 seconds the build passes:
-   *line's seen ended · recovered*.
+   seconds into its 90: the build's line ends in ◇, which opens the drawer on *Seen*,
+   *On* that line. Mark it seen, and the page loads again: the line keeps its red cue
+   and tint, the green ringed check standing where its ◇ stood and a green rail down
+   the whole row, with its block beneath it, *This line is marked seen by pan at*
+   {error}. On the wall the line carries the ringed check at its top right, which opens
+   the drawer at that block. The node is green — the waiting gate is healed by its rule
+   — and at 72 seconds the build passes: *line's seen ended · recovered*.
 3. **A line no longer reported.** `/status/ci/reviews` before 76 seconds into its 90:
-   mark #4846 seen. When it is merged, near the end of the cycle, its line goes and the
-   seen with it, *line's seen ended · no longer reported*; when it comes back next cycle
-   it alarms as new.
+   mark #4846 seen from its seat — the § of the rule that counts a short queue as ok, or
+   ◇ while six wait — which opens the drawer on *Seen* with the line chosen. When it is
+   merged, near the end of the cycle, its line goes and the seen with it, *line's seen
+   ended · no longer reported*; when it comes back next cycle it alarms as new.
 4. **A head's, each its own.** On the wall, while the nightly erupts — from 42 seconds
-   into its minute — with the reviews waiting, press the ringed check on `/ci`'s card:
-   the editor says how many failures it marks at and beneath `/ci`, each its own. On
-   `/status/ci` the head's own editor lists every one, linked. Save: each is a seen of
-   its own, sharing the note; `/handled` lists them under *Accepted*, *N seen on M
-   nodes, the longest standing first*, and each ends by itself as its failure changes.
-   Open the editor again, wait until a review opens mid-cycle (50 seconds into its 90)
-   and save: *Not marked seen — What fails here changed since this was opened.* lists
-   the failures as they stand now, with a form that marks those.
+   into its minute — with the reviews waiting, open `/ci`'s ◇: the drawer's tab lists
+   every failure at and beneath `/ci` under *What fails here now*, linked, and its form
+   is *On* *all N failures listed above, each its own*. Save: each is a seen of its own,
+   sharing the note; `/handled` lists them under *Accepted*, *N seen on M nodes, the
+   longest standing first*, and each ends by itself as its failure changes. Open the
+   drawer again, wait until a review opens mid-cycle (50 seconds into its 90) and
+   save: refused above the form, *What fails here changed since this was opened.*, the
+   failures listed as they stand now and the words kept; sent again, it marks those.
 5. **Edit, Clear, and what it holds.** On a node's page the block's *Edit* changes the
    note and may give an end — *2h*, read as a pin's expiry is — which the sentence then
-   says, *or* the time *· 2 h left*; *Clear* ends it at once, *seen ended · by hand*. No
-   ringed check stands on a node in maintenance, on a green one, on one failing only
-   because its reading went stale, or on what is seen already.
-6. **What says it elsewhere.** A closed chip's diamond counts what is seen beneath it,
-   *2 seen*, and the band's pill counts each seen beside the pins. Copy
-   `/services/api`'s document while it is seen: *☑️ Seen — by pan at warn ⚠️, until it
-   changes*, and *☑️ Accepted* in `/services`'s list of what is handled. The JSON
+   says, *or* the time *· 2 h left*; *Clear* ends it at once, *seen ended · by hand*.
+   The tab offers no *Seen* on a node in maintenance, on a green one, on one failing
+   only because its reading went stale, or on what is seen already.
+6. **What says it elsewhere.** A closed chip's ◇ counts what is seen beneath it, *2
+   seen*, and the band's pill counts each seen beside the pins. `/services`' ◇ is lit,
+   *1 handled: 1 seen*, and the tab it opens lists the gateway under *What stands*,
+   under *Accepted* — *api, reads warn · seen by pan at warn · until it changes* — after
+   anything in maintenance beneath it, as its *why* card on `/status/services` does.
+   Copy `/services/api`'s document while it is seen: *☑️ Seen — by pan at warn ⚠️, until
+   it changes*, and *☑️ Accepted* in `/services`'s list of what is handled. The JSON
    (`Accept: application/json` with the demo's token) says
    `"contribution": {"code": "OK", "by": "seen", "rule": "<its id>"}` on the gateway,
    and its `handled` lists the seen with the `status` it was set at.
+
+### Silenced
+
+A failure silenced
+([ADR-0144](adr/0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md))
+needs no code either: an admin silences one on the node's *Notes* tab as a seen is
+marked, *Silence* chosen over *Seen*, wherever something fails now — and on a part that
+reads ok as well, a line or a node that reads by itself. The part keeps its color and
+counts one level up as ok, or as a warning at most, through every recovery, until its
+deadline. The wall's blocks below stand there with *◇ details* on.
+
+1. **It holds through every return.** `/network/vpn` flips between ok and error every
+   ten seconds. While it is red, open its ◇ and choose *Silence*, *On* *its own
+   failure*: the form asks for a note, what it *Counts above as* — ok, or *at most a
+   warning* — and a deadline whose placeholder names the default, *7d*. Save it with a
+   note and the deadline blank: the box stays red, the struck bell beside its state on
+   ok's green, its block saying *Silenced by pan, counting as* {ok} *until …*, and
+   `/network` counts it ok. Ten seconds later vpn recovers and the silence stays; ten
+   more and it fails again, silenced still — `/events?under=/network/vpn` shows the row
+   *silenced* and no end. *At most a warning* draws the bell and the rail amber
+   instead, and `/network` counts a warning. Clear it, and while vpn is green open its
+   ◇ again: *Seen* is not offered, *Silence* is, *On* *the node*. Save one *at most a
+   warning*: nothing changes until vpn fails, and then its bell and rail stand amber
+   and `/network` counts a warning.
+2. **A deadline it will not take.** Type *45d* as its deadline: refused above the form —
+   *'45d' is more than thirty days away, which is longer than a silence may stand* —
+   with the note, the level and *45d* back in it, and the drawer stays.
+3. **An extension says what changed.** On `/status/network/vpn` the block's *Edit*
+   fills in the deadline it keeps; type *14d* and save with *What changed* empty: it is
+   refused, *an extension says what changed*. Write a sentence and save:
+   `/notes/network/vpn` lists *Silence extended until … .* and the sentence, beside the
+   silence's own note.
+4. **Seen and silence change places.** While vpn is red, *Edit* on the silence's block —
+   on its page, or in the drawer its bell opens — offers *Seen*: choose it and save —
+   the silence ends, *silence ended · made seen*, and a seen stands, which ends at the
+   next recovery. While vpn is green it offers the silence's own form alone.
+5. **What says it elsewhere.** ◇ and the band's pill count *1 silenced*, *Handled* lists
+   it under *Silenced*, and the tab `/network`'s ◇ opens lists vpn under *Silenced* —
+   *silenced by pan, counting as ok · until …* and what is left of its deadline. Copy
+   `/network/vpn`'s document: *🔕 Silenced — by pan, counting as
+   ok ✅, until …*. The JSON says
+   `"contribution": {"code": "OK", "by": "silenced", "rule": "<its id>"}` while vpn is
+   red, and its `handled` lists the silence with `counts_as`
+   `{"WARN": "OK", "ERROR": "OK"}` and its `expires_at`.
+
+### Done
+
+An event looked into and over, closed
+([ADR-0146](adr/0146-an-event-marked-done-shows-ok-until-its-line-reads-anything-else.md)),
+needs no code either: an admin marks a failed run done on its node's *Notes* tab, *Done*
+chosen in the form, wherever a failing line says which event it is. The line shows ok
+with the failure it closed beside it and counts as ok one level up, until it reads
+anything else. In the demo the job names' runs are such events: `/ci/jobs/export` runs
+once a minute and one run in seven fails, its line reading *run N failed in 4s* for that
+minute.
+
+1. **A failed run, closed.** While export's run fails, open `/notes/ci/jobs/export`: the
+   form offers *Done* between *Note* and *Seen*, *On* its line, and says what it does —
+   *until it reads anything else: its next run ends it, and alarms as new if it
+   fails*. Save it with a note: the tab comes back, and under *What stands* the line's
+   block says *… — this line is marked done by pan, closing* {error} *· until it reads
+   anything else*. On `/status/ci/jobs/export` the line shows ok — its green cue with
+   *· error ·* beside it, its own words unchanged, the ringed check at its end in ok's
+   green and no rail — and the node is green, *Status ok since …, when a line was marked
+   done*, as `/ci/jobs` is where no other job fails; on the wall the line folds with the
+   healthy ones, and `/history/ci/jobs` says *a line marked done* began its period.
+2. **The next run ends it, and alarms as new if it fails.** A minute later the next run is read and the done
+   ends, whether that run failed or passed: `/events?under=/ci/jobs/export` shows the
+   row *line done* and the row *line's done ended · a new occurrence*. A done never
+   covers the run after the one it closed — when a run fails again, six minutes on, it
+   alarms as any failure does.
+3. **Where there is no event.** On `/notes/ci/pipelines`, while its build fails, the
+   form offers no *Done*: nothing tells one failure of the build from the next. Nor on
+   `/notes/network/vpn`: a node's own failure is a stretch, not an event.
+4. **Seen, silence and done change places.** While export fails, mark its line seen
+   with its ◇. *Edit* on the seen's block on `/status/ci/jobs/export` offers *Done* as
+   well: choose it and save — *line's seen ended · made done*, and the done stands.
+   *Edit* on the done's offers *Seen* and *Silence* back.
+5. **Clear, and a form opened on another run.** *Clear* on the done's block ends it at
+   once, *line's done ended · by hand*, and the line reads its error again. Open the
+   tab's form while a run fails, wait for the next run, and save: refused above the
+   form, the line reading ok now, the words kept and nothing written.
+6. **What says it elsewhere.** ◇ and the band's pill count *1 done*, and *Handled* lists
+   it under *Accepted*, *1 done on 1 node*, its block's *Edit* offering *Seen* and
+   *Silence*. Copy `/ci/jobs/export`'s document: *✅ run N failed in 4s*, and beneath it
+   *☑️ Done — by pan, closing error ⛔, until it reads anything else*. The JSON says
+   `"contribution": {"code": "OK", "by": "done", "rule": "<its id>"}` on the line, whose
+   `code` stays `ERROR`, and its `handled` lists the done with the `status` it closed,
+   `ERROR`, and its `occurrence`, `export-N`.
 
 ### Configured rules
 
@@ -817,33 +1117,38 @@ A deployment's configured rules
 no code either: `tests/demo_config/aggregation.yaml` writes one rule of each kind on the
 scripted checks, and the demo reads it at its start as a deployment reads its own. Every
 part keeps its true color; what changes is what it counts as one level up, under § and a
-sentence that names the rule.
+sentence that names the rule. The wall's blocks below stand there with *◇ details* on.
 
 1. **The cap.** When `/ci/nightly` erupts, from 42 seconds into its minute, its box
-   stays red with its twelve lines, and beneath its head a block with a dashed edge and
-   no fill says *{error} counts as {warn} above, by the rule nightly advises*, the two
-   statuses drawn as their signs; its speech bubble opens the note and *Configured in
+   stays red with its twelve lines and an amber § beside its state, and beneath its
+   head a block with a dashed edge and no fill says *{error} counts as {warn} above, by
+   the rule nightly advises*, the two statuses drawn as their signs; a click on it
+   opens the drawer at the rule's block, its note and *Configured in
    …/aggregation.yaml since 2026-10-24*, with no buttons for an admin either. `/ci`
    counts the nightly amber. Close `/ci`: its chip counts the nightly as an error among
-   its counts, and its diamond says *1 by a rule*.
+   its counts, and its ◇ says *1 by a rule*.
 2. **The floor.** `/services/api` in its amber quarter, from 15 to 30 seconds into its
    minute: the gateway's box is amber under *{warn} counts as {error} above*, and
    `/services` is red. `/status/services` says *Why error*, and lists the gateway under
    *§ By a rule*: what it reads, what it counts and the rule, since when.
 3. **Healing one named line.** `/ci/pipelines` while `deploy-gate` waits and the build
    passes — 27 to 31 and 72 to 81 seconds into its 90: the gate's line keeps its amber
-   cue with § before its words, its tooltip *Counts as ok by the rule a waiting gate is
-   no failure*, the node's block says *On 1 of its lines, {warn} counts as {ok}*, and
+   cue and tint, a green § at its top right beside a green rail, its tooltip *Counts as
+   ok by the rule a waiting gate is no failure*, the node's block says *On 1 of its
+   lines, {warn} counts as {ok}*, and
    the node is green. While the build fails the node is red, the rule changing nothing
    of it.
 4. **A count over lines.** `/ci/reviews` is green while five reviews wait, each line
-   under §, and its block says *… while fewer than 6 fail — 5 do*. From 50 to 76
+   with § at its top right on its own green tint, its rail on a strip of the page, since
+   a line with no tint of its own stands on the card's fill, and its block says *… while
+   fewer than 6 fail — 5 do*. From 50 to 76
    seconds into its 90 six wait: the block leaves the wall, the lines count as they read
    and the node is amber, and its page keeps the block with *— 6 do · changes nothing
    now*.
 5. **A count over children.** `/hosts/fleet` while node-04's disk is full, 24 to 42
-   seconds into its minute: node-04 and its disk stay red, the fleet's block says *Of
-   its children, {error} counts as {warn} while fewer than 2 fail — 1 does*, node-04's
+   seconds into its minute: node-04 and its disk stay red, node-04 with an amber § beside
+   its state and an amber rail, the fleet's block says *Of its children, {error} counts
+   as {warn} while fewer than 2 fail — 1 does*, node-04's
    page says *Among /hosts/fleet's children, …*, and the fleet is amber.
 6. **What changes nothing now.** `/handled` lists the six under *By a rule*, the longest
    standing first — here the file's order, every rule dated the same day — each its
@@ -865,6 +1170,25 @@ sentence that names the rule.
    and the rule, and says that it does not apply because a worse status would count for
    less than a milder one; the nightly turns `/ci` red again, and the other five apply.
    Put the file back.
+
+### Holidays
+
+A deployment's holidays ([ADR-0149](adr/0149-a-deployments-holidays-are-named-lists-of-the-days-nobody-works.md)) are a
+file as well: `tests/demo_config/holidays.yaml` lists *holidays in Bavaria*, the state's
+public holidays of 2026 and 2027, and *ACME's company holidays*, and the demo reads it at
+its start as a deployment reads its own. Nothing on the wall reads the lists yet —
+maintenance that leaves a list's days out is the first reader — so what there is to see
+is what of the file cannot be read, on the instance's own node.
+
+1. **A list that cannot be read.** Stop the demo, write `2026-11-01: Allerheiligen` among
+   `DE-BY`'s dates — the day a second time — and start it: on `/status/little-sister` the
+   *startup* card turns amber, `/little-sister` with it, and says *…/holidays.yaml: the
+   holiday list DE-BY cannot be read — it writes 2026-11-01 twice*; ACME's list stands,
+   named nowhere.
+2. **A file that cannot be read.** Put the day back and write `regions: {}` at the top
+   level instead: the line says *…/holidays.yaml writes regions, which it does not know,
+   so no holiday list can be read*. Put the file back and start the demo once more: no
+   line of the holidays is left.
 
 ### Tags
 
@@ -936,19 +1260,41 @@ where they are the node's own (ADR-0109 decision 6).
 
 ### Notes
 
-`/status/ci/reviews` carries a *Notes* tab after *History*, with no number until a
-note is written ([ADR-0140](adr/0140-a-nodes-notes-stand-on-a-tab-of-their-own.md)). Open a
-line's ‖: beneath its editor, *write a note on this line* opens the Notes view with
-that line chosen — write one, and the tab says *Notes 1*. Set a line's pin with a
-note: it stands among the notes as the note of a pin that stands; clear the pin and it
-is the note of a pin that has ended, its words kept. *Add a note* writes one on the
-node, and the newest note of its own has *Edit*: an edit from a second tab, opened
-before it, is refused with its words kept. *What the line showed then* folds what the
-node and the line said as the note was written. `/copy/ci/reviews` has a *Notes* block
-after its reasons, the newest note whole and how many more there are. Write a note on
-`/ci/jobs/backfill` while it stands, and its address lists it once the node is gone.
-A pins file a version before wrote, a pin's text under `reason`, starts its pins
-without their text, and `/little-sister/startup` says how many.
+`/notes/ci/reviews` is the place to act on the review queue
+([ADR-0145](adr/0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)):
+two columns at a desk, one on a phone — what fails, the line on what came before, what
+stands, the form, then what came before. *What fails here now* lists every review
+waiting, each linked to its line, and the form opens on *Seen*, *On* every failure
+listed. On the Status page a line's seat — the § of the rule that counts a short queue
+as ok, or ◇ once six wait — opens the tab in the drawer, its form on that line, *Seen*
+chosen, the line failing; *Note* keeps the line chosen. On the tab itself write one
+with a link,
+`[OPS-4411](https://tracker.example.org/OPS-4411)`: the write comes back to the tab, which
+says *Notes 1*; the note heads *What came before*, and the line above *What stands* says
+*Noted once here since …* with *OPS-4411 ↗*. Type a few words under *Note* and choose
+*Seen*: the words follow, and so does the line chosen. Mark that line seen: its block
+stands under *What stands*, with *Edit* and *Clear*, and nothing joins the history while
+it stands; *Clear* it there and it joins *What came before* — *Seen · on its line …*,
+from when to when, *ended: by hand, by pan* — and the line says *Last time: seen …*.
+Set a line's maintenance from the form with `2h` and clear it: the same, in
+maintenance's words. Silence a line with `45d`: refused, why above the form, and the
+words, the line, the level and `45d` back in it, nothing written. On `/notes/ci`, *Seen*
+on every failure listed marks each part beneath it in one act; while they stand
+`/notes/ci` lists them under *What stands* as its *why* card does, and once every one
+has ended it has one entry — *… parts in one act*, folded to its parts, each with the
+status it was seen at — and `/notes/ci/reviews` the same act, its own parts of it, *…
+parts of … in one act, made on /ci*. The demo's jobs fail and mend every few seconds,
+so the act may come back refused — *What fails here changed since this was opened*,
+what fails listed anew and the words kept — and is sent again as it comes back. The
+newest note of its own keeps *Edit* until a pin is set after it: an edit from a second
+tab, opened before it, is refused in its editor with its words kept.
+*What the line showed then* folds what the node and the line said as the note was
+written. `/copy/ci/reviews` has a *Notes* block after its reasons, the newest note with
+words whole, its pin said as the tab says it — *☑️ Seen — by pan …, ended: by hand, by
+pan* — and how many entries more there are. Write a note on `/ci/jobs/backfill` while
+it stands, and its address lists it once the node is gone. A pins file a version before
+wrote, a pin's text under `reason`, starts its pins without their text, and
+`/little-sister/startup` says how many.
 
 ### Handbook
 
@@ -1078,8 +1424,9 @@ press takes `informational` too, which the configuration would leave open; **▤
 folds every
 child to a chip, pressed while all are, released while all are open and half-washed
 between, and a click on one child afterwards changes that child alone; and last,
-for an admin, **‖** on every head whose node has no pin (*Maintenance*, below). A
-dot on a button says the viewer set it differently from the configured look. On the
+for every reader, **◇**, the node's door (*The door, the drawer and ◇ details*,
+below). A dot on a button says the viewer set it differently from the configured
+look. On the
 kiosk no head carries them, and a tap toggles a node as anywhere.
 
 The **head's row** never wraps: before the state stand the node's **actions** — on
@@ -1111,8 +1458,9 @@ until its title has less room than two letters: it goes rather than leave a clip
 letter. No caret stands before a head's cue: move the pointer along a head, and the
 row is washed with its own ink wherever a click would open or close it — on the
 name, the title, the state, the space between — and not on its squares, its actions,
-⋯, its menu or a card's pip; press, and the wash deepens; the name underlines no
-more. A chip answers the same way, its press a deeper wash over its colour; Tab to a
+⋯, its menu or a card's ◇ lit beside its state; press, and the wash deepens; the name
+underlines no more. A chip answers the same way, its press a deeper wash over its
+color; Tab to a
 chip and its focus ring stays under the pointer. That is the look `toggle_hover:
 wash`, the library's since 2026-10-18; choose *Under the pointer: outline* in the
 settings menu and the row and the chip wear an outline of their ink instead, a chip's
@@ -1158,16 +1506,15 @@ flicker, and only a failure after ten minutes out of failure opens the node agai
 
 A **node's page** is the same tree, framed (decision 8). Open `/status/ci`: the frame
 wears the node's state at its edge, and its head is the node's own row — its name,
-title and state, its actions and its icons, the funnel, ▤ and an admin's ‖, and no ↗ —
+title and state, its actions and its icons, the funnel, ▤ and ◇, and no ↗ —
 with what the check says of itself beneath it and the page's cards inside the frame; a
 click on that head opens and closes nothing. Press ▤ and the cards close; back on the
 wall, `ci`'s children are chips there too. Open a leaf's page,
 `/status/security/audit`: it is framed the same way, with no status card — its head,
 then its findings inside the frame and its facts after them — and its funnel folds the
-healthy findings: open `audit`'s chip on the wall, and they are folded there too. As
-an admin, ‖ in either head's row opens the editor for the node's pin beneath the row,
-which stands out of sight until then; Escape closes it and gives ‖ the focus back.
-With scripts disabled the head shows the editor's own *Set maintenance* instead. On a
+healthy findings: open `audit`'s chip on the wall, and they are folded there too. ◇
+in either head's row opens the node's *Notes* tab in the drawer; with scripts disabled
+it is a link to the tab. On a
 node's Status tab its *About* card stands beside its facts (ADR-0133): what its check
 reads, muted, and its *about* beneath. At a desk it stands to the right of *Time*, the
 facts at their 820 pixels and a leaf's page as wide as 1,300 for it; narrow the window
@@ -1313,28 +1660,31 @@ what is showing.
 
 ## Mode 4 — the contrast sweep (color)
 
-The other three modes are for *looking*. Contrast is the one property looking is
-bad at: a red that reads fine to you can be under the bar, and the accessibility
-bar outranks any picked swatch. `tests/sweep_contrast.py` walks every theme — the
-settings menu opened on `/status`, the rows on `/links` that are not plain body
-text and the folds of its setup guide, closed and opened, the coded reason lines of a
-seeded tree, on its leaf page a pin's block
-with its buttons and its opened editor, *Handled*'s count, headings
-and records, the same block on the wall — in a box inside a card, its note mark, its
-pencil, its dashed edge and its editor's *Clear*, in the editor a card's ‖ clones into
-it, and in a branch's head — a configured rule's block on a red, an amber and a green
-node, its words, its note mark and its dashes, and § on a line it counts otherwise —
-every culprit's own name and state
-word on its fill, a failing box's, a warning's, a pinned box's and an undefined
-card's, the head's row's chips, *⌄ all N* and the band's buttons, and its squares,
-the icons on an error's and an ok's fill, ⋯ on a card drawn narrow for it and an
-action wearing its icon, their glyphs and their resting edges against the non-text
+The other three modes are for *looking*. Contrast is the one property looking is bad at:
+a red that reads fine to you can be under the bar, and the accessibility bar outranks
+any picked swatch. `tests/sweep_contrast.py` walks every theme — the settings menu
+opened on `/status`, the rows on `/links` that are not plain body text and the folds of
+its setup guide, closed and opened, the coded reason lines of a seeded tree, on its leaf
+page a pin's block with its buttons and its opened editor, *Handled*'s count, headings
+and records, the same block on the wall while *◇ details* is on — in a box inside a
+card, the link that opens the drawer at it, its sentence at rest and on the wash the
+pointer lays over it, its chevron and its dashed edge — in the card a node's page draws
+at depth 0, its editor opened and saying *updates paused* at its top, and in a branch's
+head — the drawer a door opens over the wall, its head's state, links and
+*updates paused* — a configured rule's block on a red, an amber and a green node, its
+words, its chevron and its dashes, what handles a part — a line's mark on a warning's
+tint, an error's and a box's fill, a head's mark and its lit ◇, § on a line, and their
+rails, against the non-text bar — and a shield's words beside its state, every culprit's
+own name and state word on its fill, a failing box's, a warning's, a pinned box's and an
+undefined card's, the head's row's chips, *⌄ all N* and the band's buttons, and its
+squares, the icons on an error's and an ok's fill, ⋯ on a card drawn narrow for it and
+an action wearing its icon, their glyphs and their resting edges against the non-text
 bar — and the chips and status words in the rows of the Events page and of a node's
 History tab, and measures each as the eye actually gets it: the *computed* ink, the
-background composited from every translucent layer above the first opaque one,
-stacked opacity folded in — but a head's buttons, which under the library's look show
-only under the pointer or the keyboard's focus, are measured as they show, their
-toolbar's opacity whole while they are. It prints the WCAG ratio:
+background composited from every translucent layer above the first opaque one, stacked
+opacity folded in — but a head's buttons, which under the library's look show only under
+the pointer or the keyboard's focus, are measured as they show, their toolbar's opacity
+whole while they are. It prints the WCAG ratio:
 
 ```bash
 npm i --prefix var/bootstrap bootstrap@5.3.2     # once; var/ is gitignored
@@ -1363,12 +1713,12 @@ the general answer whenever a Bootstrap component's own color has to hold the ba
 six canvases.
 
 A pin's block is walked for the same reason. Its statement and its note sit on the
-block's own tint, a pair the tokens can measure; but *Set maintenance*, which a page
-without script shows beneath the head's row, and ‖ in the row stand on the head's
-status fill, and the editor's labels, muted help and *Cancel* are Bootstrap's inks on
-our panel. So the block's buttons draw from the ink
-they stand in rather than wearing an outline variant, and the sweep opens the editor
-and reads each of those rows where it lands. On *Handled* the same blocks
+block's own tint, a pair the tokens can measure; but on the wall, under the pointer, the
+block's sentence stands on a wash of its own ink laid over that tint — an inset shadow,
+which no computed background reads, so the sweep composites it as a layer of its own —
+and the editor's labels, muted help and *Cancel* are Bootstrap's inks on our panel. So
+the block's buttons draw from the ink they stand in rather than wearing an outline
+variant, and the sweep opens the editor and reads each of those rows where it lands. On *Handled* the same blocks
 stand on the page's own canvas, with rows a node's page does not have: the count
 above them, which is Bootstrap's muted ink, a node's path, which is a link on the
 canvas, the link to its line inside a block's sentence, and the record beneath a
@@ -1380,6 +1730,20 @@ on its tint. So the sweep reads one on a red node, one on an amber and one on a 
 the first in a card that is not the pinned one's, by the rule's name — with its dashes
 at the 75 % of its ink the sheet draws them at, where maintenance's 65 % fell to 2.86:1
 on an amber node in the dark theme.
+
+What handles a part is walked for the same reason
+([ADR-0143](adr/0143-a-handled-part-carries-its-jobs-mark-and-a-rail-in-the-color-it-counts-as.md)).
+A line's mark and its rail are a status's tint ink on the line's own tint, a pair the
+tokens measure; but a line with no tint of its own stands on its box's fill, and a box's
+rail on its edge, where the inks fall under the non-text bar on the vivid red and, in
+dark, the vivid amber — so the mark there stands on its own tint and the rail on a strip
+of the page, and the sweep reads each where it lands, on a build whose lines are partly
+seen, a disk seen for itself and a unit a failing gateway shields. A rail is a shadow,
+which no computed color reads: its ink is what `--ls-rail` resolves to. A head's mark
+and its lit ◇ are links since
+[ADR-0147](adr/0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md), and in
+a box every link takes the box's ink — so they keep the ink of their own tint, which the
+sweep found them without on a box of another status: 1.43:1 in the dark theme.
 
 The Links page's setup guide is walked for it too. Its folds are cards, which
 Bootstrap paints, so what a fold's summary says beside its name takes our muted ink
@@ -1448,6 +1812,25 @@ that look as a viewer does in the settings menu, with the presentation cookie
 `tests/browser_looks.py` writes; a premise of the plain face says so where it is chosen,
 and what the monospace face does there instead.
 
+**The browser files launch the Chromium `tests/browser_binary.py` finds**, and so do the
+tools that drive a browser. An environment that brings its own browsers says where with
+`PLAYWRIGHT_BROWSERS_PATH`, as the cloud container does: the link `chromium` there where
+it is a file, else the newest revision's `chromium-*/chrome-linux*/chrome` beneath it;
+elsewhere the revision the installed Playwright pins, which `playwright install
+chromium` fetches. No file names a revision, so an image that brings another one asks
+nothing of them.
+
+**A file that measures across a long loop holds the page still for it.** The wall, a
+branch's page and the system page swap what their refresh fetches every ten seconds,
+and on a loaded machine — the files on four to six workers — ninety widths read twice
+each, or a scan of a whole page, outlast that: a read after the swap measures another
+element than the one the loop set. Such a test routes the refresh's requests before
+the page loads and never answers them — `_held_still` in `tests/test_pin_browser.py`,
+a context's route in `tests/test_a11y_browser.py` — which swaps nothing, as an open
+editor's pause swaps nothing, and leaves the page's timers running, which a held clock
+stops and axe-core needs; and it marks what it measures first, so that a swap that
+took it all the same fails by name.
+
 The same module carries one claim that is about **paint alone**: an action chip laid
 over a node's title must not read through to it
 ([ADR-0034](adr/0034-template-slots-for-dependent-packages.md)). It is measured by
@@ -1461,7 +1844,10 @@ page through the same `render_page` pipeline, with the demo package filling the 
 slot.
 
 This module, like every browser file below, is one the ordinary gate does **not** run:
-it needs a browser download. Without Playwright or Chromium the whole module skips.
+it needs a browser download, and a run that collects `tests/` leaves every
+`tests/test_*_browser.py` out (`collect_ignore_glob` in `tests/conftest.py`), whatever
+the environment holds. Named on the command line a file runs — naming `tests` beside it
+leaves it out again — and without Playwright or Chromium the whole module skips.
 Its two stable-flow boundary checks abort every jsDelivr request before their first
 navigation, assert that Bootstrap CSS was among the intercepted requests, and compare
 a consistently unstyled render. Each chrome test declares whether it needs Bootstrap
@@ -1496,26 +1882,27 @@ uv run pytest tests/test_series_browser.py
 ```
 
 `tests/test_pin_browser.py` holds a pin's write and its editor the same way
-([ADR-0104](adr/0104-a-pin-is-one-block-on-what-it-silences.md)): a real server over
-a node of 80 lines that can each be pinned, and Chromium scrolling to the 60th,
-pinning, editing and clearing it — the page has to come back with that line in the
-window, clear of the bar, each time — and opening an editor on a note, where the
-cursor has to stand at the note's end. And over a wall of three cards, with the
-page's clock in the test's hand: a card's ‖ cloning the page's one editor into the
-card and a box's into the box after its row, the clone the browser's disclosure that
-Escape closes and takes away, the refresh holding off while it is open and dropping
-an answer that was on its way, the line saying *paused while editing* at once, the
-page dimming a minute later but for the card being edited, an editor opened from a
-nested box's block holding the refresh as a card's does, ‖ shown with the head's other
-buttons, the last of its icons on the name's line — before the state under the
-library's look, after it under `head_buttons: name` — and reached by the keyboard, a
-link to the node's page without
-script — with a pointer, with the keyboard and by touch — and on a node's page, a
-branch's and a leaf's, the head's own ‖ opening the editor the head keeps, out of sight
-until then, Escape closing it and giving ‖ the focus back. A node's inspection card stays away while its editor is open, and a pinned
-card is drawn at every width a card comes in, its sentence ending no line inside the
-date of its expiry. Run it when `maintenance-edit.js`, `poll.js`, `inspect.js`, the
-block's templates or styles, or what `POST /pins/maintenance` returns to change:
+([ADR-0104](adr/0104-a-pin-is-one-block-on-what-it-silences.md), as
+[ADR-0147](adr/0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)
+amends it): a real server over a node of 80 member lines, and Chromium scrolling to the
+60th and pinning it in the drawer its ◇ opens, then editing and clearing it in its block
+— the page has to come back with that line in the window, clear of the bar — and opening
+an editor on a note, where the cursor has to stand at the note's end, or a new pin's
+form in the drawer, its note empty. Over a branch's page and the card a page draws at
+depth 0, with the page's clock in the test's hand: the refresh holding off while the
+head's editor is open and dropping an answer that was on its way, the editor saying
+*updates paused* at the top of its form at once and the stamp as it was, the page
+dimming a minute later but for the head or the card being edited, a card's *Edit* and
+*Clear* at depth 0 showing under the pointer or the keyboard and always where nothing
+hovers, and the editor no wider than a phone. And over the wall with *◇ details* on: a
+block one link, its sentence its name and a chevron its end, washing under the pointer
+and ringed under the keyboard, opening the drawer at its pin with its editor open, a
+link to the tab without script, a tap opening the drawer and no inspection card, and its
+sentence ending no line inside the date of its expiry at any width a card comes in; and
+a line's ◇ in a branch's head opening the drawer on the line, an edit in its block
+coming back to it. Run it when `maintenance-edit.js`, `poll.js`, `drawer.js`,
+`inspect.js`, the block's templates or styles, or what `POST /pins/maintenance` returns
+to change:
 
 ```
 uv run pytest tests/test_pin_browser.py
@@ -1672,8 +2059,8 @@ files than the page was loaded with
 ([ADR-0112](adr/0112-our-own-assets-carry-their-content-hash.md)): a real server over a
 wall of three cards, the page's clock in the test's hand, and the server's digest of its
 files changed under a page that is open. The page has to load itself afresh at the next
-refresh and not swap that answer in; to wait while an editor is open, keeping what was
-typed; and, over a server that draws the page with one digest and answers the refresh
+refresh and not swap that answer in; to wait while the drawer is open, as for an open
+editor; and, over a server that draws the page with one digest and answers the refresh
 with another, to reload once and then go on showing what it is sent. Run it when
 `poll.js` or `little_sister.assets` change:
 
@@ -1734,7 +2121,8 @@ each hold one claim: axe-core, injected by `axe-playwright-python` from the brow
 group, runs the rules tagged for WCAG 2.2 at A and AA over the demo's wall, a branch's
 page and the kiosk's wall, at 1,280 pixels and on an emulated phone of 390, each in the
 library's theme, cyberpunk, and in the plain one the baseline was first taken in. The
-demo runs in a child interpreter on a port of its own, 36 seconds into its scenarios.
+demo runs in a child interpreter on a port of its own, 36 seconds into its scenarios and
+held there (`LITTLE_SISTER_DEMO_HOLD`), so that every scan reads the same wall.
 **Every finding is held to a baseline** in the test — what the scan found on the wall
 before the interactive wall was built, each entry a rule and the component it stands on
 with the reason it stands, the brand's inks and the head's small words on a vivid fill
@@ -1773,7 +2161,14 @@ card moving, a click on a head's title or state closing it and one on its icons 
 a drag that selects the head's text not, a modified click keeping the link, Enter
 and Space, a chip opened below the fold brought into view and one in view not moving,
 the focus on the other face after each toggle and put back after a swap without a
-scroll; ▤ folding every child and opening them all, mixed once a click opens one, a
+scroll; a node a click closes or folds at the page's end standing where it stood, in
+its `PageEnd` classes — closed by its state and by Space on a card's name, folded by
+▤ in rows and packed, by the funnel and by *⌃ less*, and on a phone a card closed by
+a tap 150 pixels above the end, its name still under the finger — the room left at
+the page's foot giving way as the window scrolls up through it and to a box opened,
+✓ or a line a refresh brings, standing through the swap, and gone after a reload,
+*Close all* and the kiosk's five minutes; ▤ folding every child and opening them all,
+mixed once a click opens one, a
 child whose claim would keep it open given an entry of its own, and on a fold every
 failing one, so that one made on a node's page holds on the wall; the funnel folding
 the healthy and a press taking `show_when_quiet` and a roster's own quiet lines, its
@@ -1783,9 +2178,9 @@ map's nodes and a `depth=`, *Close all* keeping a node the viewer opened and the
 nodes above it while the statuses beneath change, a click on the button in force
 dropping what it counts, *Open all* showing the healthy, *As configured* loading the
 address without its `depth=`, and with `tree.js` held back the band's buttons in their
-place from the first paint, as the script draws them, and
-a node's page's ‖ in its head's row where *Set maintenance* would stand beneath it —
-without script, neither; the icons' edge and wash at rest, pressed and mixed, the
+place from the first paint, as the script draws them, and a node's page's ◇ in its
+head's row — without script, no buttons, and ◇ a link still; the icons' edge and wash
+at rest, pressed and mixed, the
 band's at rest and in force, and `.is-changed` cleared by
 *As configured*; everything through a swap and a reload; a close giving way once the
 node was out of failure for ten minutes of the server's clock, a pin beneath it or
@@ -1825,8 +2220,9 @@ growing with their squares at a 20-pixel font; a long name broken only after its
 underscores and copied whole; the row under the pointer outlined in
 its own ink at 60 %, 3 pixels out, on a card's head and a box's, from its title, name,
 state and cue — not from an icon, the gap between two, an action, ⋯, its menu or a
-card's pip — and pressed a wash of 12 % reaching 4 pixels past it, not where a control
-of its own is pressed, the name not underlined, the pointer's cursor on the row and
+card's ◇ lit beside its state — and pressed a wash of 12 % reaching 4 pixels past it,
+not where a control of its own is pressed, the name not underlined, the pointer's
+cursor on the row and
 the help cursor on a name whose pause brings the card, both looks from their tokens,
 and the look `toggle_hover: wash` setting them, the outline standing under forced
 colors; a chip on a card, in a box and failing,
@@ -1839,8 +2235,8 @@ a click, the map or a reload opens measured at once, and a window that grows giv
 the row its room back once the grid's observer has seen the new width; a head's
 controls one toolbar walked with the arrow keys from ↗ through the icons to the
 actions, its stop kept through a swap; *⌄ all N* beneath clipped lines, whether the server drew it
-or the script found a wrapping line; an admin's ‖ cloning the editor and holding the
-swap; a refresh reading again only the rows the server drew otherwise or that stand at
+or the script found a wrapping line; ◇ opening the drawer and the swap waiting for
+it; a refresh reading again only the rows the server drew otherwise or that stand at
 another width — none on a quiet one, the rest drawn as they were read, their folds, ⋯
 and the state beneath or beside — every row read at the width the planner gives its
 card, a spanned one's as on the load, and the planner's frame after a swap writing
@@ -1958,10 +2354,9 @@ tree mounted as the deployment that runs mounts it, one team's five checks as th
 wall's cards — on the desk it is mostly looked at on, 2,560 pixels wide with a screen
 of 1,300 there, its aws card and its github card on their own, and at 1,920 and 1,280
 pixels and on a phone; and so is the **hosts wall** of Mode 1, at the same four widths.
-Each is read as an admin, whose ‖ stands on every
-open head without a pin, and the walls as a viewer too — the same session, signed again
-with `admin` false, ‖ on no head — so that what a team sees and what is an admin's alone
-stand side by side. The prototype's reading stands beside each case as what the round
+Each is read as an admin, and the walls as a viewer too — the same session, signed
+again with `admin` false — ◇ on every open head for both, so that what a team sees and
+what is an admin's alone stand side by side. The prototype's reading stands beside each case as what the round
 worked from; it copied today's look by hand, drew a card alone at 700 pixels and a
 page's facts at a typical size, so a card's and a page's reading is near it, not the
 same. And the **swap**: one refresh asked of `poll.js` as a tab coming back asks it,
@@ -2005,8 +2400,8 @@ FONTCONFIG_FILE=var/scratch/dejavu.conf uv run pytest tests/test_phone_browser.p
 **A page is served from `tests/browser_server.py`.** `wsgiref`'s server answers one
 request at a time, and the connections that arrive meanwhile wait in its socket's listen
 queue, which `socketserver` makes five long. A page's stylesheets and scripts come six at
-a time, more than a dozen of them on a node's page, and under the gate's coverage the
-server is still on the first when the rest arrive. Linux keeps a connection that finds
+a time, more than a dozen of them on a node's page, and under coverage the server is
+still on the first when the rest arrive. Linux keeps a connection that finds
 the queue full waiting until there is room; macOS resets it, and the page loads without
 that file — on a Mac, `maintenance-edit.js` failed so with `net::ERR_CONNECTION_RESET`,
 and the test waited thirty seconds for the class that script sets, in a different test
@@ -2039,7 +2434,7 @@ page, a leaf's and its History; a subject's branch and node; Events, Handled, bo
 System views, Links, Copy and About; the Series index with every fold open; and two
 Series views, with a pointer at rest on a curve and, with a mouse, a stretch dragged
 across it. Once, on the widest screen, it pins the demo's job name that comes and goes
-through the wall's own editor, waits until its node has left the tree, and then visits
+in the drawer its card's ◇ opens, waits until its node has left the tree, and then visits
 what a removed node leaves on every screen: its row on Events, its suspended pin on
 Handled, the branch it left, its own address, and its check's History and Series.
 Last it opens every page of the fixture sheet on the widest screen and on the phone.
@@ -2086,16 +2481,18 @@ differ from the baseline's in every face and the facts' counts and the marked st
 what read across.
 
 **A fact that is fixed moves into a test of Mode 5**, which is where a claim is held;
-the walk finds, Mode 5 keeps. `tests/test_walk_gui.py` holds the facts themselves, each
-against a page of the test's own that is broken in its way, which it has to mark, and
-the same page sound, which it has to pass — a walk that never fails would otherwise look
-the same with a fact that measures nothing. It holds the walk's own end too: the server
-stops, then the demo's instance — its one save, its lease let go — and the process goes
-back where it was, before the directory the demo ran in goes. Its half that needs no
-browser runs in the ordinary gate. Run it when a fact is added or changed:
+the walk finds, Mode 5 keeps. `tests/test_walk_gui_browser.py` holds the facts
+themselves, each against a page of the test's own that is broken in its way, which it
+has to mark, and the same page sound, which it has to pass — a walk that never fails
+would otherwise look the same with a fact that measures nothing; it is a browser file,
+run where it is named. `tests/test_walk_gui.py` holds what of the walk needs no browser,
+and every run collects it: the walk's own end — the server stops, then the demo's
+instance, its one save, its lease let go, and the process goes back where it was,
+before the directory the demo ran in goes — how a report reads, the gallery, and the
+looks its browser chooses. Run both when a fact is added or changed:
 
 ```
-uv run pytest tests/test_walk_gui.py
+uv run pytest tests/test_walk_gui_browser.py tests/test_walk_gui.py
 ```
 
 It walks synthetic shapes. A real estate's are looked at on a deployment, by hand,

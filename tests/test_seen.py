@@ -13,7 +13,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest import TestCase
 
-from little_sister.aggregation import Table
+from little_sister.aggregation import ALL, RuleSet, Table
 from little_sister.pins import MAINTENANCE, SEEN, Pin, PinStore
 from little_sister.reasons import Entry
 from little_sister.status import StatusCode
@@ -43,6 +43,7 @@ from little_sister.tree import (
     parts_digest,
     rules_beneath,
 )
+from tests.test_aggregation_tree import CAP, QUIET, rule
 
 ERROR, WARN, OK = StatusCode.ERROR, StatusCode.WARN, StatusCode.OK
 LATER = timedelta(days=2)
@@ -191,6 +192,40 @@ class NodeTests(_Estate):
         node = self.tree.snapshot("/site/web/disk")
         assert node is not None
         self.assertIsNone(own_failure(node))
+
+    def test_a_seen_replica_counts_toward_a_quorum_as_it_reads(self):
+        # one of five may be down: while fewer than two fail, an error counts as a
+        # warning — and a replica seen still fails, for the count, while it counts
+        # as ok itself (ADR-0144)
+        self.tree = StatusTree()
+        self.tree.use_aggregation(RuleSet((rule("one may be down", "/pool", CAP,
+                                                children=[ALL], count=2),)))
+        for name in ("r1", "r2", "r3", "r4", "r5"):
+            self.tree.upsert(f"/pool/{name}", OK)
+        self.tree.upsert("/pool/r1", ERROR, "down")
+        pin = self.seen("/pool/r1")
+        self.assertIs(self.code("/pool"), OK)
+        self.tree.upsert("/pool/r2", ERROR, "down too")
+        pool = self.tree.snapshot("/pool")
+        assert pool is not None and pool.children_rule is not None
+        self.assertEqual((pool.code, pool.children_rule.failing), (ERROR, 2))
+        r1 = next(child for child in pool.children if child.name == "r1")
+        assert r1.contribution is not None
+        self.assertEqual((r1.contribution.code, r1.contribution.rule), (OK, pin.id))
+
+    def test_a_rule_at_its_boundary_reads_what_it_passes(self):
+        # a seen counts first and a configured rule after it, from what it passes
+        # (ADR-0142): what the node would pass without it is a count's to read
+        # (ADR-0144), never the rule's at its own boundary
+        self.tree = StatusTree()
+        self.tree.use_aggregation(RuleSet((rule("disk rests", "/site/web/disk",
+                                                QUIET),)))
+        self.tree.upsert("/site/web/disk", ERROR, "disk 97 % full")
+        self.seen("/site/web/disk")
+        disk = self.tree.snapshot("/site/web/disk")
+        assert disk is not None and disk.rule is not None
+        self.assertEqual((disk.rule.reads, disk.rule.counts, disk.rule.changes),
+                         (OK, OK, False))
 
 
 class EndTests(_Estate):
@@ -436,6 +471,32 @@ class HeldBackTests(_Estate):
         self.assertEqual((row.old, row.new, row.suppressed_by, row.shown),
                          (ERROR, WARN, SEEN, False))
 
+    def test_the_reading_beside_its_end_at_a_worsening_is_its_kind_s(self):
+        # beside the end's row is the check's own change, which the seen hid until
+        # this reading: the seen's, where nothing was ever in maintenance
+        self.tree.upsert("/site/ci/build", WARN, _lines(test=WARN, lint=OK, docs=OK),
+                         members=True)
+        self.seen("/site/ci/build", "test")
+        self.tree.upsert("/site/ci/build", ERROR,
+                         _lines(test=ERROR, lint=OK, docs=OK), members=True)
+        end, beside = self.rows("/site/ci/build")[-2:]
+        self.assertEqual((end.old, end.new, end.cause, end.ended),
+                         (OK, ERROR, CAUSE_LINE_SEEN_ENDED, ENDED_WORSENING))
+        self.assertEqual((beside.old, beside.new, beside.cause, beside.suppressed_by,
+                          beside.shown), (WARN, ERROR, CAUSE_READING, SEEN, False))
+
+    def test_the_reading_beside_its_end_at_a_recovery_is_its_kind_s(self):
+        self.tree.upsert("/site/ci/build", ERROR,
+                         _lines(test=ERROR, lint=OK, docs=OK), members=True)
+        self.seen("/site/ci/build", "test")
+        self.tree.upsert("/site/ci/build", OK, _lines(test=OK, lint=OK, docs=OK),
+                         members=True)
+        end, beside = self.rows("/site/ci/build")[-2:]
+        self.assertEqual((end.cause, end.ended),
+                         (CAUSE_LINE_SEEN_ENDED, ENDED_RECOVERY))
+        self.assertEqual((beside.old, beside.new, beside.cause, beside.suppressed_by,
+                          beside.shown), (ERROR, OK, CAUSE_READING, SEEN, False))
+
 
 class TreatmentTests(_Estate):
     """What a chip, a branch's *why* and the handled count say of a seen part."""
@@ -485,7 +546,9 @@ class KeptTests(TestCase):
         seen = {"path": "/a", "slug": "", "id": "1", "kind": SEEN, "note": "",
                 "set_at": at, "status": "ERROR"}
         pin = {"path": "/a", "slug": "", "id": "2", "kind": MAINTENANCE,
-               "note": "x", "set_at": at, "expires_at": "2026-10-25T09:00:00Z"}
+               "note": "x", "set_at": at,
+               "schedule": "DTSTART;TZID=Europe/Berlin:20261024T110000\n"
+                           "DTEND:20261025T090000Z"}
         held = PinStore.tables({"pins": [seen, pin]})
         self.assertEqual((list(held.nodes), list(held.acknowledged)), (["/a"], ["/a"]))
         with self.assertRaisesRegex(ValueError, "two acknowledgments on /a"):

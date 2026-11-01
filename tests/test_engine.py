@@ -546,18 +546,21 @@ class EngineTests(TestCase):
         self.assertIn("RuntimeError: wrapped", trace)
 
     def test_tick_sweeps_expired_maintenance(self):
+        # a window holds until its end, and the tick ends it there with no page
+        # asked: what the test watches reads no snapshot (ADR-0150)
         tree = StatusTree()
         tree.upsert("/db", StatusCode.OK)
         tree.set_maintenance("/db", "planned",
-                             expires_at=datetime.now(UTC) - timedelta(seconds=1))
+                             expires_at=datetime.now(UTC) + timedelta(seconds=0.3))
         self.assertEqual(tree.effective("/db"), StatusCode.MAINTENANCE)
         engine = Engine([_FakeCheck(path="/x")], tree, poll_interval=0.02)
         engine.start()
         try:
-            self.assertTrue(_wait_for(
-                lambda: tree.effective("/db") == StatusCode.OK))
+            self.assertTrue(_wait_for(lambda: tree.pins() == ({}, {})))
         finally:
             engine.stop()
+        self.assertEqual(tree.recent_events()[-1].cause, "pin-ended")
+        self.assertEqual(tree.effective("/db"), StatusCode.OK)
 
     def test_check_roots_lists_full_paths(self):
         tree = StatusTree()
@@ -696,9 +699,9 @@ class EngineTests(TestCase):
 
     def test_a_childs_about_past_400_is_noted_when_it_first_fills_its_node(self):
         # A run hands a child its about (ADR-0025), and one past about 400
-        # characters is named as the startup pass names a declared one (backlog
-        # #91 §3.5): once, when it first fills its node, which a later run's never
-        # does again.
+        # characters is named as the startup pass names a declared one
+        # (ADR-0127 decision 8): once, when it first fills its node, which a later
+        # run's never does again.
         self_report.startup.forget()
         self.addCleanup(self_report.startup.forget)
         result = CheckResult(StatusCode.OK, children=(

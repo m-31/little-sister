@@ -2,12 +2,14 @@
 
 A check determines the status of one thing and returns a :class:`CheckResult`.
 Subclasses register a ``type`` name; the loader instantiates them from YAML
-(see ``loader.py``). Config fields common to every check: ``path``, ``name``,
+(see ``loader.py``). Config fields common to every check: ``path``,
 ``description``, ``frequency``, ``timeout`` (project.md §2.5), plus the
 optional failure retry — ``retry_interval`` / ``retry_attempts`` (ADR-0033) —
 the series' retention, ``series_keep`` (ADR-0087), what the series is drawn by
 and how much of it the node shows, ``measures`` / ``reading_cap`` (ADR-0092), and
-what the lines say, ``display`` (ADR-0126). A type that reads several things on
+what the lines say, ``display`` (ADR-0126) — every one of them in
+:data:`COMMON_KEYS`, beside which a type states its own (``config_keys``) and
+any other key stops the start (ADR-0151). A type that reads several things on
 tempos of their own declares them as units — :class:`Unit`, :meth:`Check.units`,
 :meth:`Check.measure_unit` (ADR-0130).
 """
@@ -30,6 +32,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from little_sister import handbooks, secrets
 from little_sister import tags as node_tags
 from little_sister.checks.metadata import (
+    LOOK_KEYS,
     NODE_DEFAULTS_KEYS,
     SUBNODE_KEYS,
     Stated,
@@ -41,6 +44,7 @@ from little_sister.checks.metadata import (
     parse_subnodes,
     read_stated,
     resolve_text,
+    unknown_check_keys,
     unknown_keys,
 )
 from little_sister.checks.output import failure_text
@@ -586,9 +590,15 @@ CHECK_TYPES: dict[str, type[Check]] = {}
 #: and ``CheckResult`` lost ``subject`` and ``record``, which a measurement now
 #: carries alone. A type written for v2 cannot be adapted at runtime: it would
 #: still declare a code from a world it re-reads inside the grading, which is the
-#: one failure the split exists to make impossible. Every plugin says
-#: ``require_api(3)``.
-API_VERSION = 3
+#: one failure the split exists to make impossible.
+#:
+#: **v4** opened when a type began to state the keys its file takes —
+#: ``config_keys``, beside its gradings — and the library to refuse any other key
+#: there (ADR-0151). No name left the surface, but a documented behavior changed
+#: for every type: one written for v3 states nothing, and every key of its own
+#: would be refused at load, so it refuses at import instead. Every plugin says
+#: ``require_api(4)``.
+API_VERSION = 4
 
 
 def require_api(version: int, *, by: str = "") -> None:
@@ -807,6 +817,7 @@ class Check(abc.ABC):
                  occurrence: str = "",
                  display: Mapping[str, str] | None = None,
                  gradings: Mapping[str, object] | None = None,
+                 config_keys: Iterable[str] = (),
                  configured: Mapping[str, Any] | None = None,
                  subject: str = "") -> None:
         # The check's full, absolute node path (ADR-0016); `name` is the last segment.
@@ -870,7 +881,8 @@ class Check(abc.ABC):
         # `node_defaults` for its own node and the `subnode_defaults` entries beside
         # each name's labels. Kept apart and not merged as the claim's map above is,
         # because the file's `children:` stands between the file's names and the
-        # type's (§3.4): `first_look` and the engine ask them in that order.
+        # type's (ADR-0128 decisions 2 and 3): `first_look` and the engine ask them
+        # in that order.
         file_quiet = dict(subnode_show_when_quiet or {})
         file_looks = dict(subnode_looks or {})
         self.file_statements = Statements(
@@ -917,11 +929,11 @@ class Check(abc.ABC):
         self.retry_interval_seconds = retry_interval_seconds
         self.retry_attempts = retry_attempts
         # How many consecutive readings of a worse code the nodes this check writes
-        # need before they publish it upward (backlog #38 B). ``None`` inherits the
+        # need before they publish it upward (ADR-0083). ``None`` inherits the
         # settings-level default; the engine resolves the two and hands the answer
         # to the tree, which reads no configuration of its own.
         self.escalate_after = escalate_after
-        # The check this one is reached **through** (backlog #38 A): while that
+        # The check this one is reached **through** (ADR-0084): while that
         # check reports a failure, this check's reading is not believed and its
         # node is shielded — *we could not get there* rather than *it is broken*.
         # A check path, because a check is the configured unit and the declaration
@@ -959,6 +971,19 @@ class Check(abc.ABC):
         self.grading_declarations: tuple[Grading, ...] = declare_gradings(gradings)
         self._gradings: dict[str, Grading] = _gradings_by_name(
             (*self.grading_declarations, *LIBRARY_GRADINGS))
+        # **What its file takes** (ADR-0151): the keys its type states, beside every
+        # check's (`COMMON_KEYS`) and those the gradings of the check's own block are
+        # written under, which a type never restates — and any other key the file
+        # writes, at the top or in a block the library reads beneath it, stops the
+        # start as the check is built, naming what its place takes. Stating is
+        # required of every type (the check API's epoch 4): one that states nothing
+        # takes nothing of its own.
+        graded = self.grading_block().keys
+        self.config_keys: tuple[str, ...] = _stated_keys(config_keys, graded)
+        if configured is not None:
+            _refuse_keys_nothing_takes(
+                configured, self.config_keys, graded,
+                type(self).type_name or type(self).__name__)
         self._graded: Graded = self.grading_block().read(configured)
         if _holds_a_level(self._graded.settings.get(SINCE_OK)) and series_keep < 1:
             raise CheckError(
@@ -1717,6 +1742,66 @@ def _refuse_the_librarys_forms(declarations: Declarations) -> None:
                 f"name")
 
 
+def _stated_keys(stated: Iterable[str], graded: Iterable[str]) -> tuple[str, ...]:
+    """The keys a type states its file takes (ADR-0151 decision 1), in the order it
+    states them — none, where it states none. A name that is no key's, and one that
+    every check takes or the check's own gradings are written under — which the
+    library adds, so that a type restates neither — refuses the check, as a type's
+    form under a name the library writes from does (ADR-0131 decision 7)."""
+    if isinstance(stated, str):
+        raise CheckError("config_keys must be a list of key names, not one string")
+    library = frozenset(graded)
+    keys: list[str] = []
+    for key in stated:
+        if not isinstance(key, str) or not key.strip():
+            raise CheckError(f"config_keys holds {key!r}, which is no key's name")
+        if key in COMMON_KEYS:
+            raise CheckError(
+                f"config_keys names {key!r}, which every check takes: a type states "
+                f"only the keys of its own")
+        if key in library:
+            raise CheckError(
+                f"config_keys names {key!r}, which its gradings are written under: "
+                f"the library takes those beside the keys a type states")
+        if key not in keys:
+            keys.append(key)
+    return tuple(keys)
+
+
+def _refuse_keys_nothing_takes(config: Mapping[str, Any], stated: tuple[str, ...],
+                               graded: Iterable[str], named: str) -> None:
+    """Refuse what a check's file writes that nothing takes (ADR-0151 decision 3):
+    at the top level, and in the blocks the library reads beneath it — a
+    ``subnodes:`` entry, a ``children:`` block — each key with what its place takes,
+    every place in one refusal, in the shape the family's blocks refuse in. At the
+    top level that is three parts: the type's keys, the keys of its gradings and
+    every check's."""
+    said: list[str] = []
+    grading_keys = sorted(graded)
+    taken = {*COMMON_KEYS, *grading_keys, *stated}
+    top = sorted(str(key) for key in config if str(key) not in taken)
+    if top:
+        own = (f"{named} takes: {', '.join(stated)}" if stated else
+               f"{named} takes no key of its own, stating none in config_keys")
+        said.append(
+            f"at the top level: {', '.join(top)} ({own}; its gradings: "
+            f"{', '.join(grading_keys)}; every check: {', '.join(COMMON_KEYS)})")
+    said.extend(f"in {place}: {', '.join(keys)} ({takes}: {', '.join(known)})"
+                for place, keys, known, takes in _beneath(config))
+    if said:
+        raise CheckError("unknown key(s) " + "; ".join(said))
+
+
+def _beneath(config: Mapping[str, Any]
+             ) -> list[tuple[str, list[str], tuple[str, ...], str]]:
+    """The places beneath the top level that write a key nothing takes, as
+    :func:`~little_sister.checks.metadata.unknown_check_keys` finds them, each with
+    the words a refusal says what it takes in: an entry's, or a block's."""
+    return [(place, keys, known,
+             "it takes" if place.endswith("children") else "an entry takes")
+            for place, keys, known in unknown_check_keys(config)]
+
+
 def _gradings_by_name(declared: Sequence[Grading]) -> dict[str, Grading]:
     """A check's gradings by their full names — its type's and the library's — each
     key a deployment writes claimed by one grading of its block alone."""
@@ -1994,16 +2079,27 @@ def _undeclared_keys(declared: Mapping[str, Mapping[str, object]] | None,
     return found
 
 
+#: **The keys every check's file takes** (ADR-0151 decision 2): ``type``, which the
+#: loader reads, and every key :func:`_parse_common` reads — a test holds the two to
+#: each other both ways, so that a key the reader comes to read joins this list in the
+#: change that reads it. A type states its own beside them (``config_keys``), the keys
+#: the check's own gradings are written under are taken without being stated, and any
+#: other key at the top of the file stops the start. ``secrets:`` is not here: only a
+#: type that calls :func:`parse_secret_refs` takes one, and that type states it.
+COMMON_KEYS: tuple[str, ...] = (
+    "type", "path", "description", "about", "title", "handbook", "details", "tags",
+    "order", "show_when_quiet", *LOOK_KEYS, "children", "subnodes", "frequency",
+    "timeout", "retry_interval", "retry_attempts", "escalate_after", "depends_on",
+    "series_keep", "measures", "reading_cap", "display")
+
+
 def _parse_common(config: dict[str, Any]) -> dict[str, Any]:
-    """Parse the fields every check shares.
+    """Parse the fields every check shares — every key of :data:`COMMON_KEYS` but
+    ``type``, which the loader reads.
 
     A node is addressed by one **absolute, slash-separated** ``path`` — e.g.
     ``/system/alpha`` — whose last segment is the node's name (ADR-0016).
     """
-    if "name" in config:
-        raise CheckError(
-            "'name' was merged into 'path' (ADR-0016); give one absolute path "
-            "such as '/system/alpha'")
     path = join_path(str(config.get("path", "")))
     if not split_path(path):
         raise CheckError("check config must define a non-empty 'path'")
@@ -2097,7 +2193,7 @@ def _parse_common(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _parse_depends_on(value: object) -> str | None:
-    """The path of the check this one is reached through (backlog #38 A), or
+    """The path of the check this one is reached through (ADR-0084), or
     ``None``. A blank string is the author's typo rather than *no dependency*, and
     fails the load: a declaration that silently means nothing is worse than none."""
     if value is None:
@@ -2113,7 +2209,7 @@ def _parse_depends_on(value: object) -> str | None:
 
 
 def _parse_escalate_after(value: object) -> int | None:
-    """The per-check escalation count (backlog #38 B): ``None`` (absent) inherits the
+    """The per-check escalation count (ADR-0083): ``None`` (absent) inherits the
     settings-level default; otherwise a positive int. Zero would mean *never
     publish*, so it fails the load rather than silencing a check quietly."""
     if value is None:

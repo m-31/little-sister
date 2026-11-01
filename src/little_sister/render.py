@@ -398,6 +398,34 @@ def short_links(text: str, *, inline: bool = False) -> list[str]:
             and (section := short_form(str(child.attrGet("href") or ""))) is not None]
 
 
+def links_of(text: str) -> list[tuple[str, str]]:
+    """Every link ``text`` carries, the text read as the renderer reads a block — a
+    link it writes, and a web address it names bare, which the renderer links — each
+    as where it leads and its own words, the address's for a bare one, in the order
+    they stand: what a node's notes link to, as the line on what came before lists
+    it (ADR-0145 decision 7). A link in the short form leads into the node's own
+    handbook and one to a section of the page nowhere beyond it, so neither is one;
+    nor is a link in code or escaped, which the renderer draws as text."""
+    found: list[tuple[str, str]] = []
+    for block in _MD.parse(text, {}):
+        href = ""
+        words: list[str] | None = None
+        for child in block.children or ():
+            if child.type == "link_open":
+                href = str(child.attrGet("href") or "")
+                kept = (bool(href) and not href.startswith("#")
+                        and short_form(href) is None)
+                words = [] if kept else None
+            elif child.type == "link_close":
+                if words is not None:
+                    found.append((href, " ".join("".join(words).split()) or href))
+                words = None
+            elif words is not None:
+                words.append(" " if child.type in ("softbreak", "hardbreak")
+                             else child.content)
+    return found
+
+
 def write_out(text: str, word: Callable[[StatusCode], str], *, handbook: str = "",
               inline: bool = False) -> str:
     """``text`` as it leaves the instance (ADR-0133 decisions 4 and 5): each status

@@ -1,7 +1,8 @@
-"""Branch pins in the UI (ADR-0014): a card's pause mark and a branch's head.
-The model, POST /pins/maintenance, persistence and the reaper always accepted a
-container pin — these tests pin the surfaces down. Where each stands, and what
-its editor says, is `tests/test_wall_pins.py`'s (ADR-0104)."""
+"""Branch pins in the UI (ADR-0014): a card's door and a branch's head, the door
+opening the node's Notes tab where a pin is set (ADR-0147). The model, POST
+/pins/maintenance, persistence and the reaper always accepted a container pin —
+these tests pin the surfaces down. Where each block stands, and what its editor
+says, is `tests/test_wall_pins.py`'s (ADR-0104)."""
 
 import os
 import re
@@ -58,69 +59,64 @@ class BranchPinTests(TestCase):
 
     # ----- a card's pin mark -----
 
-    def test_admin_card_head_carries_the_pin_mark_and_the_page_one_editor(self):
+    def test_an_admin_card_head_carries_its_door_and_no_editor(self):
+        # the door is a link to the node's Notes tab, where a pin is set (ADR-0147
+        # decision 1): no dialog to script, and no editor of a new pin on the page
         self._login()
         self.tree.upsert("/system/alpha/disk", StatusCode.OK)
         body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn('data-control="pin"', body)
-        self.assertIn('aria-label="set maintenance for /system"', body)
-        # the mark is a link to the node's page, which the script turns into the
-        # control that clones the page's one editor into the card's panel: no
-        # dialog to script, and no editor in every head
+        self.assertIn('data-control="door" href="/notes/system"', body)
+        self.assertIn('aria-label="handle /system"', body)
         self.assertNotIn('aria-haspopup="dialog"', body)
-        self.assertEqual(body.count('<template id="pin-editor">'), 1)
-        # one editor of a pin, the page's, beside the ringed check's (ADR-0142)
-        self.assertEqual(body.count(f'class="{EDITOR} '), 2)
-        self.assertEqual(body.count('action="/pins/maintenance"\n'
-                                    f'          class="{EDITOR} '), 1)
-        self.assertIn("<strong>Maintenance for "
-                      '<span class="pin-editor__what">this node</span>.</strong>', body)
-        self.assertIn("Which formats can I use?", body)
-        # what the pin would cover rides on the mark, from the unfiltered tree
-        self.assertRegex(
-            body, r'aria-label="set maintenance for /system"[^>]*data-beneath')
+        self.assertNotIn('<template id="pin-editor">', body)
+        self.assertNotIn(f'class="{EDITOR} ', body)
 
-    def test_viewer_sees_no_pin_mark_and_no_editor(self):
+    def test_viewer_sees_the_door_and_no_editor(self):
+        # ◇ for every reader, its words theirs (ADR-0147 decision 1)
         self._viewer()
         self.tree.upsert("/system/alpha", StatusCode.OK)
         body = self.client.get("/status").get_data(as_text=True)
+        self.assertIn('aria-label="the notes of /system"', body)
         self.assertNotIn('data-control="pin"', body)
         self.assertNotIn("pin-editor", body)
         self.assertNotIn(EDITOR, body)
 
-    def test_kiosk_hides_the_pin_mark_even_for_admin(self):
+    def test_kiosk_hides_the_door_even_for_admin(self):
         # the kiosk is the wall display: no chrome to click (ADR-0029)
         self._login()
         self.client.set_cookie("ls_prefs", "layout=kiosk")
         self.tree.upsert("/system/alpha", StatusCode.OK)
         body = self.client.get("/status").get_data(as_text=True)
+        self.assertNotIn('data-control="door"', body)
         self.assertNotIn('data-control="pin"', body)
         self.assertNotIn("pin-editor", body)
         self.assertNotIn(EDITOR, body)
 
-    def test_the_mark_rides_the_fragment_and_the_editor_does_not(self):
-        # the mark stands in what the refresh swaps, so the fragment brings it; the
-        # editor is the page's, outside the swap, so no fragment carries one
+    def test_the_door_rides_the_fragment_and_no_editor_does(self):
+        # the door stands in what the refresh swaps, so the fragment brings it, and
+        # there is no editor of a new pin to bring
         self._login()
         self.tree.upsert("/db", StatusCode.OK)
         frag = self.client.get("/status?fragment=1").get_data(as_text=True)
-        self.assertIn('data-control="pin"', frag)
+        self.assertIn('data-control="door"', frag)
         self.assertNotIn(EDITOR, frag)
         self.assertNotIn("pin-editor", frag)
 
-    def test_a_leafs_mark_names_the_node_alone(self):
+    def test_a_leafs_door_names_the_node(self):
         self._login()
         self.tree.upsert("/uplink", StatusCode.OK)
         body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn('aria-label="set maintenance for /uplink"', body)
+        self.assertIn('aria-label="handle /uplink"', body)
         self.assertNotIn("data-beneath", body)
 
     def test_pinned_card_states_the_pin_and_has_no_mark(self):
+        # while *◇ details* is on (ADR-0147 decision 6)
         self._login()
         self.tree.upsert("/db/ping", StatusCode.OK)
         self.tree.set_maintenance(
             "/db", "planned", expires_at=datetime.now(UTC) + timedelta(hours=2),
             set_by="pan")
+        self.client.set_cookie("handled_details", "1")
         body = self.client.get("/status").get_data(as_text=True)
         self.assertIn("In maintenance by <strong>pan</strong> until ", body)
         self.assertIn("1h 59m left", body)
@@ -128,17 +124,19 @@ class BranchPinTests(TestCase):
 
     # ----- a branch's head -----
 
-    def test_branch_page_sets_maintenance_from_its_head(self):
+    def test_a_branch_s_pin_is_set_on_its_notes_tab(self):
         self._login()
         self.tree.upsert("/system/alpha/disk", StatusCode.OK)
         body = self.client.get("/status/system/alpha").get_data(as_text=True)
         head = body.split('class="status-node viewed-head', 1)[1].split(
             'class="status-grid"', 1)[0]
-        self.assertIn("Set maintenance</summary>", head)
-        self.assertIn("<strong>Maintenance for this node.</strong>", head)
-        self.assertIn("nothing under here will alarm", head)
-        self.assertIn('name="path" value="system/alpha"', head)
-        self.assertIn("default 7d", head)                  # the deployment default
+        self.assertNotIn("Set maintenance</summary>", head)
+        self.assertIn('href="/notes/system/alpha"', head)
+        tab = self.client.get("/notes/system/alpha").get_data(as_text=True)
+        self.assertIn('action="/pins/maintenance"', tab)
+        self.assertIn('name="path" value="/system/alpha"', tab)
+        self.assertIn("the node and everything beneath it", tab)
+        self.assertIn("default 7d", tab)                  # the deployment default
 
     def test_branch_page_shows_the_current_pin(self):
         self._login()
@@ -157,17 +155,14 @@ class BranchPinTests(TestCase):
 
     def test_overview_root_gets_no_head(self):
         # a silence-everything form on the overview is a foot-gun; the root
-        # stays curl-only
+        # stays curl-only, and the root has no Notes tab to open
         self._login()
         self.tree.upsert("/db", StatusCode.OK)
         body = self.client.get("/status").get_data(as_text=True)
         self.assertNotIn("viewed-head", body)
-        # one editor of a pin, the page's, which the script aims at the card
-        # clicked — beside the ringed check's (ADR-0142)
-        self.assertEqual(body.count('action="/pins/maintenance"\n'
-                                    f'          class="{EDITOR} '), 1)
-        self.assertIn('name="path" value=""', body)
+        self.assertNotIn('action="/pins/maintenance"', body)
         self.assertNotIn('name="path" value="/"', body)
+        self.assertNotIn('href="/notes/"', body)
 
     def test_viewer_branch_page_has_no_editor(self):
         self._viewer()
@@ -189,17 +184,18 @@ class BranchPinTests(TestCase):
         body = self.client.get("/status/system/alpha").get_data(as_text=True)
         self.assertNotIn(EDITOR, body)
 
-    def test_leaf_detail_page_sets_maintenance_from_its_status_line(self):
-        # the card at the foot is gone from a leaf's page (ADR-0104); the form
-        # it held opens from the status line, and tests/test_pin_block.py says
-        # where
+    def test_a_leaf_s_pin_is_set_on_its_notes_tab(self):
+        # the card at the foot is gone from a leaf's page (ADR-0104), and so is the
+        # head's own *Set maintenance* (ADR-0147): the form a pin is set from is the
+        # tab's, which the head's door opens
         self._login()
         self.tree.upsert("/svc/api", StatusCode.OK)
-        body = self.client.get("/status/svc/api").get_data(as_text=True)
-        self.assertNotIn('text-uppercase">Maintenance<', body)
-        self.assertIn("Set maintenance", body)
-        self.assertIn("Maintenance for this node.", body)
-        self.assertIn("the check keeps running", body)     # the leaf sentence
+        page = self.client.get("/status/svc/api").get_data(as_text=True)
+        self.assertNotIn('text-uppercase">Maintenance<', page)
+        self.assertNotIn("Set maintenance", page)
+        self.assertIn('href="/notes/svc/api"', page)
+        body = self.client.get("/notes/svc/api").get_data(as_text=True)
+        self.assertIn("its check keeps running", body)     # the kind's sentence
         self.assertIn("default 7d", body)
         self.assertIn("Duration or expiry", body)
         self.assertIn("Which formats can I use?", body)
@@ -227,9 +223,12 @@ class BranchPinTests(TestCase):
         with mock.patch.object(
                 app_module, "config",
                 replace(app_module.config, maintenance_default_expiry="36h")):
-            body = self.client.get("/status/svc/api").get_data(as_text=True)
-        self.assertIn("default 36h", body)
-        self.assertNotIn("default 7d", body)
+            body = self.client.get("/notes/svc/api").get_data(as_text=True)
+        # the maintenance form's, after a silence's, which an ok node is offered too
+        # and whose own default is a week (ADR-0144 decision 1)
+        maintenance = body.split('data-kind="maintenance"', 1)[1]
+        self.assertIn("default 36h", maintenance)
+        self.assertNotIn("default 7d", maintenance)
 
     # ----- pinning a container end to end -----
 
@@ -339,30 +338,38 @@ class EditAndConflictTests(TestCase):
             body.count(f'name="set_at" value="{entry.token}"'), 2)
 
     def test_unpinned_form_claims_nothing_is_pinned(self):
+        # the tab's form, where a new pin is set (ADR-0147 decision 1)
         self._login()
         self.tree.upsert("/system/alpha/disk", StatusCode.OK)
-        body = self.client.get("/status/system/alpha").get_data(as_text=True)
+        body = self.client.get("/notes/system/alpha").get_data(as_text=True)
         self.assertIn('name="set_at" value=""', body)
 
     def test_pinned_card_carries_the_note_s_source_and_the_token(self):
+        # the card a node's page draws at depth 0, its own head, states the pin whole:
+        # the editor names the pin it believes it is changing, and Clear is a form of
+        # its own under the same token; the wall's card carries neither, its block the
+        # link that opens the drawer at it (ADR-0147 decision 7)
         self._login()
         self.tree.upsert("/db/ping", StatusCode.OK)
         entry = self._pin("/db", "planned")
         assert entry is not None
-        body = self.client.get("/status").get_data(as_text=True)
+        body = self.client.get("/status/db?depth=0").get_data(as_text=True)
         self.assertIn('placeholder="why?">planned</textarea>', body)
-        # the editor names the pin it believes it is changing, and on the wall
-        # Clear stands in that editor, under the same token (ADR-0135 decision 4)
         self.assertEqual(
-            body.count(f'name="set_at" value="{entry.token}"'), 1)
-        self.assertIn('name="action" value="clear" formnovalidate', body)
+            body.count(f'name="set_at" value="{entry.token}"'), 2)
+        self.assertIn('<input type="hidden" name="action" value="clear">', body)
         self.assertIn("In maintenance by <strong>ada</strong>", body)
+        self.client.set_cookie("handled_details", "1")
+        wall = self.client.get("/status").get_data(as_text=True)
+        self.assertNotIn(entry.token, wall)
+        self.assertIn('href="/notes/db?at=maintenance#at"', wall)
 
     def test_pinned_card_reads_first_and_keeps_the_raw_source_to_edit(self):
+        # the card at depth 0 states the note whole, and keeps its source to edit
         self._login()
         self.tree.upsert("/db/ping", StatusCode.OK)
         self._pin("/db", "See **runbook**")
-        body = self.client.get("/status").get_data(as_text=True)
+        body = self.client.get("/status/db?depth=0").get_data(as_text=True)
         self.assertIn("<p>See <strong>runbook</strong></p>", body)
         self.assertIn('placeholder="why?">See **runbook**</textarea>', body)
 
@@ -597,23 +604,26 @@ class EntryPinSurfaceTests(TestCase):
 
     # ----- the control -----
 
-    def test_an_admin_gets_a_pin_control_on_every_member_line(self):
+    def test_an_admin_gets_a_door_on_every_member_line(self):
+        # each opens the node's Notes tab with its form on the line (ADR-0147
+        # decision 1)
         self._login()
         self._findings()
         body = self._page()
-        self.assertEqual(body.count('class="reason-pin"'), 2)
-        self.assertIn('name="slug" value="acme/pr-412"', body)
-        self.assertIn("Set maintenance", body)
-        self.assertIn("reason-pin__toggle", body)
+        self.assertEqual(body.count('class="line-door door"'), 2)
+        self.assertIn('href="/notes/wiz?reason=acme/pr-412#add-note"', body)
+        self.assertNotIn("Set maintenance", body)
+        self.assertNotIn("reason-pin", body)
 
-    def test_the_pin_summary_takes_no_line_of_its_own(self):
-        # it is drawn on the seat the rail keeps for it, at the line's end, so
-        # the editor it opens can stand beneath the line (ADR-0104 decision 4)
+    def test_the_line_s_door_takes_no_line_of_its_own(self):
+        # it is drawn on the seat the rail keeps for it, at the line's end
+        # (ADR-0147 decision 1)
         css = self.client.get(
             "/static/css/overview.css").get_data(as_text=True)
-        rule = css.split(".reason-pin > summary {", 1)[1].split("}", 1)[0]
+        rule = css.split(".check-reason__box > .line-door {", 1)[1].split("}", 1)[0]
         self.assertIn("position: absolute", rule)
-        self.assertIn("display: inline-flex", rule)
+        self.assertIn("display: inline-flex",
+                      css.split("\n.line-door {", 1)[1].split("}", 1)[0])
 
     def test_prose_gets_no_per_line_control(self):
         # its unit of suppression is the node pin; a per-line button there would
@@ -629,10 +639,12 @@ class EntryPinSurfaceTests(TestCase):
         self._findings()
         self.assertNotIn('class="reason-pin"', self._page())
 
-    def test_the_control_claims_nothing_is_pinned(self):
+    def test_the_line_s_form_claims_nothing_is_pinned(self):
         self._login()
         self._findings()
-        self.assertIn('name="set_at" value=""', self._page())
+        body = self._page("/notes/wiz?reason=acme/pr-412")
+        self.assertIn('name="set_at" value=""', body)
+        self.assertIn('<option value="acme/pr-412" selected>', body)
 
     # ----- pinning through the form -----
 
@@ -755,11 +767,12 @@ class EntryPinIndexTests(TestCase):
 
     A silenced reason used to be visible only on its own node's page: the index
     walked ``maintenance_entry`` and knew nothing of ``ReasonLine.maintenance``, so
-    an entry pin reached neither the strip pill, nor the "contains maintenance" pip,
-    nor ``/maintenance``. An admin asking *what is silenced right now?* got a quietly
-    incomplete answer — and, in the sharp case, a node whose members are **all**
-    pinned reads ``MAINTENANCE`` on the dashboard while the maintenance page denied
-    any pin existed there. A blue card no index claims is what rule 5 forbids.
+    an entry pin reached neither the strip pill, nor the "contains maintenance" pip —
+    a card's door now, which counts it (ADR-0147) — nor ``/maintenance``. An admin
+    asking *what is silenced right now?* got a quietly incomplete answer — and, in
+    the sharp case, a node whose members are **all** pinned reads ``MAINTENANCE`` on
+    the dashboard while the maintenance page denied any pin existed there. A blue
+    card no index claims is what rule 5 forbids.
 
     The two surfaces answer different questions and so have different shapes: the
     capped popover summarizes **one row per node**, ``/maintenance`` lists **every
@@ -954,15 +967,15 @@ class EntryPinIndexTests(TestCase):
 
     # ----- the "contains maintenance" pip -----
 
-    def test_a_card_over_an_entry_pinned_node_gets_the_pip(self):
+    def test_a_card_over_an_entry_pinned_node_lights_its_door(self):
         # the case that makes this more than bookkeeping: in dense mode a node whose
         # members are all pinned reads MAINTENANCE, so it collapses to a leaf chip,
-        # and a chip draws neither reasons nor a quiet count.
+        # and a chip draws neither reasons nor a quiet count — the card's door counts
+        # the line (ADR-0147 decision 2)
         self._findings()
         self._pin_line("/site/wiz", "acme/pr-412")
-        body = self._dashboard()
-        self.assertIn("maintenance-pip", body)
-        self.assertIn('data-pop-for="/site"', body)
+        self.assertIn('href="/notes/site" title="Handle it — 1 handled: 1 line in '
+                      'maintenance"', self._dashboard())
 
     def test_an_entry_pinned_card_needs_no_pip_of_its_own(self):
         # its card already draws the quiet count. (`/wiz` is a root, so it *is* a
@@ -975,13 +988,14 @@ class EntryPinIndexTests(TestCase):
 
     def test_an_entry_pin_does_not_hide_a_pinned_descendant(self):
         # An entry pin cancels nothing below it — it silences one of this node's own
-        # lines and leaves every child reporting — so unlike a node pin it must not
-        # take this node out of the ancestor set.
+        # lines and leaves every child reporting — so the node's door counts the line
+        # and the pinned child beneath it, each once.
         self._findings("/wiz")
         self.tree.upsert("/wiz/sub", StatusCode.ERROR, "child boom")
         self._pin_line("/wiz", "acme/pr-412")
         self._pin_node("/wiz/sub")
-        self.assertIn('data-pop-for="/wiz"', self._dashboard())
+        self.assertIn('href="/notes/wiz" title="Handle it — 2 handled: 1 node in '
+                      'maintenance, 1 line in maintenance"', self._dashboard())
 
     def test_a_node_pin_still_takes_its_own_card_out(self):
         # the other half of the same rule, unchanged: a node pin cancels its whole
@@ -1049,9 +1063,11 @@ class EntryPinIndexTests(TestCase):
 class BranchLinePinTests(TestCase):
     """A branch's own lines take a pin on its own page (ADR-0036 decision 12). Its
     head lists them as a leaf's page lists its lines — in
-    full, each with its record, for an admin the pause mark at its end and a pinned
-    line's block beneath it — and so does its one card at depth 0; the line a page is
-    asked at is marked there, and a write comes back to it.
+    full, each with its record, for an admin its one seat at its end — ◇, which opens
+    the node's Notes tab on the line, where the pin is set (ADR-0147), or the mark of
+    what handles it — and a pinned line's block beneath it — and so does its one card
+    at depth 0; the line a page is asked at is marked there, and a write from a line's
+    block comes back to it.
 
     The node is an aspect of `aws`'s shape: its scope, `OK`, and a region that cannot
     be read, `WARN`, above a node for a pipeline that fails. Any line takes a pin,
@@ -1100,9 +1116,9 @@ class BranchLinePinTests(TestCase):
         return found[0]
 
     def _form(self, line):
-        # the pause mark's, beside the ringed check's on a line that fails (ADR-0142)
+        # the editor of the line's pin, in its block beneath it
         return {field.attrs.get("name"): field.attrs.get("value")
-                for field in line.one("reason-pin").one(EDITOR).all(tag="input")
+                for field in line.one("rule-block__edit").one(EDITOR).all(tag="input")
                 if field.attrs.get("type") == "hidden"}
 
     def _pin(self, slug, note="ada is on it"):
@@ -1128,7 +1144,7 @@ class BranchLinePinTests(TestCase):
         # A page's head is a status fill, vivid where the node fails of its own,
         # and there Bootstrap's muted gray measured 3.4:1 in the light themes and
         # 1.9:1 in the dark ones. A leaf's record stood in a pale alert and kept
-        # it; a leaf's page is framed as a branch's is now (backlog #91 §3.5), its
+        # it; a leaf's page is framed as a branch's is now (ADR-0127 decision 8), its
         # lines on its head's fill, and its record takes the line's ink as well.
         record = self._line(self._head(), self.CANNOT).one("reason-record")
         self.assertFalse(record.has("text-muted"))
@@ -1138,17 +1154,15 @@ class BranchLinePinTests(TestCase):
         leaf = parse(self._get("/status/cloud/leaf")).one("reason-record")
         self.assertFalse(leaf.has("text-muted"))
 
-    def test_an_admin_gets_the_pause_mark_on_each_line_whatever_it_says(self):
+    def test_an_admin_gets_a_door_on_each_line_whatever_it_says(self):
         head = self._head()
         for text, slug in ((self.SCOPE, "scope"), (self.CANNOT, self.UNREAD)):
             with self.subTest(slug=slug):
                 line = self._line(head, text)
-                self.assertEqual(len(line.all("reason-pin")), 1)
-                fields = self._form(line)
+                (door,) = line.all("line-door")
                 self.assertEqual(
-                    (fields["path"], fields["slug"], fields["action"],
-                     fields["set_at"]),
-                    ("cloud/aws/codepipeline", slug, "set", ""))
+                    door.attrs.get("href"),
+                    f"/notes/cloud/aws/codepipeline?reason={slug}#add-note")
 
     def test_a_viewer_reads_the_lines_and_gets_no_control(self):
         self._viewer()
@@ -1165,7 +1179,7 @@ class BranchLinePinTests(TestCase):
         page = parse(self._get(self.URL + "?depth=0"))
         self.assertEqual(page.all("viewed-head"), [])
         card = page.one("status-card")
-        self.assertEqual(len(card.all("reason-pin")), 2)
+        self.assertEqual(len(card.all("line-door")), 2)
         self.assertIn("AccessDenied", card.one("reason-record").text())
 
     def test_the_overviews_card_keeps_the_walls_clamp(self):
@@ -1178,6 +1192,7 @@ class BranchLinePinTests(TestCase):
     # ----- what a pin does, and what its editor says -----
 
     def test_a_write_from_the_head_comes_back_to_the_page_at_its_line(self):
+        self._pin(self.UNREAD)
         head = self._head("?depth=2")
         fields = self._form(self._line(head, self.CANNOT))
         back = ("/status/cloud/aws/codepipeline?depth=2"
@@ -1205,17 +1220,13 @@ class BranchLinePinTests(TestCase):
         self.assertIn("1 of 2 in maintenance.",
                       self._head().one("reason-quiet-count").text())
 
-    def test_the_last_lines_editor_says_the_nodes_beneath_still_count(self):
-        def said():
-            line = self._line(self._head(), self.SCOPE)
-            return line.one("rule-block__scope").text()
-
-        self.assertEqual(
-            said(), "Maintenance for this line only. The other one keeps alarming.")
+    def test_its_lines_all_pinned_claim_nothing_of_the_nodes_beneath(self):
+        # a node whose own lines are all pinned still counts the nodes beneath it
+        # (ADR-0124): its count of quiet lines says so, and no more
+        self._pin("scope")
         self._pin(self.UNREAD)
-        self.assertEqual(
-            said(), "Maintenance for this line only. No other line of its own is "
-                    "left to alarm, and the nodes beneath it still count.")
+        quiet = self._head().one("reason-quiet-count").text()
+        self.assertEqual(quiet, "2 of 2 in maintenance.")
 
     def test_every_line_silenced_says_nothing_untrue_about_what_reports(self):
         self._pin("scope")
@@ -1255,10 +1266,12 @@ class BranchLinePinTests(TestCase):
         self.assertTrue(orphan.has("reason-orphan"))
         self.assertIn("no longer reported", orphan.text())
 
-    def test_the_refresh_carries_the_controls_and_the_line_asked_for(self):
+    def test_the_refresh_carries_the_seats_and_the_line_asked_for(self):
+        self._pin(self.UNREAD)
         body = self._get(self.URL + "?depth=2&reason=scope&fragment=1")
         head = parse(body).one("viewed-head")
-        self.assertEqual(len(head.all("reason-pin")), 2)
+        self.assertEqual(len(head.all("line-door")), 1)
+        self.assertEqual(len(head.all("line-pin")), 1)
         self.assertEqual(head.with_id("pinned-reason").one(
             "check-reason__body").text(), self.SCOPE)
         # and a write from what the refresh drew comes back to the page
@@ -1268,7 +1281,7 @@ class BranchLinePinTests(TestCase):
         # The card answers a node's name alone (`NAMES`, `inspect.js`), and the
         # page's own head is no toggle: it has no card, and a control within its
         # row is the control's own. The page's head keeps the rules, the setter and
-        # the lines beneath its row now, as a box does (backlog #91 §3.5): the row
+        # the lines beneath its row now, as a box does (ADR-0127 decision 8): the row
         # holds its toolbar's controls alone.
         script = self.client.get("/static/js/inspect.js").get_data(as_text=True)
         found = re.search(r"var NAMES = '([^']+)';", script)
@@ -1331,8 +1344,10 @@ class PinnedCardTests(TestCase):
     def _card(self):
         # `dense=0`: a pinned node reads MAINTENANCE, which is neither warn nor
         # error, so the dense grid collapses it to a chip that draws no reasons at
-        # all. That case is real and covered — it is why the pip exists — but the
-        # card content is what these four states are about.
+        # all. That case is real and covered, but the card content is what these
+        # four states are about — its block among it, which the wall draws while
+        # *◇ details* is on (ADR-0147 decision 6).
+        self.client.set_cookie("handled_details", "1")
         return self.client.get("/status?dense=0").get_data(as_text=True)
 
     def _leaf(self):
@@ -1343,7 +1358,10 @@ class PinnedCardTests(TestCase):
         self._pin()
         body = self._card()
         self.assertIn("In maintenance by <strong>pan</strong>", body)
-        self.assertIn("cutover", body)
+        # its note is read in the drawer its block opens (ADR-0147 decision 7), and in
+        # the band's popover
+        self.assertIn("cutover",
+                      self.client.get("/notes/site/db").get_data(as_text=True))
         # An OK reading is named too, not suppressed. "No suffix means healthy"
         # would be a silent convention, and the whole point of the suffix is that
         # you never have to wonder what is under the blue. (The box's state
@@ -1420,7 +1438,7 @@ class PinnedCardTests(TestCase):
     def test_an_unremarkable_container_page_heads_its_frame_with_its_row_alone(self):
         # a container with no reading, no reasons and no pin has nothing of its own
         # to say, and its page opened with its children for a reader who could not
-        # pin it. A page frames its node now (backlog #91 §3.5): the head is the
+        # pin it. A page frames its node now (ADR-0127 decision 8): the head is the
         # frame's top for every reader, and for this one it is its row alone.
         self.tree.upsert("/site/db", StatusCode.OK)
         self.client.get("/logout")

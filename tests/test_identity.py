@@ -25,15 +25,16 @@ from little_sister import identity, local_login
 #: the value of this file is that adding a route makes a test fail until somebody has
 #: said which of the three sets it belongs in.
 GATED_ENDPOINTS = frozenset({
-    "about", "copy", "events", "extension_asset", "handbook", "handled", "help_page",
-    "history", "link_icon", "links", "maintenance", "maintenance_overview", "notes",
-    "preferences", "seen", "self_report_action", "system", "system_installed",
-    "user_avatar",
+    "about", "copy", "done", "draft", "events", "extension_asset", "handbook",
+    "handled", "help_page", "history", "link_icon", "links", "maintenance",
+    "maintenance_overview", "maintenance_preview", "notes", "preferences", "seen",
+    "self_report_action", "silenced", "system", "system_installed", "user_avatar",
 })
 
 #: The one method each endpoint is exercised with, where GET is not it.
-POST_ENDPOINTS = frozenset({"preferences", "maintenance", "seen", "csp_report",
-                            "self_report_action"})
+POST_ENDPOINTS = frozenset({"preferences", "maintenance", "maintenance_preview",
+                            "seen", "silenced", "done",
+                            "csp_report", "self_report_action", "draft"})
 
 
 def endpoints():
@@ -195,9 +196,11 @@ class PermissionTests(TestCase):
                 self.assertTrue(admin.may(permission))
                 self.assertFalse(viewer.may(permission))
 
-    def test_the_acts_are_named_for_the_kinds_they_set(self):
+    def test_the_acts_are_named_for_the_kinds_they_set_and_a_note(self):
+        # a note is an act with a permission of its own (ADR-0145 decision 3), a kind
+        # of the Notes tab's form beside the pins
         from little_sister.pins import KINDS
-        self.assertEqual(identity.PERMISSIONS, KINDS)
+        self.assertEqual(identity.PERMISSIONS, KINDS | {"note"})
 
     def test_a_name_no_act_has_raises(self):
         admin = identity.Identity(name="ada", firstname="", lastname="", admin=True)

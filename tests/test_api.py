@@ -2,7 +2,7 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import ClassVar
 from unittest import TestCase, mock
@@ -14,6 +14,7 @@ from little_sister import app as app_module
 from little_sister.aggregation import ALL, RuleSet
 from little_sister.pins import SEEN
 from little_sister.reasons import Entry
+from little_sister.schedule import Schedule
 from little_sister.status import StatusCode
 from little_sister.tags import Vocabulary
 from little_sister.tree import StatusTree, events_from_payload, nodes_from_payload
@@ -610,7 +611,10 @@ class TheSpecIsTheContract(TestCase):
         configured rule on what a node passes up, on a node's entries and on a
         node's children while fewer than two fail, and a failure a person accepted —
         a node's own, bound to its failing stretch, and a line's, bound to its
-        occurrence (ADR-0142)."""
+        occurrence (ADR-0142); and a pin on an entry its node does not report now
+        (3.1.0) — and what is planned (3.1.0, ADR-0150): a node's own window set
+        ahead and an entry's series, one on an entry and one on a node not reported
+        now, and one whose holiday list cannot be had, with no window to open."""
         # the start, first: a lab whose box was red before its rule was written
         before = StatusTree()
         before.upsert("/lab/box", StatusCode.ERROR, "the fan is loud")
@@ -648,6 +652,8 @@ class TheSpecIsTheContract(TestCase):
                                   expires_at=datetime(2999, 1, 1, tzinfo=UTC))
         self.tree.set_entry_maintenance("/ci", "build", "known", set_by="ada",
                                         expires_at=datetime(2999, 1, 1, tzinfo=UTC))
+        self.tree.set_entry_maintenance("/ci", "e2e", "comes and goes", set_by="ada",
+                                        expires_at=datetime(2999, 1, 1, tzinfo=UTC))
         self.tree.upsert("/ops/disk", StatusCode.ERROR, "disk 97 % full")
         self.tree.upsert("/jobs", StatusCode.ERROR, [
             Entry("job-7", "job 7 failed", code=StatusCode.ERROR, occurrence="7/1")],
@@ -657,6 +663,21 @@ class TheSpecIsTheContract(TestCase):
         self.tree.set_acknowledgment("/jobs", "job-7", SEEN, "a flaky runner",
                                      expires_at=datetime(2999, 1, 1, tzinfo=UTC),
                                      set_by="ada")
+        tomorrow = (datetime.now(UTC) + timedelta(days=1)).replace(microsecond=0)
+        ahead = Schedule.one_off(tomorrow, tomorrow + timedelta(hours=2),
+                                 "Europe/Berlin")
+        series = Schedule.parse(
+            f"DTSTART;TZID=Europe/Berlin:{tomorrow.strftime('%Y%m%dT%H%M%S')}\n"
+            f"DURATION:PT2H\nRRULE:FREQ=DAILY;UNTIL="
+            f"{(tomorrow + timedelta(days=7)).strftime('%Y%m%dT%H%M%SZ')}")
+        self.tree.set_maintenance("/web/a", "a window set ahead", schedule=ahead,
+                                  set_by="ada")
+        self.tree.set_entry_maintenance("/stage/runners", "runner-2", "nightly",
+                                        schedule=series, set_by="ada")
+        self.tree.set_entry_maintenance("/ci", "flaky", "when it is back",
+                                        schedule=ahead, set_by="ada")
+        self.tree.set_maintenance("/gone/box", "on no list it can have",
+                                  schedule=series, not_on="DE-BY", set_by="ada")
 
     def test_the_served_envelope_and_the_spec_agree_in_both_directions(self):
         self._a_tree_that_uses_every_shape()

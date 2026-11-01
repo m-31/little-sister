@@ -181,7 +181,7 @@ What the base class gives you and expects:
   record's numbers are* below says, and how many readings the node shows, `None`
   leaving `settings.yaml`'s in force; a type passes both on). Durations accept `30s` /
   `15m` / `2h` / `1d` / `1w` or a bare number, the units lowercase. **`name:` in YAML
-  is rejected** — it was merged into `path` (ADR-0016).
+  is rejected** as a key no check takes — it was merged into `path` (ADR-0016).
 - **Take `**kwargs` and forward them**, as the sketch above does — do not spell the
   common fields out in your own `__init__`. That list **grows**: `order` joined it in
   one minor release and the two retry fields in another, and a constructor naming the
@@ -190,6 +190,22 @@ What the base class gives you and expects:
   decision 6). If yours does refuse a keyword, the loader says so with the file, the
   type and every refused keyword named, rather than raising a bare `TypeError` from
   inside itself.
+- **State the keys your file takes** — `config_keys`, handed to `super().__init__`
+  beside your gradings ([ADR-0151](adr/0151-a-type-states-the-keys-its-file-takes-and-any-other-stops-the-start.md)):
+  the top-level keys your `_extra_from_config` reads, your blocks among them, and
+  `secrets` where you call `parse_secret_refs`. Name none of the keys every check takes
+  (`COMMON_KEYS`) nor those your gradings of the check's own block are written under:
+  the library adds both, and a statement naming one is refused. Any other key a
+  deployment writes at the top of your file then stops the start as the check is built,
+  naming the file, the key and what your type takes — as does a key a `subnodes:` entry
+  or a `children:` block does not take, in any type's file. Stating is required since
+  check API epoch 4: a type that states nothing takes nothing of its own, and every key
+  it reads is refused. What your own blocks take is yours to refuse. Two
+  tests hold the statement: your shipped example, which carries every key, loaded
+  through `load_checks`, which a key you read and did not state stops; and one that
+  hands `from_config` a mapping recording every key looked up and holds your statement
+  to what your reader asked for, both ways — a key you still state after your reader
+  stopped reading it is the one case the start does not refuse.
 - **`subject` on the check, `record` on the measurement** — **the object you read, and
   what you read about it** ([ADR-0085](adr/0085-a-measure-is-read-out-of-a-record.md),
   [ADR-0086](adr/0086-a-check-measures-and-grades.md)). A run reads one object and
@@ -748,11 +764,15 @@ constructor, but it is wrong: say why.
   configuration card. Your declarations are checked when a check of your type is built,
   so a mistake in one fails your own tests; a grading's name, the keys it is written
   under and a map's words are **stored keys**, renamed only at the top of your release
-  notes. **The window is the library's**, on every check: `max_since_ok` grades how
-  long ago a subject last stood OK over what your check keeps (`series_keep`), and the
-  engine judges it after your grading and writes its line from the library's forms
-  `since_ok.last` and `since_ok.none` — nothing of yours asks for it, and neither a
-  grading nor a form of yours may take one of those names.
+  notes. **A map whose words decide which bands your type writes stays yours**, read in
+  your own code and not declared: its bands stand while empty and say what it gives
+  them, and a band carries the code its lines do not
+  ([ADR-0131](adr/0131-a-type-declares-what-it-grades-and-the-library-grades-it.md)).
+  **The window is the library's**, on every check: `max_since_ok`
+  grades how long ago a subject last stood OK over what your check keeps
+  (`series_keep`), and the engine judges it after your grading and writes its line from
+  the library's forms `since_ok.last` and `since_ok.none` — nothing of yours asks for
+  it, and neither a grading nor a form of yours may take one of those names.
 - **Reasons are Markdown**, as every text the page shows is: GitHub's tables and
   strikethrough among it, and a status in braces, `{error}`, drawn as its sign
   ([ADR-0018](adr/0018-markdown-rendering.md) decision 14). Fold untrusted text in
@@ -932,7 +952,7 @@ that declaration is what sits between the imports:
 # little_sister_example/__init__.py
 from little_sister.checks import require_api
 
-require_api(3)                       # refuses at startup on a mismatch, naming both
+require_api(4)                       # refuses at startup on a mismatch, naming both
 
 from little_sister_example import (  # noqa: E402  registers the type
     example,
@@ -945,9 +965,9 @@ __all__ = ["example"]                # or `# noqa: F401` — an unused import is
 how a package pins the one it was written against ([ADR-0051](adr/0051-what-startup-refuses.md)).
 A version **floor** in `pyproject.toml` cannot express this — a floor has no ceiling,
 so it cannot see a library that has moved *past* your epoch. The surface itself is
-pinned from the other side by an append-only snapshot,
-`tests/fixtures/check_api_v2.txt`: a name may join the surface within an epoch, but no
-name leaves it without the epoch moving. The deployment still writes
+pinned from the other side by an append-only snapshot per epoch,
+`tests/fixtures/check_api_v4.txt` today: a name may join the surface within an epoch,
+but no name leaves it without the epoch moving. The deployment still writes
 `import little_sister_example` in the same slot as any other registration; what a
 package changes is who maintains the type and on what version line, not how it
 arrives. Discovery without an import — an entry point that would let a deployment
@@ -1242,15 +1262,18 @@ else's logger, so hold it in a test against a line that library itself writes
   `<key>_warn` and `<key>_error` in the block of what it grades — each level the last
   value that passes, written with its unit (`26h`, `500 GB`, `80%`) — beside
   `<key>_reason`, its sentence, with `<key>: null` switching it off and either level
-  written taking the pair as written; a map as a mapping of words to codes, merged over
+  written taking the pair as written — and a minimum's level of 0 over a count, a size
+  or a share refused, your declared default too, since it could never fire; a map as a
+  mapping of words to codes, merged over
   your defaults word by word and matched with case and the spaces around a word folded,
   a key that names no word you declare said once in the log and graded as written, and a
   word no key names graded WARN; a set as one value or a list. Do not read those keys
   yourself: a block of yours hands the library its mapping (§3), and a type that refuses
   a key its block does not take adds `grading_block(name).keys` to the keys it takes.
   What a key cannot mean stops the start, naming the file; a spelling your type retires
-  is refused in your `_extra_from_config`, naming the key that replaces it, as the
-  library's own checks refuse `thresholds:`.
+  needs no code of its own: leave it out of `config_keys`, and a configuration that still
+  writes it stops the start as any key nothing takes does, as the library's own checks
+  refuse `thresholds:`.
 - **What a deployment says about part of an aspect is a rule list**, read by
   `little_sister.rules` (§11): do not write a parser for one.
 - **Ownership** — two checks may not own overlapping nodes; the loader rejects the

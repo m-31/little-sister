@@ -1,21 +1,30 @@
-{#- A node's notes as a page states them (ADR-0140): its Notes view, and the page of a
-    path no node stands at, which lists the notes written for it and beneath it.
+{#- A node's entries as a page states them (ADR-0140, ADR-0145 decision 6): its Notes
+    tab's history, and the page of a path no node stands at, which lists the entries
+    written for it and beneath it.
 
-    Each note says what it is on — the node, or one of its lines, as the line reads
-    now and linked to it where the run reports it; marked where it does not, since a
-    line that is not reported is suspended, not gone (ADR-0047 decision 8) — who wrote
-    it and when, who changed it last where somebody did, and whether it is the note of
-    a pin, which is changed with its pin while that stands and is kept as it was once
-    the pin ends (decision 5). Then its words, an admin's Markdown, and folded beneath
-    them what the node showed when they were written (decision 6): its status and its
-    lines — the line, for a note on one — each line on its status's tint. A note is
-    not an event and not a reading: nothing here is a status of the node now.
+    **An entry** is a note of its own or the record of a pin, an act's one entry
+    however many parts it covered (decision 5). It says its kind by its mark and its
+    word; what it was on — the node, one of its lines by its text, linked to it where
+    the run reports it and marked where it does not, since a line that is not
+    reported is suspended, not gone (ADR-0047 decision 8), or an act's parts, listed
+    in a fold, how many it had in all and where it was made where that is another
+    node; from when to when and how long; who; a seen's status and a silence's level,
+    as a block draws them; why it ended and by whom, in the log's words; its words, an
+    admin's Markdown; and folded beneath them what the node showed then (ADR-0047
+    decision 6) — its status and its lines, each line on its status's tint. A note of
+    its own says who wrote it and when, who changed it last, and keeps its *Edit*
+    while it is the newest on its node. A pin's note written before a note kept its
+    kind says what it said: the note of a pin that has ended. Nothing here is a status
+    of the node now.
 
-    `note_item` takes a `_ShownNote`; `path` is the node's, as its address writes it,
-    and empty on the page of a gone path, where nothing links to a line and nothing is
-    edited, and where `at` names the path a note was written for when it is one
-    beneath the page's own. `mine` are an admin's words a refused edit brought back,
-    in the editor `editing` names. -#}
+    `entry_item` takes a `notes_tab.Shown`; `path` is the node's, as its address
+    writes it, and empty on the page of a gone path, where nothing links to a line and
+    nothing is edited, and where `at` names the path an entry stands at when it is one
+    beneath the page's own. `mine` are the words a refused edit brought back, in the
+    editor `editing` names, with why it was refused (`refused`). In the panel the
+    drawer frames (ADR-0147 decision 3) a note's editor stays in the frame and comes
+    back to the panel's address, the tab's `back`. -#}
+{% from '_rule_block.html' import rule_mark, note_mark with context %}
 {% macro note_context(note) -%}
 {%- set context = note.context %}
 <details class="ls-note__context mt-1">
@@ -47,35 +56,121 @@
 </details>
 {%- endmacro %}
 
-{% macro note_item(shown, path, index, editing='', mine='', at='') -%}
-{%- set note = shown.note %}
-<li class="ls-note mb-3 pb-2 border-bottom" id="note-{{ index }}">
-    <p class="ls-note__said small text-muted mb-1">
-        {%- if at %}At <code>{{ at }}</code>. {% endif %}
-        {%- if note.slug %}On {% if path and shown.reported %}<a href="{{ url_for('status', branch=path | url_branch, reason=note.slug) }}#pinned-reason">a line</a>{% else %}a line{% endif %}
-        {%- if shown.line %}: {{ shown.line | markdown_inline(node=note.path) }}{% endif %}
-        {%- if not shown.reported %} <span class="ls-note__unreported">— the check does not report it now</span>{% endif %}.
-        {%- else %}On the node.{% endif %}
-        Written by <strong>{{ note.created_by or 'unknown' }}</strong> {{ note.created_at | localtime }}
-        {%- if note.set_at != note.created_at %}, last changed by <strong>{{ note.set_by or 'unknown' }}</strong> {{ note.set_at | localtime }}{% endif %}.
-        {%- if note.pin %} The note of a pin{% if shown.pin_stands %} that stands, and changed with it{% else %} that has ended{% endif %}.{% endif %}
+{#- An entry's mark: its kind's — ‖, the ringed check, the bell struck through — and
+    the note's bubble for a note of its own. -#}
+{% macro entry_mark(shown) -%}
+{%- if shown.first.pin and shown.kind -%}{{ rule_mark(shown.kind) }}{%- else -%}{{ note_mark() }}{%- endif -%}
+{%- endmacro %}
+
+{#- A part an entry is on, by its line — its text, and *its line* linked to it on its
+    node where the run reports it — or by its node. `here` is the tab's node, whose
+    own lines need no path; `path` empty is a gone path's page, which links nothing. -#}
+{% macro part_said(part, here, path) -%}
+{%- if part.slug -%}
+{%- set whose = 'its line' if part.path == here else 'a line of ' ~ part.path -%}
+{%- if path and part.reported %}<a href="{{ url_for('status', branch=part.path | url_branch, reason=part.slug) }}#pinned-reason">{{ whose }}</a>{% else %}{{ whose }}{% endif %}
+{%- if part.line %}: {{ part.line | markdown_inline(node=part.path) }}{% endif %}
+{%- if not part.reported %} <span class="ls-note__unreported">— the check does not report it now</span>{% endif %}
+{%- elif part.path == here -%}
+the node
+{%- elif path -%}
+<a href="{{ url_for('status', branch=part.path | url_branch) }}">{{ part.path }}</a>
+{%- else -%}
+{{ part.path }}
+{%- endif -%}
+{%- endmacro %}
+
+{#- What an entry was on, after its word: its one part, or how many parts of one act,
+    and where the act was made where that is another node than the tab's. -#}
+{% macro on_said(shown, path) -%}
+{%- set alone = shown.alone -%}
+{%- set parts = shown.parts | length -%}
+{%- if alone -%}
+on {{ part_said(alone, shown.here, path) }}
+{%- if shown.in_all > 1 %}, one of {{ shown.in_all }} parts of one act{% endif -%}
+{%- else -%}
+{{ parts }} {{ 'part' if parts == 1 else 'parts' }}{% if shown.in_all > parts %} of {{ shown.in_all }}{% endif %} in one act
+{%- endif -%}
+{%- if shown.made_at %}, made on {% if path %}<a href="{{ url_for('notes', path=shown.made_at | url_branch) }}">{{ shown.made_at }}</a>{% else %}{{ shown.made_at }}{% endif %}{% endif -%}
+{%- endmacro %}
+
+{#- Why a pin ended and by whom, in the log's words (ADR-0145 decision 6) — for an
+    entry planned as a window or a schedule (`planned`), an end at its end *with its
+    last window* (ADR-0150). -#}
+{% macro ended_said(ended, by, planned='') -%}
+{{ ended_word(ended, planned) or 'it ended' }}{% if by %}, by <strong>{{ by }}</strong>{% endif %}
+{%- endmacro %}
+
+{#- A seen's status, the failure a done closed and a silence's level, as a block
+    draws them (ADR-0133 decision 5): placeholders, drawn as their signs — an act's
+    part by part, each its own. -#}
+{% macro held_at(kind, note) -%}
+{%- if kind == 'seen' and note.status %} at {{ ('{' ~ note.status.name.lower() ~ '}') | markdown_inline(node=note.path) }}
+{%- elif kind == 'done' and note.status %}, closing {{ ('{' ~ note.status.name.lower() ~ '}') | markdown_inline(node=note.path) }}
+{%- elif kind == 'silenced' and note.level %}, counting as {{ ('{' ~ note.level.name.lower() ~ '}') | markdown_inline(node=note.path) }}{% if note.level.name == 'WARN' %} at most{% endif %}{% endif -%}
+{%- endmacro %}
+
+{% macro entry_item(shown, path, index, editing='', mine='', at='', refused='') -%}
+{%- set first = shown.first %}
+{%- set record = first.pin and shown.kind %}
+<li class="ls-note ls-entry" id="note-{{ index }}" data-kind="{{ shown.kind or 'pin' }}">
+    <span class="ls-entry__mark" aria-hidden="true">{{ entry_mark(shown) }}</span>
+    <div class="ls-entry__body">
+    <p class="ls-entry__head">
+        <span class="ls-entry__what">
+            {%- if at %}<span class="ls-entry__at">At <code>{{ at }}</code>.</span> {% endif -%}
+            <strong class="ls-entry__kind">{{ shown.word }}</strong> <span class="ls-entry__on">· {{ on_said(shown, path) }}</span></span>
+        <span class="ls-entry__when">{{ shown.started | localtime }}
+            {%- if record and shown.ended_at %} → {{ shown.ended_at | localtime }} · {{ shown.ran or shown.lasted }}{% endif %}</span>
     </p>
-    <div class="ls-note__text md-body">{{ note.text | markdown(node=note.path) }}</div>
-    {{ note_context(note) }}
+    <p class="ls-note__said small text-muted mb-1">
+        {%- if record -%}
+        {% if shown.planned %}Planned as a {{ shown.planned }} by{% else %}By{% endif %} <strong>{{ first.created_by or 'unknown' }}</strong>{% if shown.alone %}{{ held_at(shown.kind, first) }}{% endif %}
+        {%- if shown.ended %} · ended: {{ ended_said(shown.ended, shown.ended_by, shown.planned) }}{% elif not shown.standing %} · it has ended{% endif %}.
+        {%- if first.set_at != first.created_at %} Last changed by <strong>{{ first.set_by or 'unknown' }}</strong> {{ first.set_at | localtime }}.{% endif %}
+        {%- else -%}
+        Written by <strong>{{ first.created_by or 'unknown' }}</strong>
+        {%- if first.set_at != first.created_at %}, last changed by <strong>{{ first.set_by or 'unknown' }}</strong> {{ first.set_at | localtime }}{% endif %}.
+        {%- if first.pin %} The note of a pin that has ended.{% endif %}
+        {%- endif %}
+    </p>
+    {%- if shown.text %}
+    <div class="ls-note__text md-body">{{ shown.text | markdown(node=first.path) }}</div>
+    {%- endif %}
+    {%- if shown.alone %}
+    {{ note_context(first) }}
+    {%- else %}
+    {#- An act's parts, each by its line or its node, and when each ended where that
+        was before the act's last. -#}
+    <details class="ls-entry__parts mt-1">
+        <summary class="small text-muted">The {{ shown.parts | length }} {{ 'part' if shown.parts | length == 1 else 'parts' }}{% if shown.in_all > shown.parts | length %} here, of {{ shown.in_all }}{% endif %}</summary>
+        <ul class="ls-entry__part-list small">
+            {%- for part in shown.parts %}
+            <li>{{ part_said(part, shown.here, path) }}{{ held_at(shown.kind, part.note) }}
+                {%- if part.note.ended_at and part.note.ended_at != shown.ended_at %} — ended {{ part.note.ended_at | localtime }}: {{ ended_said(part.note.ended, part.note.ended_by) }}{% endif %}</li>
+            {%- endfor %}
+        </ul>
+    </details>
+    {%- endif %}
     {%- if path and shown.editable %}
-    <details class="ls-note__edit mt-1"{% if editing == note.key %} open{% endif %}>
+    <details class="ls-note__edit mt-1"{% if editing == first.key %} open{% endif %}>
         <summary class="small">Edit</summary>
-        <form method="post" action="{{ url_for('notes', path=path) }}" class="mt-1">
+        <form method="post" action="{{ url_for('notes', path=path) }}" class="mt-1"{{ in_frame() }}>
+            {{- panel_field(back=back) }}
+            {%- if refused and editing == first.key %}
+            <div class="alert alert-warning py-2 ls-notes__refused" role="alert">{{ refused }}</div>
+            {%- endif %}
             <input type="hidden" name="action" value="edit">
-            <input type="hidden" name="key" value="{{ note.key }}">
-            <input type="hidden" name="set_at" value="{{ note.token }}">
+            <input type="hidden" name="key" value="{{ first.key }}">
+            <input type="hidden" name="set_at" value="{{ first.token }}">
             <label class="form-label small" for="note-edit-{{ index }}">Note</label>
             <textarea class="form-control form-control-sm" id="note-edit-{{ index }}"
-                      name="text" rows="4">{{ mine if editing == note.key else note.text }}</textarea>
+                      name="text" rows="4">{{ mine if editing == first.key else first.text }}</textarea>
             <div class="form-text">Markdown is supported; raw HTML is shown as text. A note is changed while it is the newest on its node.</div>
             <button class="btn btn-sm btn-primary mt-2" type="submit">Save changes</button>
         </form>
     </details>
     {%- endif %}
+    </div>
 </li>
 {%- endmacro %}

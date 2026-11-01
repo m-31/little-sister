@@ -44,7 +44,7 @@ class _Job(Check):
     type_name = "job"
 
     def __init__(self, *, coded: bool = False, **kwargs: Any) -> None:
-        super().__init__(subject="the job", **kwargs)
+        super().__init__(subject="the job", config_keys=("coded",), **kwargs)
         self.coded = coded
         self.code = OK
         #: The record's own time, where the test gives the run one.

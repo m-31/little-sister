@@ -8,6 +8,418 @@ contract versions **separately** — see `docs/api/openapi.yaml` `info.version`.
 
 ## [Unreleased]
 
+## [0.3.23] - 2026-11-01
+
+**Every act on the wall goes through one door, ◇, into a node's *Notes* tab in a drawer
+— ‖ and ✓ are gone from its heads and lines as buttons and stay as marks — a part that
+flaps can be silenced until a deadline, while it fails or while it reads ok, an event
+looked into and over can be closed as done, a handled part shows what it counts as one
+level up, and what a person acknowledged stands through every restart; the maintenance
+pins standing at the upgrade are dropped, to be noted before and set again after, and a
+rollback past this release can lose every pin; upgrading asks nothing else of a
+deployment or a client, unless a configuration writes a minimum that could never fire or
+a key nothing takes, or a deployment has a check type of its own — and every package
+moves to check API epoch 4 with it.** A level of 0 under a `min_…` pair over a count, a
+size or a share stops the start, naming the key: `<key>: null` is how a minimum is
+switched off; and a key a check's file writes that nothing takes — a misspelling at its
+top, a key retired before this release, or one a `subnodes:` entry or a `children:`
+block does not take — stops the start, naming the file, the key and what its place
+takes. Every check type states the keys its file takes, so the check API epoch is 4:
+install `little-sister-github` 0.1.14, `little-sister-aws` 0.1.9, `little-sister-wiz`
+0.1.6 and `little-sister-jira` 0.1.6, built for it, with this release, never one without
+the others, and read their notes for what each asks of a deployment; a check type a
+deployment writes for itself states its keys, `config_keys=`, and declares
+`require_api(4)` (*Changed*). The JSON API is 3.1.0: `handled` gains the kinds
+`silenced` and `done`, which a client shows as it shows any kind it does not know, and a
+client may leave the rest unread — a node's `entries.not_reported` and
+`nodes_not_reported`, what stands on or is planned for an entry, or a node beneath it,
+not reported now, and a maintenance item's window and sentence and a node's `planned`.
+`settings.yaml` takes `silence_default_expiry`, a week where nothing is set, and
+`handled_details`, off where nothing is set, so that the blocks of what handles a part
+leave the wall and the kiosk until a browser's *◇ details* or the setting shows them;
+`pins.json` holds the new kinds beside the others. A rule that counts how many parts
+fail counts a part marked seen or silenced as it reads, so a wall that stood amber may
+read red. Under the release before this one a restart lost every *seen* unless a pin was
+set, changed or ended after the start before it, the upgrade's restart among them, and a
+seen lost so is gone, to be set again. `notes.json` keeps what a pin's note records of
+its pin, and a note written before this release is shown as it was written. A package
+that files tickets may now do it from a node's *Notes* tab, from the words written
+there, through a slot of the form's own.
+
+### Added
+
+- **A maintenance window can be set ahead, and what is planned is seen.** *Starts*,
+  above the end on the form, says when a window opens — blank is now, and it takes what
+  the end takes, *Sat 22:00*, *3d* or a date — a duration in the end then counting from
+  it, and a window set on the page ends within a year of being set. Until it opens it
+  holds nothing and is listed apart, under *Planned*: on *Handled*, the soonest first,
+  with a count of its own that says what it counts — *1 window and 1 schedule on 2
+  nodes*, a schedule listed by its next window — beneath the blocks on a node's page, a
+  door to its block, and
+  on the node's *Notes* tab beneath what stands — counted on no ◇ and shown nowhere on
+  the wall. Its block, without the blue, says it in one sentence and when it starts,
+  *Once, from 2026-11-07 22:00:00 until 2026-11-08 06:00:00 · starts in 6d*, and a set
+  that plans a window keeps the drawer open on it. A series says its rule in the same
+  sentence wherever it is listed, and its window open its own end. The Events page names
+  a window's opening and its close, *window opened* and *window closed* — a row of a
+  branch's pin or window saying *nothing of its own* for its status, where it reads
+  nothing itself, which the *undefined* switch still finds — and History and the Copy
+  document say them too. The JSON API 3.1.0 gives a maintenance item in `handled` its window open,
+  `starts_at` and `expires_at`, its schedule's `until` and the page's `sentence`, and a
+  node `planned`, what is planned for it and its entries, with `why` where its holiday
+  list keeps a window shut
+  ([ADR-0150](docs/adr/0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md)).
+- **A series of maintenance windows is set and changed on the page.** *Repeats*, on the
+  form after *Starts*, sets one every so many days, weeks on the days ticked — *weekend*
+  and *working week* one click each — or months on a day or a weekday, and opens the
+  rest in place: *Until*, its last date, at most a year away; *Not on*, a holiday list by
+  its name, disabled with why where the list cannot be read; *Times in*, its zone; and
+  *Add an interval*, a window of its own beside the rule's. With a repeat the end field
+  is *Length*, `8h` exact or `1d` whole days, and beneath the fields the next five
+  windows and the sentence say what it sets — the first window on the first day on or
+  after *Starts* that the rule picks, a night the clocks change marked with how long its
+  window lasts — following the fields with script, and asked with *Preview* without. A
+  window set where a schedule stands joins it, unless *this replaces it* is chosen. A
+  series' window open is two rows: the window, with *Extend* — 30 minutes or 1, 2 or 4
+  hours from its end, or until a time, never shorter — and *End now*, which on the last
+  window ends the schedule; and the schedule, its sentence and *· next …*, with *Edit*,
+  which leaves the window open as it is, and *Clear*, which asks. An *Extend* or *End
+  now* that arrives after its window closed is refused, offering *Set maintenance*. The
+  instance's new *Holidays* node says which holiday list stops how many schedules: one
+  that cannot be read, from the start, and one not complete for the coming year, from 1
+  December. The Copy document says a series' schedule beside its window. A schedule's
+  `DURATION` in `pins.json` is written `PnD`, days that follow the calendar, or
+  `PTnHnMnS`, real time, and an entry's `changed` keeps its windows extended and ended
+  ([ADR-0150](docs/adr/0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md)).
+- **A series is planned on its month.** Beneath the editor's fields its month says each
+  day's hours — on a phone a bar across the day — paged by month and by year as far as a
+  year on, a night the clocks change marked, a day the holiday list names by its name
+  and a date left out with its time struck. A click on a day leaves its window out or
+  puts it back, adds back the window a holiday leaves out, or gives a day without one a
+  window at the schedule's time and of its length, each listed beneath with its ×,
+  nothing set until *Set maintenance*. A schedule's *Edit* brings its month as it opens,
+  and *Preview* without script, so that *Handled* does not grow by a month with every
+  schedule. Without script every day is a button; with it the month is one stop that
+  the arrow keys move across, Page Up and Page Down a month and with Shift a year
+  ([ADR-0150](docs/adr/0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md)).
+- **A type states the keys its file takes, `config_keys`**
+  ([ADR-0151](docs/adr/0151-a-type-states-the-keys-its-file-takes-and-any-other-stops-the-start.md)).
+  `Check.__init__` takes the top-level keys a type reads, its blocks among them, beside
+  its gradings; the library adds the keys every check takes and those the check's own
+  gradings are written under, and refuses a statement that names either. A type that
+  states nothing takes nothing of its own. This library's nine types state theirs.
+- **A deployment's holidays have a file of their own**, `config/holidays.yaml`: the days
+  nobody works as named lists — a region's public holidays, a company's own days off —
+  each keyed by a name its reader keeps, an ISO 3166-2 code by convention, with a `name`
+  that reads after *not on*, the years it is `complete` for, stated rather than
+  inferred, and its `dates`, each day with its name; `default` names the list an editor
+  offers first. Every root's file is read, a list named in two of them the later root's,
+  whole. A mistake in a list leaves that list unreadable, and one outside the lists the
+  file and every list in it, each named on `/little-sister` at the start; nothing stops
+  the monitor. Maintenance that leaves a list's days out reads them, *Not on* on its
+  form. The shipped `config/holidays.yaml` is an example with every line commented out
+  ([ADR-0149](docs/adr/0149-a-deployments-holidays-are-named-lists-of-the-days-nobody-works.md)).
+- **A ticket is filed from the words in a node's *Notes* tab.** A package that files
+  tickets fills a slot of the tab's form, `notes.actions`: its button stands after each
+  kind's own — which stays the one Enter presses — and, for whoever may set no kind, in
+  a small form of its own, *On* and the button; it opens a draft of the words in a new
+  tab, and the line beneath it says to paste the issue's link into the words before
+  saving, where it stands with the part's other tickets. The package registers a draft
+  function beside its template, `slots.register(…, draft=…)`, which `POST
+  /draft/<path>` calls with the node, the kind, the part chosen and what it reads
+  (`slots.DraftPart`, every line written out) and the words written out, every line
+  break in them a newline, sending the tab to the http(s) address it returns and never
+  to one the request carries. Every slot is handed `notes_url()`, the absolute address
+  of a node's *Notes* tab, beside `written_out` and `details`; `/system/installed`
+  says a filler's draft function; and a submit in the drawer that opens another tab is
+  no longer taken for a write
+  ([ADR-0148](docs/adr/0148-a-ticket-is-drafted-from-a-notes-words-by-the-package-that-fills-its-slot.md)).
+- **A part that flaps can be silenced until a deadline, while it fails or while it
+  reads ok.** A node's *Notes* tab offers *Silence* beside *Seen*, on a part that fails
+  and on one that reads ok — the node's own part where it reads by itself, or any line
+  it reports — which changes nothing until the part fails: a silence keeps its part's
+  color under a bell struck through and counts it above as OK, or as a warning at most,
+  through every recovery, worsening and new failure, until its deadline — a week unless
+  `silence_default_expiry` says otherwise, thirty days at most, at least the period of
+  the slowest check it covers — or by hand. A part in maintenance, or held already,
+  takes none. A deadline moved later asks what changed, kept as a note of its
+  own on the node's *Notes* tab, as any change's sentence is. Beside a configured rule
+  the one that counts the part for less counts. The tab silences every failure at and
+  beneath its node at once, each its own; a block's editor makes a seen a silence and a
+  silence seen, while its part fails. *Handled* lists every silence under *Silenced*, ◇
+  counts them — *1 silenced* — the Events page, History and the Copy document say each
+  set, change and end, and the JSON API lists a silence in `handled` as the kind
+  `silenced` (3.1.0) ([ADR-0144](docs/adr/0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md)).
+- **A node's *Notes* tab is the place to act.** It lists what fails at and beneath the
+  node, each part linked; a line on what came before — how often the part was handled
+  and noted, the last pin that ended and why, and the links its notes carry; what
+  stands — the pins above it, its own and its lines', and on a branch what is handled
+  beneath it — each with *Edit* and *Clear*; and a form that writes a note, marks a
+  failure seen, silences a part, failing or not, or sets maintenance, whichever the
+  reader may, on the node,
+  a line, or every failure listed, its words and its part following a change of kind
+  and a refusal coming back with why and the words in it. Beside them, what came
+  before, newest first: every note and every pin that has ended, each saying what it
+  was on, from when to when, who, why it ended and by whom, its words and what the node
+  showed then, one act on many parts one entry on every tab it touched and on the
+  branch it was made from. Writing a note is an act with a permission of its own,
+  `note`, and whoever may set nothing reads the tab without the form, a filing package's
+  button aside. The Copy document
+  hands over the newest note with words, its pin said as the tab says it
+  ([ADR-0145](docs/adr/0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)).
+- **An event looked into and over can be closed as done.** On a node's *Notes* tab,
+  *Done* — between *Note* and *Seen* — closes a failing line whose failure is an event:
+  a run, a reading with an identity of its own, or what its check type names as one.
+  The line shows ok with the failure it closed beside it, *· error ·*, under the ringed
+  check in ok's green, counts as ok above — a rule that counts how many fail counting it
+  so too — and folds with the healthy lines. It holds
+  while the line reads that failure, the same or milder, a year if need be, and ends
+  when the line reads anything else — its next run, whether it fails or passes, the
+  same failure recovered or worse, or no line — so that the next failure alarms as new;
+  and by hand, never by
+  the clock. A form drawn on a run the line no longer reads closes nothing. A block's
+  editor makes a seen or a silence done, and a done seen or a silence, in one write.
+  *Handled* lists every done under *Accepted*, ◇ counts them — *1 done* — the Events
+  page, History and the Copy document say each set and end, and the JSON API lists a
+  done in `handled` as the kind `done`, with the failure it closed and its event
+  (3.1.0)
+  ([ADR-0146](docs/adr/0146-an-event-marked-done-shows-ok-until-its-line-reads-anything-else.md)).
+
+### Changed
+
+- **A key nothing takes stops the start** ([ADR-0151](docs/adr/0151-a-type-states-the-keys-its-file-takes-and-any-other-stops-the-start.md)):
+  at the top of a check's file — a misspelling such as `frequncy: 5m`, or `secrets:` on
+  a type that takes no credential — and in a `subnodes:` entry or a `children:` block,
+  where it was a line in the log. The refusal names the file, each such key and what its
+  place takes. `name`, `thresholds:` in `host-metrics`, `macos-memory` and
+  `qnap-metrics`, the `file` check's `stale_code`, and a watched process's `warn_mb` and
+  `error_mb` meet that refusal now, in place of messages of their own that worked out
+  the keys replacing them; the `file` check's `max_age` with a level is refused as the
+  pair's bare key refuses any value but `null`. A watched process's entry takes its
+  `name`, its `pattern` and its pair's keys, and refuses any other.
+- **The check API epoch is 4** ([ADR-0151](docs/adr/0151-a-type-states-the-keys-its-file-takes-and-any-other-stops-the-start.md)):
+  a type states the keys its file takes, and one written for epoch 3, which states
+  nothing, refuses at import with `require_api(3)`, naming both numbers, where every key
+  of its own would be refused at load. A package, and a check type a deployment writes
+  for itself, declares `require_api(4)` and states its keys, `config_keys=`; no name left
+  the surface.
+- **A maintenance pin is kept as its schedule, and holds while a window of it is open.**
+  `pins.json` keeps a maintenance pin's schedule as RFC 5545 text, `schedule` — its
+  start, the moment it was set unless *Starts* names a later one, in the configured
+  zone, and for the one window the page sets its end — in place of `expires_at`. The
+  tick opens and closes a window, each a row of its node, and a page asked in the
+  second after a pin's end shows it ended rather than waiting for the tick. The
+  maintenance pins standing at the upgrade are dropped as the file is read, with no
+  word, to be set again; a release before this one refuses the new file whole while it
+  holds a maintenance entry, and drops its silences and dones at its next write
+  otherwise, so keep a copy of `var/state/pins.json` taken before the upgrade where a
+  rollback may be needed
+  ([ADR-0150](docs/adr/0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md)).
+- **A page that waits says so where the wait comes from, and the stamp keeps its
+  width.** An editor open on a branch's page, or on the card a page draws at `depth=0`,
+  says *updates paused*, muted, at the top of its form while the page waits for it, as
+  the drawer says it under the node's name, and the band's *updated …* reads as it does
+  at rest: it no longer adds *— paused while editing*, whose words wrapped the band at a
+  laptop's width and moved the page, the editor just opened with it
+  ([ADR-0147](docs/adr/0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)
+  decision 4, [ADR-0104](docs/adr/0104-a-pin-is-one-block-on-what-it-silences.md)
+  decision 7).
+- **One door, ◇, in place of ‖ and ✓.** Every open head — a card's and a box's on the
+  wall, a node's page's own head and its card at `depth=0` — carries ◇, its node's door,
+  among its buttons where ‖ and the ringed check stood, for every reader: a link to the
+  node's *Notes* tab, where every kind is set and a standing pin changed. It is lit with
+  the number of parts handled at and beneath the node — the node itself, its lines and
+  every part beneath it, each once, whatever handles it — its tooltip saying how many of
+  each as a closed chip's does, *3 handled: 1 line in maintenance, 2 seen*, and plain
+  where nothing is; the kiosk shows the lit number as a mark. Under the looks whose
+  buttons show only under the pointer, `pointer`, the library's, and `pointer-name`, a
+  lit ◇ stands at the start of the head's state instead, in sight at rest and where it
+  is under the pointer, and the buttons carry none; a plain one shows with them. A card's
+  diamond, the pip, goes: its door counts what it listed, and the tab lists it. On a
+  node's page each member line has one seat at its end for whoever may set something
+  there: ◇, which opens the tab with its form on that line, where nothing handles the
+  line, and where something does the mark of what does. Every mark of what handles a
+  part — a line's, on the wall and on a node's page, and a head's beside its state —
+  opens the node's tab at its block (`?at=`), the block's editor open for whoever may
+  change it. What stood behind ‖ and ✓ goes: the page's one editor of each, cloned into
+  a box; a head's own *Set maintenance* and *Mark seen or silence*; a line's two
+  disclosures, and with them its *Write a note on this line*. The tab heads what stands
+  with the door's number, *3 handled*, and lists what is handled beneath its node in
+  every state, a branch in maintenance, idle or undefined among them, part by part
+  ([ADR-0147](docs/adr/0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)).
+- **A door opens the node's *Notes* tab in a drawer over the wall, which waits.** On the
+  wall and on a node's page ◇, a line's ◇ and a mark open the tab framed over the page —
+  at a desk a panel 480 pixels wide at the side the box clicked leaves free, on a phone
+  a sheet from the foot with the box scrolled into the strip above it — its head the
+  box's: the node's name and its state, its page, its tab and ✕. The tab stands in it
+  whole but for the site's bar, rail and band, opened at its top, at its form on the
+  line, or at the block a mark marks, the editor open and the focus in its note. The
+  wall waits while it is open, as it waits for an editor, the drawer saying
+  *updates paused* under the node's name, the box clicked lit in a light shade. A write
+  there is the tab's own: one that goes through closes the drawer and brings the wall up
+  to date at once, the focus back on the door; a refusal or a kind's conflict page stays
+  in it with why and the words. ✕, Escape and a click on the wall close it, and where
+  words were written and not sent — or a refusal gave them back — a close asks first,
+  *Discard what you wrote?*, *Keep writing* focused, as a link leaving the page does. A
+  click with a modifier, and a browser without script, keep the link to the tab; on a
+  leaf's page, which is not refreshed, a write loads the page again
+  ([ADR-0147](docs/adr/0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)).
+- **A browser's *◇ details* puts the blocks of what handles a part on the wall, and a
+  block opens the drawer at its pin.** A switch in the band beside *hide ok* and
+  *hide idle*, its tooltip *Show who handles a part, until when and why, on the wall*,
+  kept in a cookie as theirs are; `handled_details` names its default in
+  `settings.yaml`, off in the library, and its cookie and its query parameter alike, and
+  the kiosk follows the default. Off, no block stands on the wall — a pin's, an
+  acknowledgment's or a configured rule's — and none is drawn: a handled part says its
+  color and its mark, ◇ its number, a closed chip its ◇ and count, the band's pill the
+  whole. On, every block stands where it stood, one link to its node's *Notes* tab at
+  its pin — the drawer with script, the tab without — its sentence its name and a
+  chevron at its end; a configured rule's opens at its block under what stands, and a
+  pin set above opens the drawer of the node it stands on. A node's own head, its card
+  at `depth=0` and *Handled* state their blocks whole either way, and the boxes a node's
+  page draws beneath its head follow the switch. The block's speech bubble, the card it
+  opened and its pencil go: the note is read in the drawer, where the block's editor and
+  *Clear* stand
+  ([ADR-0147](docs/adr/0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)).
+- **Every pin leaves an entry on its node's *Notes* tab, and says how it ended.** A pin
+  set without words leaves a record, and a pin's note keeps its kind, a seen's status
+  and a silence's level, and its end — when, why and by whom — wherever it ends: by
+  hand, at its end, at a reading, made the other kind, at a start for one that ran out
+  while the instance was down or that no check covers. The tab's number and the notes'
+  retention count entries, an act's notes kept and retired together. A note of its own
+  keeps its *Edit* until a pin is set after it. A maintenance entry's note counts its
+  windows, each once, so that one planned as a window or a schedule says what of it ran
+  in place of how long it stood — *Planned as a schedule by pan*, *3 windows ran, 2h 10m
+  in all*, *no window opened*, ended *with its last window* — its block saying while it
+  stands how the last window closed, *· 3 windows ran, the last closed by hand, by pan*,
+  and the Copy document *set* where it said *from*; `notes.json` keeps `planned` and
+  `tally`
+  ([ADR-0145](docs/adr/0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)
+  decisions 4 to 6,
+  [ADR-0150](docs/adr/0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md)
+  decision 18).
+- **A line's maintenance pin is a row of its node for its set, its edit and its end,
+  and every maintenance end says why.** The Events page lists each, *line's pin set*,
+  *line's pin edited* — new — and *line's maintenance ended*, whatever it does to what
+  its node shows, and a maintenance pin's end chip says why after the act,
+  *maintenance ended · at its end*, as an acknowledgment's does; a row that changes
+  nothing its node shows begins no period and leaves a wait under way as it is
+  ([ADR-0145](docs/adr/0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)
+  decision 9).
+- **A handled part carries its job's mark at its top right, and a stripe in the color it
+  counts as.** A line marked seen, a line a configured rule counts otherwise and a line
+  in maintenance keep their color, their tint and their place, and carry the ringed
+  check, § or ‖ at their top right — where the ringed check and § stood before the words,
+  and a pinned line carried none — the ringed check and § in the color of what the line
+  counts as one level up, ‖ in maintenance's blue. The mark's tooltip says who, until
+  when and what the line counts as, and the mark opens its node's *Notes* tab at what it
+  marks; on a node's own page it stands in the line's seat. A node
+  whose own failure is marked seen, or whose count a rule changes, carries the mark
+  beside its head's state. Wherever a part counts as something other than it shows, a
+  stripe of that color runs down its right edge, a box's inside its border on a strip of
+  the page — and so does a node that waits before it escalates, and a node reached
+  through a failing check, which now says *· reached through vpn* beside its state
+  ([ADR-0143](docs/adr/0143-a-handled-part-carries-its-jobs-mark-and-a-rail-in-the-color-it-counts-as.md)).
+- **A rule that counts how many parts fail counts a part marked seen or silenced as it
+  reads.** With *one host of five may be down*, two hosts down read red even where one
+  of them is marked seen or silenced: the held host counted as healthy, so a second
+  failure stayed amber. The held host itself still counts as its mark holds it
+  ([ADR-0144](docs/adr/0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md) decision 3).
+- **What stands on a node not reported now is counted where it stands.** A pin or a
+  seen on a node its check no longer returns, or has not written since the start, was
+  listed on *Handled* alone and counted nowhere, its pins holding nothing until the node
+  came back. What stands there, a silence too, stands as every pin stands, whether or
+  not its node is reported
+  now: the nearest node above it that stands lists it in its *Notes* tab and counts it
+  on its door, a closed chip's ◇ and the band's pill count it, the pill's row saying
+  *not reported now*, a branch's *why* card and its Copy document say *… not reported
+  now*, and *Handled* and the page of its path list it as before. The JSON API lists it
+  beside that node's `children`, in `nodes_not_reported`: its `path`, what stands on it,
+  `handled`, and on its entries, `not_reported` (3.1.0)
+  ([ADR-0147](docs/adr/0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)
+  decision 2,
+  [ADR-0141](docs/adr/0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
+  decision 3).
+- **A minimum's level that could never fire stops the start.** A level of 0 under a
+  `min_…` pair whose unit is a count, a size or a share — none of which is ever below 0
+  — is refused where a check's configuration, a rule's keys or a type's declaration
+  writes it, naming the key and saying that `<key>: null` switches the judgment off: a
+  zero held a judgment switched off while it still looked set. A minimum of 0 over an
+  amount, which a month's credits can take below zero, or over a number, which may be
+  negative, is a level as before
+  ([ADR-0131](docs/adr/0131-a-type-declares-what-it-grades-and-the-library-grades-it.md)).
+
+### Fixed
+
+- **A level is written back as it was written.** The configuration card, a line that
+  says what a value went beyond and a refusal write a size in the unit that writes it
+  shortest — `500 GB`, `1.5 GB`, `2 TiB` — where the largest unit that divided it
+  exactly wrote `488281250 KiB`, `1500 MB`, and a size no unit divided, `1.5 kB`, as
+  `1.5 KiB`; and a count, a number or a share whole where it is and otherwise exactly,
+  never in an exponent: `1000000` and `1234567.5`, where `1e+06` and `1.23457e+06`
+  stood.
+- **What stands on a line its node does not report now is listed, counted and
+  cleared.** A finding that comes and goes keeps its pin or its silence while it is gone,
+  holding nothing until it is back, and only the node's *Notes* tab said so: *Handled*
+  left such a line's maintenance pin out, so that it had no *Clear* there and held
+  unseen until the line came back or the pin ended, and neither a closed chip's ◇ nor
+  the band's pill counted what stood on such a line. *Handled* lists the pin now under
+  *In maintenance*, after the lines the node reports, as *A line not reported now* with
+  *Edit* and *Clear*, as its *Silenced* and *Accepted* list a silence or a seen on one;
+  the door, a closed chip's ◇ and the pill count it, the pill's row for the node saying
+  it apart from the node's reasons, *1 line not reported now*; a branch's *why* card and
+  its Copy document say *a line of …, not reported now*; and the JSON API lists it in
+  the node's `entries.not_reported`, its `slug` and its `handled` (3.1.0)
+  ([ADR-0135](docs/adr/0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+  decision 8,
+  [ADR-0141](docs/adr/0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
+  decision 3).
+- **A node's Copy document says by what it shows something else.** Where a configured
+  rule on its lines, or a person's seen or silence on one of them, made a node show
+  other than its check reported, its document said *a maintenance pin is in force*. It
+  says *a maintenance pin is in force* for a pin alone now; otherwise *every line of its
+  own is in maintenance*, or *rolled up from its lines* with how many of them are in
+  maintenance, seen or silenced, and beneath it each rule that changes how one of them
+  counts, in its block's words — *§ On its lines, warn ⚠️ counts as ok ✅ while fewer
+  than 6 fail — 5 do, by the rule **a short review queue***
+  ([ADR-0135](docs/adr/0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)).
+  Every Copy document that lists a line marks one a rule changes, as the page does —
+  *§ Counts as ok ✅ by the rule **a short review queue*** beneath it — so that a rule
+  on some of a node's lines says which.
+- **An act on several lines keeps what each line showed.** A seen set on every failure
+  at and beneath a node, several lines of one node among them, kept in every line's
+  note what the last of them showed; each keeps its own now.
+- **A branch's *why* card lists what is seen beneath it.** It counted what was seen
+  beneath a branch, and listed none of it; it lists it under *Accepted* now
+  ([ADR-0135](docs/adr/0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
+  decision 7).
+- **What a person acknowledged stands through every restart.** A start wrote
+  `pins.json` before it put back what a person had marked seen, so a seen stood until
+  the next start and was gone at the one after, with no row and no line in the log. A
+  start now puts back every pin and writes the file once, after all of them
+  ([ADR-0144](docs/adr/0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md) decision 5).
+- **A reading beside a seen's end is marked seen.** Where a reading ended a line's seen
+  — its failure worse, or recovered — the check's own change, a row beside the end's on
+  the Events page, was marked *maintenance*, though nothing was in maintenance. It is
+  marked *seen*, the kind that kept the reading from its node until then.
+- **An act on every failure at and beneath a node, refused for its words, keeps the
+  failures it listed.** A refusal for its end — one too far away, one that could not be
+  read — gave back a form for the node's own failure alone, so that sending it again
+  marked nothing beneath.
+- **A configured default that a blank field does not run for is said at start.**
+  `maintenance_default_expiry` that reads as no duration, or lies past its bound, ran a
+  week in silence; the log now names it once at start, as it names such a
+  `silence_default_expiry`, and a silence's form names the week it runs for.
+- **A click near the wall's end leaves the window where it stood.** Closing a node,
+  folding its children or its healthy ones, or folding its lines back with *⌃ less*,
+  where the window stood within what that freed at the page's end, let the browser pull
+  the window up: the node clicked landed lower — 59 pixels at a desk, 205 on a phone —
+  and another stood under the pointer or the finger. The page's foot now keeps what the
+  window still needs as room, which gives way as the window scrolls up through it and
+  stands through the refresh; *Close all* and *Open all* keep the browser's way
+  ([ADR-0127](docs/adr/0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md)
+  decision 10).
+
 ## [0.3.22] - 2026-10-25
 
 **A level no file speaks for starts open now, and as chips once it is big, and the JSON

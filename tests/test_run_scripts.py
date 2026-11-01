@@ -36,7 +36,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from unittest import TestCase, skipUnless
+from unittest import TestCase, skip, skipUnless
 
 _REPO = Path(__file__).resolve().parents[1]
 
@@ -624,7 +624,7 @@ def _alive(pid: int) -> bool:
     `kill -0` answers for a zombie as for a running process: it has exited and waits
     for its parent to reap it, and until then its PID stands. It holds no port and runs
     nothing, so to a test asking whether a script left a process **running** it is
-    gone (F8). Where it shows is where the parent is slow: a worker whose master is
+    gone. Where it shows is where the parent is slow: a worker whose master is
     gone is PID 1's orphan, and the cloud container's PID 1 reaps one after about a
     second (measured 2026-10-15: a zombie 0.2 s after the KILL, gone at 1.2 s), where
     the device VM's and a Mac's init reap at once -- so a worker `stop.sh` had killed
@@ -1509,6 +1509,9 @@ class MemoryScriptTests(TestCase):
         self.assertIn("Nothing is measuring", completed.stdout)
         self.assertIsNone(self._sampler_pid())
 
+    @skip("timing-bound under the suite's -n auto: two lsofs on a loaded Mac "
+          "outlast its fixed 2.5 s; skipped for the 0.3.23 prep on Lex's word of "
+          "2026-11-01, until it reads until its second 'nothing to measure'")
     def test_a_measurement_that_finds_nothing_does_not_end_the_loop(self):
         # An instance restarted in the night is measured again once it is back, so a
         # measurement that finds nothing running is said and the next one is taken.

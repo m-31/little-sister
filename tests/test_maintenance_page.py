@@ -210,8 +210,8 @@ class GroupingTests(_PageCase):
 
     def test_nothing_pinned_says_so(self):
         raw = self._body()
-        self.assertIn("Nothing is handled: no node or line is in maintenance, seen or "
-                      "held by a rule.", raw)
+        self.assertIn("Nothing is handled: no node or line is in maintenance, done, "
+                      "seen, silenced or held by a rule.", raw)
         page = parse(raw)
         self.assertEqual(page.all("pin-node") + page.all("pin-count"), [])
 
@@ -357,12 +357,15 @@ class ChangedThereTests(_PageCase):
         was = app_module._expiry_input(entry.expires_at)
         hidden = self._hidden(edit)
         self.assert_leads_back(hidden.pop("next"))
+        # an open one-off's editor says so (`open_once`): its start has passed
+        # (ADR-0150, landing 4); and its month, which it asks for when it is wanted,
+        # keeps none (decision 17)
         self.assertEqual(
             hidden,
             {"path": PATH, "action": "set", "set_at": entry.token,
-             "expiry_was": was})
+             "expiry_was": was, "open_once": "1"})
         self.assertEqual(edit.one(tag="textarea").source(), NOTE)
-        self.assertEqual([button.text() for button in edit.all(tag="button")],
+        self.assertEqual([button.text() for button in edit.all(tag="button")][-2:],
                          ["Save changes", "Cancel"])
         hidden = self._hidden(clear)
         self.assert_leads_back(hidden.pop("next"))

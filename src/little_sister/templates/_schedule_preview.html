@@ -1,0 +1,125 @@
+{#- What a maintenance editor says beneath its fields (ADR-0150, landing 4; #35's note,
+    decision 4): the windows added by hand, each with ×, and the starts a file added or
+    left out, carried through; then the next windows of what it would set — five, a
+    clock-change night's marked with how long it really lasts, the first being the first
+    day on or after *Starts* that its rule picks — and the entry's sentence, the last
+    thing read before *Set maintenance*; or why it cannot be set as it stands.
+
+    One macro, so that the part beneath the fields is the same rendering with script and
+    without: without, *Preview* asks the server for the whole editor back; with, the
+    script asks `maintenance_preview` for this part alone and puts it in place
+    (`standalone`). Every × is a button of the form, which without script sends the
+    editor back with the window gone and with script takes it away in place.
+
+    **The month comes first** (landing 5; #35's note, decision 4), and what a click on
+    one of its days adds or leaves out is listed beneath it with ×. The month is a part
+    of its own, `ls-schedule-month`, and the rest another, `ls-schedule-said`, which
+    alone is a live region: with script each is put in place on its own, so that a
+    screen reader is told what the fields would set as they change, not every day of
+    the month again.
+
+    **A standing entry's editor comes without its month** (ADR-0150 decision 17), its
+    part drawn empty and marked `data-ls-ask`: a page lists an editor for every entry
+    that stands, and the month is most of each one's weight. *Preview* draws it without
+    script, and with script the editor asks for it as its *Edit* opens and puts it in
+    place alone, the live region left as it stands. -#}
+{#- The editor's month (ADR-0150, landing 5): its name between its paging — the year
+    and the month before, the month and the year after — and its six weeks, Monday
+    first, each day of it a button of the form whose name says its date, its hours, what
+    the text and the holiday list say of it and what a click does; a day of the month
+    before or after it stands for where it is, drawn and not read, and nothing is done
+    with it. Without script every day and every page is a button that sends the editor
+    back with it done; with script the grid is one tab stop that the arrow keys move
+    across, as a date picker is, and a day or a page is done in place
+    (`maintenance-edit.js`), which names it a grid then. A day shows its hours — each
+    window that starts on it, from and to — and on a phone instead its span as a bar,
+    the hours of it any window covers; the time of a window it leaves out struck; a
+    night the clocks change its note. The month the form keeps is its own field,
+    `month`, carried across its round trips once somebody pages it or clicks a day of
+    it; until then the month is the first window's. -#}
+{% macro day_face(day) -%}
+<span class="ls-cal__date" aria-hidden="true">{{ day.day.day }}</span>
+{%- for begin, end in day.hours %}<span class="ls-cal__hours" aria-hidden="true">{{ begin }}<br>{{ end }}</span>{% endfor %}
+{%- if day.struck %}<span class="ls-cal__hours ls-cal__struck" aria-hidden="true">{{ day.struck }}</span>{% endif %}
+{%- if day.bars %}<span class="ls-cal__bar" aria-hidden="true">{% for bar in day.bars %}<span style="left: {{ '%.2f' % (bar.start * 100) }}%; width: {{ '%.2f' % ((bar.end - bar.start) * 100) }}%"></span>{% endfor %}</span>{% endif %}
+{%- if day.note %}<span class="ls-cal__note" aria-hidden="true">{{ day.note }}</span>{% endif %}
+{%- endmacro %}
+{% macro month_grid(month, prefix) -%}
+<div class="ls-cal" data-month="{{ month.value }}">
+    <input type="hidden" name="month" value="{{ month.kept }}">
+    <div class="ls-cal__head">
+        {%- for direction, value, words in month.pages %}
+        {%- if loop.index == 3 %}
+        <span class="ls-cal__title" id="{{ prefix }}-month">{{ month.title }}</span>
+        {%- endif %}
+        <button class="ls-cal__page" type="submit" name="page" value="{{ value }}" data-page="{{ direction }}" data-ls-nowrite aria-label="{{ words }}"{% if not value %} disabled{% endif %}>{{ {'year-before': '«', 'month-before': '‹', 'month-after': '›', 'year-after': '»'}[direction] }}</button>
+        {%- endfor %}
+    </div>
+    <div class="table-responsive position-relative">
+    <table class="ls-cal__grid" aria-labelledby="{{ prefix }}-month">
+        <thead><tr>
+            {%- for short, long in (('Mo', 'Monday'), ('Tu', 'Tuesday'), ('We', 'Wednesday'), ('Th', 'Thursday'), ('Fr', 'Friday'), ('Sa', 'Saturday'), ('Su', 'Sunday')) %}
+            <th scope="col" abbr="{{ long }}">{{ short }}</th>
+            {%- endfor %}
+        </tr></thead>
+        <tbody>
+        {%- for week in month.weeks %}
+        <tr>
+            {%- for day in week %}
+            {%- set marks %}{% for mark in day.marks %} is-{{ mark }}{% endfor %}{% endset %}
+            <td>
+            {%- if 'other-month' in day.marks %}<span class="ls-cal__day{{ marks }}" aria-hidden="true">{{ day_face(day) }}</span>
+            {%- else %}<button class="ls-cal__day{{ marks }}" type="submit" name="day" value="{{ day.day.isoformat() }}" data-ls-nowrite aria-label="{{ day.label }}" title="{{ day.label }}"{% if 'today' in day.marks %} aria-current="date"{% endif %}{% if not day.act %} aria-disabled="true"{% endif %}{% if day.day.isoformat() == month.focus %} data-focus{% endif %}>{{ day_face(day) }}</button>
+            {%- endif %}</td>
+            {%- endfor %}
+        </tr>
+        {%- endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+{%- endmacro %}
+{% macro schedule_preview(view, prefix) -%}
+<div class="ls-schedule-month"{% if view.preview and view.preview.ask_month %} data-ls-ask{% endif %}>
+{%- if view.preview and view.preview.month %}
+{{ month_grid(view.preview.month, prefix) }}
+{%- endif %}
+</div>
+<div class="ls-schedule-said" aria-live="polite">
+{%- if view.added or view.extra or view.left_out %}
+<ul class="ls-handmade list-unstyled mb-2">
+    {%- for item in view.added %}
+    <li class="ls-handmade__item"><input type="hidden" name="added" value="{{ item.value }}">A window {{ item.words | whole_words }} <button class="ls-handmade__drop" type="submit" name="drop" value="added:{{ loop.index0 }}" data-ls-nowrite aria-label="take out the window {{ item.words }}">&times;</button></li>
+    {%- endfor %}
+    {%- for item in view.extra %}
+    <li class="ls-handmade__item"><input type="hidden" name="extra" value="{{ item.value }}">A window from {{ item.words | whole_words }} <button class="ls-handmade__drop" type="submit" name="drop" value="extra:{{ loop.index0 }}" data-ls-nowrite aria-label="take out the window from {{ item.words }}">&times;</button></li>
+    {%- endfor %}
+    {%- for item in view.left_out %}
+    <li class="ls-handmade__item"><input type="hidden" name="left_out" value="{{ item.value }}">Left out: the window from {{ item.words | whole_words }} <button class="ls-handmade__drop" type="submit" name="drop" value="left_out:{{ loop.index0 }}" data-ls-nowrite aria-label="put back the window from {{ item.words }}">&times;</button></li>
+    {%- endfor %}
+</ul>
+{%- endif %}
+{%- set said = view.preview %}
+{%- if said %}
+{%- if said.problem %}
+<p class="ls-schedule-problem" role="status">{{ said.problem }}</p>
+{%- else %}
+<p class="ls-schedule-next__label" id="{{ prefix }}-next">Its next windows</p>
+{%- if said.windows %}
+<ol class="ls-schedule-next" aria-labelledby="{{ prefix }}-next">
+    {%- for window in said.windows %}
+    <li>{% if window.open %}<strong>open now</strong> · {% endif %}{{ window.start | whole_words }} until {{ window.end | whole_words }}{% if window.clock %} <span class="ls-schedule-next__clock">· {{ window.clock }}</span>{% endif %}</li>
+    {%- endfor %}
+    {%- if said.more %}
+    <li class="ls-schedule-next__more">and more</li>
+    {%- endif %}
+</ol>
+{%- else %}
+<p class="ls-schedule-next__none">None is to come.</p>
+{%- endif %}
+<p class="ls-schedule-sentence">{{ said.sentence }}</p>
+{%- endif %}
+{%- endif %}
+</div>
+{%- endmacro %}
+{%- if standalone | default(false) %}{{ schedule_preview(view, prefix) }}{% endif %}

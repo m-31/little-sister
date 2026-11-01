@@ -1,0 +1,9 @@
+{#- The suite's filler of a node's *Notes* tab (ADR-0148): one button in the row of
+    each kind's form, after the kind's own, and in the small form a reader who may set
+    no kind is given. It submits that form — the part chosen under *On*, and the words
+    where there are any — to the library's route in a new tab, naming this package, so
+    that the route calls the draft function it registered beside this template. The
+    library styles `.notes-action`; nothing here builds an address. -#}
+<button type="submit" class="notes-action" name="draft" value="tests.demo_extension"
+        formaction="{{ draft_action }}" formmethod="post" formtarget="_blank"
+        formnovalidate title="Draft an issue from this, in a new tab">File in the tracker ↗</button>

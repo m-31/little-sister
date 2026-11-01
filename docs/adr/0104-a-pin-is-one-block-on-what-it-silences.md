@@ -1,7 +1,7 @@
 # ADR-0104 — A pin is one block on what it holds, and it is edited there
 
 - **Status:** Accepted
-- **Date:** 2026-10-25 (accepted 2026-10-03)
+- **Date:** 2026-11-01 (accepted 2026-10-03)
 - **Related:** [ADR-0014](0014-maintenance-persistence.md) (the pin, its expiry, its
   compare-and-set token and its editor — decisions 6, 7, 9, 13 and 16 to 18, which
   this amends), [ADR-0036](0036-addressable-reasons.md) (a pin on one line, and how
@@ -31,7 +31,15 @@
   [ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md) (a
   second kind's block, and the ringed check that sets it),
   [ADR-0140](0140-a-nodes-notes-stand-on-a-tab-of-their-own.md) (decision 3: a line's
-  note, written from its editor)
+  note, written from its editor),
+  [ADR-0144](0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md)
+  (*silenced*, the block in a third kind's words — amended),
+  [ADR-0146](0146-an-event-marked-done-shows-ok-until-its-line-reads-anything-else.md)
+  (*done*, the block in a fourth kind's words — amended),
+  [ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md) (the door, ◇, and the drawer it opens over the wall, where a pin is set and changed — decisions 1, 3, 4 and 7 amended),
+  [ADR-0150](0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md)
+  (a maintenance entry as its schedule: a planned one's block, its editor's fields, and
+  a series' window open in two rows)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -60,20 +68,21 @@ page: *Status: error* and *Set maintenance*, on a node that would not alarm.
 ### 1. One block states a pin, wherever a pin shows
 
 Who pinned it, until when and how long is left, and its note; for an admin, *Edit* and
-*Clear*. The same block stands on a node's page, under a line, on *Handled* and in a box
-on the wall. Where a node is stated on its own — a node's page, for the node and its
-lines, and *Handled* — the block is stated whole: its note in full, *Edit* and *Clear*
-in words. On the wall it is lighter
-([ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
-decisions 3 and 4): its mark and its sentence — who, until when and what is left — and
-its note behind a mark of its own, a speech bubble that opens it in a card in the
-inspection card's look; for an admin *Edit* is a pencil, and *Clear* stands in the
-editor, in words beside *Save changes* and *Cancel*. The expiry reads one way in all of
-them, the instant and what is left: *until 2026-10-03 20:44:28 · 1d 23h left*. Where the
-sentence wraps, as it does in a narrow card, no line ends inside a word of an instant:
-the date and the time of day each stay whole. A viewer sees the block without its
-buttons, and, where a node is stated on its own, with the note whole, which the strip
-cut off.
+*Clear*. The same block stands on a node's page, under a line, on *Handled*, on a node's
+*Notes* tab and in a box on the wall. Where a node is stated on its own — a node's page,
+for the node and its lines, its *Notes* tab and *Handled* — the block is stated whole:
+its note in full, *Edit* and *Clear* in words. On the wall it is lighter, and stands
+only while a browser's *◇ details* is on
+([ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)
+decisions 6 and 7): its mark and its sentence — who, until when and what is left — as
+one link, its sentence its name, which opens its node's *Notes* tab in the drawer over
+the wall at that pin, where its note is read and its editor stands open for whoever may
+change it; the block carries no note mark and no pencil. The expiry reads one way in
+all of them, the instant and what is left: *until 2026-10-03 20:44:28 · 1d 23h left*.
+Where the sentence wraps, as it does in a narrow card, no line ends inside a word of an
+instant: the date and the time of day each stay whole. A viewer sees the block without
+its buttons, and, where a node is stated on its own, with the note whole, which the
+strip cut off.
 
 ### 2. Where the block stands says what it covers
 
@@ -102,37 +111,26 @@ editors that set either say that it is for the day the pin above ends. A pin on 
 ([ADR-0124](0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md))
 and is stated on its own node's page only.
 
-### 3. A pin is set where its block will stand
+### 3. A new pin is set on its node's *Notes* tab, which one door opens
 
-A node's control is an admin's pause mark, ‖, in the icon row of its head. A line's is
-a pause mark at the line's end, in the rail it shares with the line's other actions.
-Each opens its editor where the block will stand, and the editor's first sentence says
-what it covers: *this node, all 6 lines and any that appear*, or *this line only, the
-other 5 keep alarming*. A line's editor offers beneath the pin it sets *Write a note on
-this line*: the node's Notes view, the line chosen
-([ADR-0140](0140-a-nodes-notes-stand-on-a-tab-of-their-own.md) decision 3).
+One door, ◇, stands among the own buttons of every open head — a card's and a box's on
+the wall, and the head of a node's page — and, on a node's page, in each line's one
+seat at its end
+([ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)
+decision 1). It opens the node's *Notes* tab — on the wall in a drawer, the wall waiting
+beneath it — and a new pin is set on the tab's form, maintenance one of its kinds, the
+form's *On* saying what the pin will cover: the node and everything beneath it, or one
+line. Without script ◇ is a link to the tab. The head's own *Set maintenance*, the
+page's one editor cloned into a box and a line's pause mark go, and with the line's its
+*Write a note on this line*; no fragment carries an editor. The overview's own card
+sets no pin, because putting everything in maintenance is not done from a form; a pin
+that stands there is stated and changed like any other. The card at the foot of a
+node's page goes.
 
-On the wall the mark stands, always shown, on every open head of a node with no pin of
-its own — a card's and a box's — and opens the editor in that box: *Maintenance for
-hemulen and everything beneath it*, said of the tree as it is and not of what a filter
-left on the page. The editor is the page's one, kept outside the grid the refresh swaps
-and cloned into the box that asks for it, so no fragment carries an editor, and an
-open one holds the refresh (decision 7); without script the mark is a link to the
-node's page. On a node's page the mark stands in the frame head's row and opens the
-editor the head keeps beneath it, whose own *Set maintenance* sets the pin where there
-is no script; that head is drawn on every node's page and for every reader. A pinned
-node has no mark, its block standing, and a closed one carries no control. The
-overview's own card sets no pin, because putting everything in maintenance is not done
-from a form; a pin that stands there is stated and changed like any other. The card at
-the foot of a node's page goes.
-
-*Seen*'s control is the ringed check
+An acknowledgment is a pin too, set on the same form under its own kind
 ([ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md) decision
-5), which stands where something fails now: after ‖ as the last of a head's icons, and
-just before a line's ‖ in its rail, so that ‖ keeps the line's end. It opens its editor
-where the block will stand, as ‖ does — on the wall the page's one editor of its kind,
-cloned into the box; on a node's page the editor the head keeps, which lists every
-failure it will mark.
+5), and the ringed check is a seen's mark, which opens the drawer at it (ADR-0147
+decision 7).
 
 A node's row on the wall and a page's head also answer to the inspection card
 (ADR-0019), and a pin's own controls in them are not that card's to answer: the mark,
@@ -142,18 +140,21 @@ on the row, and the row's card would stand over the one above while the note is 
 
 ### 4. Edit opens the block where it stands
 
-*Edit* turns the note into its Markdown source in a field, with the expiry, *Save
-changes* and *Cancel*; who pinned it and when stands at the top of the editor. A line's
-editor opens beneath its line, where it floated over the lines. The disclosure is the
-browser's own, so every editor works without script, and pinned stays a read state
-(ADR-0014 decision 16). Where script runs, the editor opens in its note, at the note's
-end.
+A pin is changed where its block stands: on a node's page and on *Handled*, its *Edit*
+and *Clear* in words, and from the wall in the drawer, opened at its block with its
+editor open (ADR-0147 decision 3). *Edit* turns the note into its Markdown source in a
+field, with the expiry, *Save changes* and *Cancel*; who pinned it and when stands at
+the top of the editor. A line's editor opens beneath its line, where it floated over the
+lines. The disclosure is the browser's own, so every editor works without script, and
+pinned stays a read state (ADR-0014 decision 16). Where script runs, the editor opens in
+its note, at the note's end.
 
 A pin's writes go to `POST /pins/maintenance`, asking the permission `maintenance`
 ([ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
-decision 4), and a write comes back to where its block stands. From a node's own page
-that is the top of the page for the node's pin, and for a line's the line itself: its
-set, its edit and its clear return to the address that names a line,
+decision 4), and a write comes back to where its block stands; one made in the drawer
+closes it and brings the wall up to date at once (ADR-0147 decision 3). From a node's
+own page that is the top of the page for the node's pin, and for a line's the line
+itself: its edit and its clear return to the address that names a line,
 `?reason=<slug>#pinned-reason` (ADR-0036 decision 12), because on a node of 150 lines
 the top of the page is a long way from the line that was just pinned.
 
@@ -166,7 +167,12 @@ floor a typed expiry is held to (ADR-0014 decision 13) and the hour a clock chan
 repeats cannot refuse an edit that left the window alone. A field emptied means the
 configured default from now, as on a new pin. Where script runs, the field's text is
 selected when the field takes focus while it is untouched, so one keystroke replaces
-it. This holds for every editor of a pin: a node's, a line's and a box's.
+it. A maintenance entry's editor fills every field of its schedule the same way —
+*Starts* above the end, a series' repeat, *Until*, *Not on* and its zone — and keeps
+each exactly while it still reads what it was filled with
+([ADR-0150](0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md)
+decisions 11 and 13). This holds for every editor of a pin, a node's and a line's,
+wherever it opens.
 
 A save that changes neither the note nor the expiry writes nothing. The pin keeps its
 token and its authors: nobody is recorded as having changed it, and another editor of
@@ -197,21 +203,29 @@ neither makes a node.
 
 ### 7. A page that refreshes itself waits for an open editor
 
-On the wall and on a node's page the editor opens in the box or in the head, and the
-ten-second refresh skips while one is open: nothing is asked for, and an answer that
-was on its way is dropped. The stamp says *paused while editing* at once, and after a
-minute the page dims as one that lost its server does, all of it but the box or the
-head being edited, so a wall left with an editor open never reads as live.
+On a node's page an editor opens where its block stands, and on the wall a pin is
+changed in the drawer over it (decision 4); the ten-second refresh skips while an editor
+or the drawer is open
+([ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)
+decision 4): nothing is asked for, and an answer that was on its way is dropped. The
+stamp keeps saying *updated …* as at rest, and keeps its width; what holds the page
+says *updates paused*, muted, in its own head while the page waits for it — an editor
+at the top of its form, the drawer under the node's name — so the pause is said where
+its cause is. After a minute the page dims as one that lost its server does, all of it
+but what is being edited, so a wall left with an editor open never reads as live.
 
-When the editor closes, the stamp drops the words and the next refresh, at most ten
+When the editor closes, *updates paused* goes with it and the next refresh, at most ten
 seconds on, brings the page up to date; a page that had dimmed is refreshed at once.
 A close does not refresh the page by itself: a refresh takes the keyboard's focus with
-it, and Cancel has just put that back on what opened the editor.
+it, and Cancel has just put that back on what opened the editor. A write that goes
+through in the drawer brings the wall up to date at once as the drawer closes.
 
-On the wall a block's pencil shows on hover or keyboard focus — always on a touch
-screen — and *Clear* stands in its editor (ADR-0135 decision 4); the head of a node's
-page shows *Edit* and *Clear* always, in words. A write from either comes back to the
-page as it was asked for, with its filters and its depth. The pin dialog goes.
+On the wall a block carries no pencil: it is the link that opens the drawer at it,
+where its editor and *Clear* stand (decision 1); the head of a node's page shows *Edit*
+and *Clear* always, in words. A write from a node's page comes back to the page as it
+was asked for, with its filters and its depth, and one from the drawer leaves the wall
+beneath where it was — its scroll, its open nodes and the box clicked (ADR-0147
+decision 3). The pin dialog goes.
 
 ### 8. The block is a rule's, and maintenance is its first kind
 
@@ -229,7 +243,20 @@ the pin's *note* (ADR-0047 decision 1), which a check's reason lines are not.
 *Seen*, a failure a person accepted as it stands, is a second kind of pin (ADR-0142
 decision 6): the same block in its kind's words — *This node is marked seen by …*,
 *Marked seen by …* — under the ringed check, with no fill, its *Edit* and *Clear*
-posting to `POST /pins/seen`. A rule the configuration declares has its block too
+posting to `POST /pins/seen`. *Silenced*, a failure that flaps, held until a deadline,
+is a third
+([ADR-0144](0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md)
+decision 9): *This node is silenced by ada, counting as* {ok} *until …*, its record
+*Silenced by ada*, under a bell struck through. *Done*, an event looked into and over,
+is a fourth, on a line alone
+([ADR-0146](0146-an-event-marked-done-shows-ok-until-its-line-reads-anything-else.md)
+decision 7): *This line is marked done by ada, closing* {error} *· until it reads
+anything else*, its record *Marked done by ada*, under the ringed check. An
+acknowledgment's *Edit* opens its block's editor with its kind chosen beside the others
+its part takes — *Seen* where its part fails now, *Silence*, and *Done* wherever its
+part takes one, a done's offering *Seen* and *Silence* — and saving another kind makes
+the part that kind in one write (ADR-0144 decision 7, ADR-0146 decision 3). A rule the
+configuration declares has its block too
 ([ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md) decision
 10): its mark, §; its sentence — what it makes of its part, where, while fewer than its
 count fail and how many do, by which rule; and, where it is stated whole, its note and
@@ -239,6 +266,20 @@ it changes a count, its note behind the note mark; at the head of a node's frame
 *Handled* it stands always, *changes nothing now* beside it where it does not act. What
 a block states, the envelope lists: a pin is an item of its part's `handled`, beside
 every configured rule its part's block states (ADR-0141 decision 3).
+
+### 9. A maintenance entry's block says what holds now and what is planned
+
+A maintenance entry is its schedule — one window, set ahead or now, or a series
+([ADR-0150](0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md))
+— and its block says it so. A pin that holds says its window open's end in decision 1's
+*until … · … left*. A series' window open is two rows: the window, with *Extend* and
+*End now*, and its schedule, with *Edit* and *Clear*, each the browser's own disclosure
+whose name says how far it reaches (ADR-0150 decision 15). An entry planned — a window
+set ahead, or a series between two of its windows — holds nothing, and is a block of its
+own under *Planned*, drawn without maintenance's tint: its sentence and when it starts,
+and its *Edit* this record's editor with every field of its schedule filled (decision 5;
+ADR-0150 decisions 9, 11 and 13). A one-off's *Clear* asks nothing, and a series' asks
+first, in the browser's own disclosure, *Clear the schedule* and *Keep it*.
 
 ## Consequences
 
@@ -252,11 +293,11 @@ every configured rule its part's block states (ADR-0141 decision 3).
   an editor of a pin is open in what it would swap.
 - **Three editors become one.** The card at the foot of a node's page, the panel over a
   line and the wall's dialog give way to the block's editor.
-- **A wall with an editor open does not refresh**, which is why decision 7 makes the
-  pause loud rather than quiet.
+- **A wall with an editor or the drawer open does not refresh**, which is why decision
+  7 says the pause where its cause is and dims a page held for a minute.
 - **A pin's write keeps its fields**: `POST /pins/maintenance` takes those
-  `POST /maintenance` took, and the form adds the one that says what the expiry field
-  was filled with.
+  `POST /maintenance` took, with a schedule's beside them (ADR-0150 decision 13), and
+  the form adds the one that says what the expiry field was filled with.
 - **A refused write keeps the rule.** A form whose pin somebody changed meanwhile, and
   whose expiry field was left as filled, comes back filled from the pin as it now
   stands, so saving the admin's words from there keeps that expiry; where the pin is
@@ -286,4 +327,6 @@ every configured rule its part's block states (ADR-0141 decision 3).
   still stated twice with its buttons at the foot.
 - **Set maintenance in words on every line**: a label on each control, and a column of
   the same two words down a node with 150 lines.
+- **The stamp saying the pause**, *paused while editing*: words added to the stamp wrap
+  the band at a laptop's width and move the editor just opened.
 

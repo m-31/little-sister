@@ -98,7 +98,7 @@ class Registration:
     replaced: str = ""
     #: What the contributor's node is called and what it is about — the labels the
     #: child of ``/little-sister`` wears (ADR-0076), filled the way a check type's
-    #: subnode prose is (C2): a ``nodes.yaml`` declaration for the path still wins.
+    #: subnode prose is: a ``nodes.yaml`` declaration for the path still wins.
     title: str = ""
     about: str = ""
     #: The contributor's report — its facts, as Markdown — or ``None`` for a
@@ -137,7 +137,7 @@ def register_contributor(name: str, contributor: Contributor, *,
     :func:`current_lines`.
 
     ``title`` and ``about`` are the node's labels, declared here the way a check
-    type declares its subnode prose (C2), and a deployment's ``nodes.yaml`` still
+    type declares its subnode prose, and a deployment's ``nodes.yaml`` still
     wins for the path. ``report`` answers the contributor's **facts** as Markdown
     — the child's `report` field, shown on its page and never on a card
     (ADR-0044 decision 6) — so that its lines can be what a line is: a claim with

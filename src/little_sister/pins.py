@@ -5,11 +5,13 @@ A **pin** is one thing with a kind (ADR-0141 decision 1): a target — a node by
 path, or one of its lines by the path and the line's slug (ADR-0036) — a note, who set
 it and when and who first did, its end where it has one, an id of its own and the token
 a form carries back. What differs by kind is what it does at the node's boundary, what
-ends it and what it is bound to. This release knows two kinds: **maintenance**
-(ADR-0014), down on purpose and bound to a window in time, and **seen** (ADR-0142), a
-failure accepted until it changes and bound to the occurrence it was set on — the first
-of the kinds a ringed check sets, the **acknowledgments**, of which a part holds one at
-a time beside its maintenance.
+ends it and what it is bound to. This release knows four kinds: **maintenance**
+(ADR-0014), down on purpose and bound to a window in time; **seen** (ADR-0142), a
+failure accepted until it changes and bound to the occurrence it was set on;
+**silenced** (ADR-0144), a failure that flaps held at a level until a deadline, and
+bound to the two; and **done** (ADR-0146), an event looked into and over, its line
+showing OK, bound to the occurrence it closed and to nothing else. The last three are
+the **acknowledgments**, of which a part holds one at a time beside its maintenance.
 
 The tree holds the pins and writes them through this store on every change, so a
 restart restores them. The file is ``var/state/pins.json`` (ADR-0071), written through,
@@ -21,23 +23,31 @@ and nothing about where or how it is written.
 
 **A file this release cannot read takes every pin with it** — a shape it does not
 know, a time that is no instant, a pin without an id or a kind, two pins of one kind on
-one place, or two acknowledgments on one place — which fails toward alarming, and the
-layer reports it. **A pin of a kind
-this release does not know is skipped and named once** (ADR-0032 rule 7): an older
-standby adopting a newer holder's file keeps every pin it understands, and its next
-write drops the rest.
+one place, two acknowledgments on one place, or a maintenance entry's schedule outside
+the subset (ADR-0150) — which fails toward alarming, and the layer reports it. **A pin
+of a kind this release does not know is skipped and named once** (ADR-0032 rule 7): an
+older standby adopting a newer holder's file keeps every pin it understands, and its
+next write drops the rest.
+
+**A maintenance entry holds its schedule** (ADR-0150): the windows it covers as RFC 5545
+text, its holiday list (``not_on``) and the windows changed alone (``changed``), and no
+``expires_at``, so that no older release takes a series for one pin in force until its
+last date — it refuses the file whole instead. **One in the shape before schedules is
+dropped, and nothing says so**: a clean break, with no line at the start and no import,
+which the release's notes say once (#35's note, the landings' corrections).
 """
 from __future__ import annotations
 
 import secrets
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from little_sister import instants, self_report, values
 from little_sister.codes import StatusCode
 from little_sister.reasons import plain
+from little_sister.schedule import Schedule, last_end
 from little_sister.state import PINS_FILE, StateLayer
 
 if TYPE_CHECKING:
@@ -55,10 +65,29 @@ MAINTENANCE = "maintenance"
 #: ``contribution.by`` carries and the permission its act asks for.
 SEEN = "seen"
 
-#: What a ringed check sets (ADR-0142): the kinds that accept or silence a failure, of
-#: which a part holds **one at a time** beside any maintenance. *Done* and *silenced*
-#: join *seen* here with their kinds.
-ACKNOWLEDGMENTS: frozenset[str] = frozenset({SEEN})
+#: The kind that holds a failure that flaps (ADR-0144): its part keeps its true color
+#: and counts above at most at the level the silence holds it at — ``OK``, or ``WARN``
+#: — through every recovery, until its deadline, which it always has, or a person's
+#: hand. Its name is its word on every surface, the value ``contribution.by`` carries
+#: and the permission its act asks for.
+SILENCED = "silenced"
+
+#: The kind that closes an event looked into and over (ADR-0146): a line's failed run
+#: or held error, the line showing OK with the failure it closed beside it and
+#: counting as OK above, until the line reads anything other than that failure — a
+#: new occurrence, the same one recovered or worse, or no line at all — or a person's
+#: hand; never by the clock. Set only on a line whose failure has an occurrence of
+#: its own. Its name is its word on every surface, the value ``contribution.by``
+#: carries and the permission its act asks for.
+DONE = "done"
+
+#: The levels a silence holds its part at above it (ADR-0144): counting as ``OK``, or
+#: at most as ``WARN``.
+SILENCE_LEVELS: frozenset[StatusCode] = frozenset({StatusCode.OK, StatusCode.WARN})
+
+#: The kinds that accept, silence or close a failure (ADR-0142, ADR-0144, ADR-0146),
+#: of which a part holds **one at a time** beside any maintenance.
+ACKNOWLEDGMENTS: frozenset[str] = frozenset({DONE, SEEN, SILENCED})
 
 #: Every kind of pin this release knows. A pin of any other kind in the file is
 #: skipped and named once (ADR-0032 rule 7).
@@ -68,6 +97,85 @@ KINDS: frozenset[str] = frozenset({MAINTENANCE, *ACKNOWLEDGMENTS})
 #: placeholder, which no surface shows as a note and the notes' history never takes
 #: (ADR-0047). An acknowledgment set without one holds none.
 NO_NOTE = "maintenance"
+
+
+def _status(said: str, key: str) -> StatusCode | None:
+    """The status a pin's file says under ``key``, or ``None`` where it says none.
+
+    :raises ValueError: it says one that is no status."""
+    try:
+        return StatusCode[said] if said else None
+    except KeyError:
+        raise ValueError(f"a pin's {key} {said!r}, which is no status") from None
+
+
+@dataclass(frozen=True)
+class Changed:
+    """One window of a maintenance entry changed alone (#35's note, decision 2): the
+    ``start`` that keys it, as iCalendar's ``RECURRENCE-ID`` keys one instance, the
+    ``end`` it was changed to, the words why (``note``), and who changed it and when —
+    what an extension and an early end write, three instants in UTC."""
+
+    start: datetime
+    end: datetime
+    note: str = ""
+    by: str = ""
+    at: datetime | None = None
+
+    def to_dict(self) -> dict[str, str]:
+        said = {"start": instants.stamp(self.start), "end": instants.stamp(self.end)}
+        if self.note:
+            said["note"] = self.note
+        if self.by:
+            said["by"] = self.by
+        if self.at is not None:
+            said["at"] = instants.stamp(self.at)
+        return said
+
+    @classmethod
+    def from_dict(cls, data: object) -> Changed:
+        if not isinstance(data, Mapping):
+            raise ValueError("a window changed alone that is not a mapping")
+        at = data.get("at")
+        return cls(start=instants.instant(data.get("start"),
+                                          "a changed window's start"),
+                   end=instants.instant(data.get("end"), "a changed window's end"),
+                   note=values.text(data, "note"), by=values.text(data, "by"),
+                   at=None if at is None
+                   else instants.instant(at, "a changed window's at"))
+
+
+def _zone() -> str:
+    """The configured zone (ADR-0120 decision 7), which a window set with an end alone
+    is written in — read where it is asked for, the configuration importing what imports
+    this module."""
+    from little_sister.config import config as settings
+    return settings.timezone
+
+
+def _schedule_end(schedule: Schedule, changed: Iterable[Changed]) -> datetime:
+    """Where ``schedule``'s last window ends, as written — a one-off's end, or the last
+    of a series' windows, each changed alone where ``changed`` says, and no holiday
+    list applied: the tree's windows apply it.
+
+    :raises ValueError: the schedule has no window."""
+    ends = {each.start: each.end for each in changed}
+    end = last_end(schedule.windows(changed=ends))
+    if end is None:
+        raise ValueError("a maintenance pin whose schedule has no window")
+    return end
+
+
+def _same_schedule(one: Schedule | None, other: Schedule | None) -> bool:
+    """Whether two schedules say the same: one window each from the same start to the
+    same end, or every part alike — read as instants, so that a one-off's start
+    written as a wall time in another zone is the same start."""
+    if one is None or other is None:
+        return one is other
+    if one.end is not None and other.end is not None:
+        return (one.end == other.end and one.starts_at == other.starts_at
+                and one.zone == other.zone)
+    return one == other
 
 
 def new_id() -> str:
@@ -88,13 +196,24 @@ class Pin:
     every note is (ADR-0047 decision 1); a maintenance pin set without one holds
     :data:`NO_NOTE`, and an acknowledgment set without one holds none.
 
-    ``expires_at`` is when the pin ends by the clock: always for maintenance, a
-    window in time, and for *seen* only where the person gave it an end — it ends by
-    itself first, as what it accepted changes (ADR-0142). ``occurrence`` is what an
-    acknowledgment is bound to: the line's occurrence as it was set — its type's
-    field, or its reading's identity — and empty where it is bound to the failing
-    stretch it was set in, which is every node's own and every line nothing tells
-    apart. ``status`` is the status a *seen* was set at, which a worse one ends.
+    ``schedule`` is what a maintenance entry covers (ADR-0150): one window from its
+    start to its end — what a pin built with an ``expires_at`` alone holds, from its
+    creation, written in the configured zone — or a series, with ``not_on``, the key
+    of the holiday list whose days its rule leaves out, and ``changed``, its windows
+    changed alone. ``expires_at`` is when the pin ends by the clock: for maintenance
+    where its schedule's last window ends, as written — derived, never stored; the
+    tree's windows apply the holiday list — and for a silence, its deadline; for
+    *seen* only where the person gave it an end — it ends by itself first, as what it
+    accepted changes (ADR-0142).
+    ``occurrence`` is what a *seen* is bound to: the line's occurrence as it was set
+    — its type's field, or its reading's identity — and empty where it is bound to
+    the failing stretch it was set in, which is every node's own and every line
+    nothing tells apart. ``status`` is the status a *seen* was set at, which a worse
+    one ends. A *done* is bound to both (ADR-0146): the occurrence it closed, which
+    it always has, and ``status``, the failure it closed. ``level`` is the most a
+    silence lets its part count as above it, ``OK`` or ``WARN`` (ADR-0144): a silence
+    is bound to its deadline and its level, and to no failure, holding through every
+    recovery.
 
     The pin carries **both dates** (ADR-0014). ``set_at`` / ``set_by`` mean *the
     last write*, and ``created_at`` / ``created_by`` *the first*, the one piece of
@@ -122,33 +241,72 @@ class Pin:
     id: str
     occurrence: str
     status: StatusCode | None
+    level: StatusCode | None
+    schedule: Schedule | None
+    not_on: str
+    changed: tuple[Changed, ...]
 
     def __init__(self, kind: str, note: str, set_at: datetime,
-                 expires_at: datetime | None, set_by: str = "",
+                 expires_at: datetime | None = None, set_by: str = "",
                  created_at: datetime | None = None, created_by: str = "",
                  id: str = "", *, occurrence: str = "",
-                 status: StatusCode | None = None) -> None:
+                 status: StatusCode | None = None,
+                 level: StatusCode | None = None,
+                 schedule: Schedule | None = None, not_on: str = "",
+                 changed: Iterable[Changed] = ()) -> None:
         """An absent creation **is** the set, and then its author the set's unless
         one is named: the plain reading of a pin nobody has edited yet. An absent id
         is a new pin's, made here (:func:`new_id`).
 
         :raises ValueError: ``kind`` is not one this release knows, one of the times
-            carries no zone, a maintenance pin has no end, or a *seen* names no
-            failure it was set at, or one of maintenance names one, or an
-            occurrence.
+            carries no zone, a maintenance pin or a silence has no end, a *done* has
+            one, a *seen* or a *done* names no failure it was set at, a *done* no
+            occurrence it closed, a silence no level it holds its part at, or a pin
+            names what its kind is not bound to.
         """
         if kind not in KINDS:
             raise ValueError(f"a pin of kind {kind!r}, which this release does "
                              f"not know")
+        set_at = instants.utc(set_at, "a pin's set_at")
+        windows_changed = tuple(sorted(changed, key=lambda each: each.start))
         if kind == MAINTENANCE:
-            if expires_at is None:
-                raise ValueError("a maintenance pin without an end")
-            if occurrence or status is not None:
+            if occurrence or status is not None or level is not None:
                 raise ValueError("a maintenance pin is bound to its window alone")
+            if schedule is None:
+                if expires_at is None:
+                    raise ValueError("a maintenance pin without an end")
+                expires_at = instants.utc(expires_at, "a pin's expires_at")
+                # one window from its creation to its end — what it has covered
+                # since it was first set, whatever edits moved its end — or, where
+                # the end is not after that, the second before it: a window that has
+                # run out
+                began = (set_at if created_at is None
+                         else instants.utc(created_at, "a pin's created_at"))
+                schedule = Schedule.one_off(
+                    min(began, expires_at - timedelta(seconds=1)), expires_at, _zone())
+            expires_at = _schedule_end(schedule, windows_changed)
+        elif schedule is not None or not_on or windows_changed:
+            raise ValueError(f"a {kind} pin has no schedule")
+        elif kind == SILENCED:
+            if expires_at is None:
+                raise ValueError("a silence without a deadline")
+            if occurrence or status is not None:
+                raise ValueError("a silence is bound to its deadline and its level "
+                                 "alone")
+            if level not in SILENCE_LEVELS:
+                raise ValueError(f"a silence holds its part at ok or at most warn, "
+                                 f"not at {'nothing' if level is None else level.name}")
         elif status not in (StatusCode.WARN, StatusCode.ERROR):
             raise ValueError(f"a {kind} pin is set at a failure, not at "
                              f"{'nothing' if status is None else status.name}")
-        set_at = instants.utc(set_at, "a pin's set_at")
+        elif level is not None:
+            raise ValueError(f"a {kind} pin holds its part at no level")
+        if kind == DONE:
+            if expires_at is not None:
+                raise ValueError("a done has no end: it ends as its line reads "
+                                 "anything other than the failure it closed")
+            if not occurrence:
+                raise ValueError("a done closes an event, and names no occurrence")
         if created_at is None:
             created_at = set_at
             created_by = created_by or set_by
@@ -159,12 +317,15 @@ class Pin:
                 ("set_by", set_by),
                 ("created_at", instants.utc(created_at, "a pin's created_at")),
                 ("created_by", created_by), ("id", id or new_id()),
-                ("occurrence", occurrence), ("status", status)):
+                ("occurrence", occurrence), ("status", status), ("level", level),
+                ("schedule", schedule), ("not_on", not_on),
+                ("changed", windows_changed)):
             object.__setattr__(self, name, value)
 
     @property
     def acknowledgment(self) -> bool:
-        """Whether this pin is one a ringed check sets (:data:`ACKNOWLEDGMENTS`)."""
+        """Whether this pin is an acknowledgment (:data:`ACKNOWLEDGMENTS`): a seen, a
+        silence or a done, one on a part at a time."""
         return self.kind in ACKNOWLEDGMENTS
 
     @property
@@ -173,21 +334,31 @@ class Pin:
         spelled, which is the same text before a restart and after it."""
         return instants.stamp(self.set_at)
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, Any]:
         """The pin as its file carries it, without its target: each time in UTC, as
-        :func:`~little_sister.instants.stamp` spells one. An end, an occurrence and a
-        status are keys only where the pin has them."""
-        said = {"id": self.id, "kind": self.kind, "note": self.note,
+        :func:`~little_sister.instants.stamp` spells one. A maintenance entry writes its
+        schedule, its holiday list and its windows changed alone, and never an end; an
+        end, an occurrence, a status and a level are keys only where the pin has
+        them."""
+        said: dict[str, Any] = {"id": self.id, "kind": self.kind, "note": self.note,
                 "set_at": instants.stamp(self.set_at),
                 "set_by": self.set_by,
                 "created_at": instants.stamp(self.created_at),
                 "created_by": self.created_by}
-        if self.expires_at is not None:
+        if self.schedule is not None:
+            said["schedule"] = self.schedule.text()
+            if self.not_on:
+                said["not_on"] = self.not_on
+            if self.changed:
+                said["changed"] = [each.to_dict() for each in self.changed]
+        elif self.expires_at is not None:
             said["expires_at"] = instants.stamp(self.expires_at)
         if self.occurrence:
             said["occurrence"] = self.occurrence
         if self.status is not None:
             said["status"] = self.status.name
+        if self.level is not None:
+            said["level"] = self.level.name
         return said
 
     @classmethod
@@ -195,40 +366,54 @@ class Pin:
         """Read one pin, its times strictly
         (:func:`~little_sister.instants.instant`): :class:`ValueError` for one that
         is not an instant with an offset, for a pin without an id or a kind, for a
-        status that is none, and for anything :class:`Pin` refuses. A pin that names
-        no creation was created when it was set."""
+        status or a level that is none, and for anything :class:`Pin` refuses. A pin
+        that names no creation was created when it was set."""
         created = data.get("created_at")
         ident = values.text(data, "id")
         if not ident:
             raise ValueError("a pin without an id")
         kind = values.text(data, "kind")
         ends = data.get("expires_at")
-        said = values.text(data, "status")
-        try:
-            status = StatusCode[said] if said else None
-        except KeyError:
-            raise ValueError(f"a pin set at {said!r}, which is no status") from None
+        status, level = (_status(values.text(data, key), key)
+                         for key in ("status", "level"))
         note = values.text(data, "note")
+        schedule: Schedule | None = None
+        changed: tuple[Changed, ...] = ()
+        if kind == MAINTENANCE:
+            text = data.get("schedule")
+            if not isinstance(text, str):
+                raise ValueError("a maintenance pin without a schedule")
+            schedule = Schedule.parse(text)
+            said = data.get("changed") or []
+            if not isinstance(said, list):
+                raise ValueError("a maintenance pin's changed windows are no list")
+            changed = tuple(Changed.from_dict(each) for each in said)
         return cls(
             kind=kind,
             note=note or NO_NOTE if kind == MAINTENANCE else note,
             set_at=instants.instant(data.get("set_at"), "a pin's set_at"),
-            expires_at=(None if ends is None and kind != MAINTENANCE
+            expires_at=(None if (ends is None and kind != SILENCED)
+                        or kind == MAINTENANCE
                         else instants.instant(ends, "a pin's expires_at")),
             set_by=values.text(data, "set_by"),
             created_at=(None if created is None
                         else instants.instant(created, "a pin's created_at")),
             created_by=values.text(data, "created_by"),
-            id=ident, occurrence=values.text(data, "occurrence"), status=status)
+            id=ident, occurrence=values.text(data, "occurrence"), status=status,
+            level=level, schedule=schedule, not_on=values.text(data, "not_on"),
+            changed=changed)
 
     def same_pin_as(self, other: Pin) -> bool:
         """Whether ``other`` says the same thing this pin does — same kind, same
-        note, same end. A set that changes none of them is no write at all: the tree
-        keeps the stored pin, its token and its authors (ADR-0104 decision 5), and
-        has nothing to announce (ADR-0014). Anything else is a real edit. What an
-        acknowledgment is bound to is taken where it is set, and an edit keeps it."""
+        note, same end, same level. A set that changes none of them is no write at
+        all: the tree keeps the stored pin, its token and its authors (ADR-0104
+        decision 5), and has nothing to announce (ADR-0014). Anything else is a real
+        edit. What a *seen* is bound to is taken where it is set, and an edit keeps
+        it."""
         return (self.kind == other.kind and self.note == other.note
-                and self.expires_at == other.expires_at)
+                and self.expires_at == other.expires_at and self.level == other.level
+                and _same_schedule(self.schedule, other.schedule)
+                and self.not_on == other.not_on and self.changed == other.changed)
 
     def is_expired(self, now: datetime) -> bool:
         """True once ``now`` reaches ``expires_at`` — two instants, so the answer
@@ -372,6 +557,11 @@ class PinStore:
             kind = values.text(raw, "kind")
             if not kind:
                 raise ValueError("a pin without a kind")
+            if kind == MAINTENANCE and "schedule" not in raw:
+                # A maintenance pin in the shape before schedules: dropped, and
+                # nothing says so — a clean break (ADR-0150), the release's notes
+                # saying it once.
+                continue
             if kind not in KINDS:
                 unknown += 1
                 continue

@@ -1,7 +1,7 @@
 # ADR-0107 — An event is a change of what a node shows
 
 - **Status:** Accepted
-- **Date:** 2026-10-25 (accepted 2026-10-03)
+- **Date:** 2026-11-01 (accepted 2026-10-03)
 - **Related:** [ADR-0036](0036-addressable-reasons.md) (decision 5, a line's pin;
   decision 7, what a node shows over its lines; decision 11, which this amends),
   [ADR-0041](0041-maintenance-is-a-contribution-rule.md) (decisions 6 to 8, the mark
@@ -27,7 +27,14 @@
   [ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md) (the rows
   a configured rule marks, and `shown`),
   [ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md) (the
-  rows of a failure marked seen, and why one ended)
+  rows of a failure marked seen, and why one ended),
+  [ADR-0144](0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md)
+  (the rows of a silence, with its level — amended),
+  [ADR-0145](0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)
+  (a line's pin written whole, and why maintenance ended —
+  amended),
+  [ADR-0146](0146-an-event-marked-done-shows-ok-until-its-line-reads-anything-else.md)
+  (the rows of a done — amended)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -68,19 +75,31 @@ check reports.
 A node's pin is written whenever it is set, edited or ended, also where the node shows
 the same before and after — an edit, or a pin over lines that are all pinned — since its
 note is to leave a trace (ADR-0014 decision 9); such a row begins no period (ADR-0099
-decision 6). The reading that ends a node's wait by its count writes a row as well,
-which says that the status the node shows reached the level above
+decision 6). A line's maintenance pin is written the same way, so that what a person
+sets on a line leaves its trace too: one row of its node for its set, its edit and its
+end, whatever it does to what the node shows
+([ADR-0145](0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)
+decision 9). Its row names the line by its text where its node reports it, and none is
+written where no node stands, the pin held against its path; a row of it that changes
+nothing the node shows begins no period and changes nothing of a wait under way. The
+reading that ends a node's wait by its count writes a row as well, which says that the
+status the node shows reached the level above
 ([ADR-0119](0119-a-wait-that-ends-by-its-count-writes-a-row.md)): the one row of a
-reading that changes nothing its node shows, and it begins no period either. Nothing is
-written for a line by itself. A line's pin that does not change what its node shows —
-one of two failing lines pinned, a note or an expiry edited — is no event, so the log
-does not fill with lines, which is what ADR-0036 decision 11 kept out of it.
+reading that changes nothing its node shows, and it begins no period either. Beyond
+what a person sets on it, nothing is written for a line by itself, so the log does not
+fill with lines, which is what ADR-0036 decision 11 kept out of it.
 
 A failure a person marks seen writes rows of its node
 ([ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md)
 decision 7): its set, its edit and its end, the node's own and a line's alike. A node's
 own seen changes nothing its node shows, so its rows go from what the node shows to the
-same; a line's go from what its node showed to what it shows.
+same; a line's go from what its node showed to what it shows. A silence's acts are rows
+of its node the same way, each carrying the silence's `level`
+([ADR-0144](0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md)
+decision 10), and a done's, set on a line alone, rows of its line's node
+([ADR-0146](0146-an-event-marked-done-shows-ok-until-its-line-reads-anything-else.md)
+decision 8). Where a done's next event fails, the row that moves its node is the
+reading's, and the done's end is a row beside it that changes nothing more.
 
 ### 2. A change of the reading that the node does not show is a row of its own, held back
 
@@ -112,28 +131,37 @@ where it differs from what its mark implies.
 ### 3. An event carries its cause
 
 A field of its own, beside its reason: a reading; the node's pin, set, edited or ended;
-a line's pin, set or ended; a seen, set, edited or ended, on the node or on a line —
-`seen-set`, `seen-edited` and `seen-ended`, and `line-seen-set`, `line-seen-edited` and
-`line-seen-ended`, the act and the kind; the end of a wait by its count (ADR-0119); and
-*removed*, for a node its check has stopped reporting
-([ADR-0109](0109-a-node-says-its-children-are-complete.md)). A seen's end carries
-`ended` besides, why it ended: a recovery, a worsening, a new occurrence, a part no
-longer reported, its end, or by hand. The reason is what it was — the node's lines for
-a reading, for the end of a pin and for the end of a wait, the pin's note for a node's
-pin — and where a line's pin was set it is that line and the pin's note: the line by
-its text, since a slug means nothing once the line is gone. A removal's row is written
-for each node removed, and at the first run after a restart for a path the log last
-showed a status for (decision 5).
+a line's pin, set, edited — `line-pin-edited` — or ended; a seen, set, edited or ended,
+on the node or on a line — `seen-set`, `seen-edited` and `seen-ended`, and
+`line-seen-set`, `line-seen-edited` and `line-seen-ended`, the act and the kind; a
+silence the same way — `silenced-set`, `silenced-edited` and `silenced-ended`, and
+`line-silenced-set`, `line-silenced-edited` and `line-silenced-ended` — each of its rows
+carrying `level`; a done, on a line alone — `line-done-set`, `line-done-edited` and
+`line-done-ended`; the end of a wait by its count (ADR-0119); and *removed*, for a node
+its check has stopped reporting
+([ADR-0109](0109-a-node-says-its-children-are-complete.md)). The end of a maintenance
+pin or of an acknowledgment carries `ended` besides, why it ended: `hand`, `clock` or
+`gone` for a maintenance pin or a silence; `recovery`, `worsening`, `occurrence`,
+`gone`, `clock` or `hand` for a seen; `occurrence`, `recovery`, `worsening`, `gone` or
+`hand` for a done; and `made-seen`, `made-silenced` or `made-done` for an acknowledgment
+a person made another kind, naming the kind that took its place. The reason is what it
+was — the node's lines for a reading, for the end of a pin and for the end of a wait,
+the pin's note for a node's pin — and where a line's pin was set it is that line and the
+pin's note: the line by its text, since a slug means nothing once the line is gone. A
+removal's row is written for each node removed, and at the first run after a restart
+for a path the log last showed a status for (decision 5).
 
 Each surface says the cause in its own words. On the Events page a row that a pin caused
 carries a chip beside its status: *set*, *edited*, *maintenance ended*, *line's pin set*,
-*line's maintenance ended*. A seen's carries *seen*, *seen changed* and *seen ended*
-with why — *seen ended · worse* — and a line's *line seen*, *line's seen changed* and
-*line's seen ended*. The row that ends a wait carries *reached*. On the Time card and in
-the Copy document a period says what kind of beginning it had, ADR-0099 decision 8 one
-level down: *Status ok since 16:24:04, when a line's pin was set* and *Status error
-since 18:00:00, when a line's maintenance ended*. A period of maintenance says nothing
-more, however it began.
+*line's pin edited*, *line's maintenance ended*, a maintenance pin's end saying why
+after the act — *maintenance ended · at its end*. A seen's carries *seen*, *seen
+changed* and *seen ended* with why — *seen ended · worse* — and a line's *line seen*,
+*line's seen changed* and *line's seen ended*; a silence's and a done's say theirs the
+same way (ADR-0144 decision 10, ADR-0146 decision 8). The row that ends a wait carries
+*reached*. On the Time card and in the Copy document a period says what kind of
+beginning it had, ADR-0099 decision 8 one level down: *Status ok since 16:24:04, when a
+line's pin was set* and *Status error since 18:00:00, when a line's maintenance ended*.
+A period of maintenance says nothing more, however it began.
 
 ### 4. An event carries what the check reported
 
@@ -178,10 +206,10 @@ already in a log are not rewritten.
   ADR-0099 decisions 1 and 6 rest on: one rule bounds every period a surface states,
   for a node whose lines are pinned too. Its History says what it showed, for the rows
   written from now on.
-- **A line's pin costs the log two rows at most**, one when it is set and one when it
-  ends, and none where its node's status does not move. A held-back row beneath lines'
-  pins replaces a row that was written unmarked: the log grows by the rows of what a
-  node showed and its check did not report, which it lacked.
+- **A line's pin costs the log one row for each act on it** — its set, each edit and
+  its end — and a line that comes or goes writes nothing of its own. A held-back row
+  beneath lines' pins replaces a row that was written unmarked: the log grows by the
+  rows of what a node showed and its check did not report, which it lacked.
 - **The contract does not move.** The JSON envelope carries no events; the kept log
   gains two keys an older reader passes over.
 - **A pin set or cleared before a node's first reading after a restart** is written
@@ -196,8 +224,8 @@ already in a log are not rewritten.
   what is shown beside it: one surface says two things, and the log and History go on
   saying what the wall did not show. **Left to the policy round on pins**: the defect
   is in what an event is, and stands whatever a pin's policy becomes.
-- **An event for every line**, its pin or its coming and going: the flood ADR-0036
-  decision 11 declined, for a question a node's own row answers.
+- **An event for every line that comes or goes**: the flood ADR-0036 decision 11
+  declined, for a question a node's own row answers.
 - **The cause in the reason's text only**: the fact is kept, as prose in two tables,
   and the Time card cannot say it. **No cause**: a silenced line reads as a recovery,
   and the pin is found nowhere once it has ended.

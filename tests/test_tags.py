@@ -238,7 +238,8 @@ class CheckFileTests(_Startup):
 
     def test_an_aspects_tags_are_a_key_the_library_knows(self):
         config = {"subnodes": {"response": {"tags": ["a"], "tag": "b"}}}
-        self.assertEqual(unknown_check_keys(config), ["subnodes.response.tag"])
+        self.assertEqual(unknown_check_keys(config),
+                         [("subnodes.response", ["tag"], STATED_SUBNODE_KEYS)])
         self.assertIn("tags", STATED_SUBNODE_KEYS)
         self.assertEqual(parse_subnode_tags(config), {"response": ("a",)})
 

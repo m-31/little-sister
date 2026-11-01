@@ -92,10 +92,13 @@ class PathTests(TestCase):
         self.assertEqual(check.path, "/services/api")
 
     def test_name_field_is_rejected(self):
-        with self.assertRaises(CheckError):     # merged into `path` (ADR-0016)
+        # merged into `path` (ADR-0016), and refused as a key no check takes (ADR-0151)
+        with self.assertRaises(CheckError) as caught:
             HttpCheck.from_config(
                 {"type": "http", "path": "/web", "name": "x", "url": "http://x"},
                 HERE)
+        self.assertIn("unknown key(s) at the top level: name (http takes: ",
+                      str(caught.exception))
 
 
 class HttpCheckTests(TestCase):
@@ -122,7 +125,7 @@ class HttpCheckTests(TestCase):
         self.assertEqual(result.code, StatusCode.ERROR)
         self.assertIn("503", result.reason_texts[0])
 
-    # --- The measurement (backlog #76) ---------------------------------------
+    # --- The measurement (ADR-0085 decision 3) -------------------------------
 
     def test_the_healthy_path_measures_and_says_what_it_read(self):
         """The whole point: the family's most common check produced **no number at
@@ -583,21 +586,20 @@ class FileFreshnessTests(TestCase):
         self.assertEqual(self._an_hour_old(max_age=None), StatusCode.OK)
         self.assertEqual(self._an_hour_old(), StatusCode.ERROR)
 
-    def test_the_retired_level_and_code_stop_the_start_naming_what_replaces_them(
+    def test_the_retired_level_and_code_stop_the_start_with_no_code_of_their_own(
             self):
         """``max_age`` with a level and ``stale_code`` were the age's one level and
-        its code; each now stops the start, naming the key a deployment writes."""
-        for keys, write in (({"max_age": "1m", "stale_code": "WARN"},
-                             "write max_age_warn: 1m,"),
-                            ({"max_age": "20m"}, "write max_age_error: 20m,"),
-                            ({"stale_code": "OK"}, "write max_age: null, which "
-                                                   "switches the judgment off,")):
+        its code: the pair's bare key refuses a level as it refuses any value but
+        null, and ``stale_code`` is a key the type does not take (ADR-0151
+        decision 4)."""
+        for keys, said in (({"max_age": "20m"}, "'max_age' accepts only null"),
+                           ({"stale_code": "OK"},
+                            "unknown key(s) at the top level: stale_code (")):
             with self.assertRaises(CheckError) as caught:
                 FileFreshnessCheck.from_config(
                     {"type": "file", "path": "/hb", "file": "/tmp/beat", **keys},
                     HERE)
-            self.assertIn(write, str(caught.exception))
-            self.assertIn("drop 'stale_code' (ADR-0131)", str(caught.exception))
+            self.assertIn(said, str(caught.exception))
 
 
 class CommandCheckTests(TestCase):
@@ -842,20 +844,19 @@ class FirstLookStatementsTests(TestCase):
                 self.assertIn("a.yaml", str(caught.exception))
                 self.assertIn(named, str(caught.exception))
 
-    def test_keys_a_file_says_that_the_library_does_not_read_are_named(self):
+    def test_keys_a_file_says_that_the_library_does_not_take_stop_the_start(self):
+        """Where decision 7 had them said in the log (ADR-0151 decision 3)."""
         with tempfile.TemporaryDirectory() as directory:
             root = _root(directory, a__yaml=(
                 "type: command\npath: /c\ncommand: 'true'\n"
                 "children: {flod_ok: true}\n"
                 "subnodes:\n  disk: {title: Disk, chip: true}\n"),
                 b__yaml="type: command\npath: /d\ncommand: 'true'\nchips: true\n")
-            with self.assertLogs("little_sister.checks.loader", "WARNING") as logged:
-                checks = load_checks(root)
-        self.assertEqual(len(checks), 2)
-        self.assertEqual(len(logged.records), 1)
-        line = logged.records[0].getMessage()
-        self.assertIn("a.yaml", line)
-        self.assertIn("children.flod_ok, subnodes.disk.chip", line)
+            with self.assertRaises(CheckError) as caught:
+                load_checks(root)
+        self.assertIn("a.yaml: unknown key(s) in children: flod_ok (",
+                      str(caught.exception))
+        self.assertIn("; in subnodes.disk: chip (", str(caught.exception))
 
 
 class LoaderTests(TestCase):

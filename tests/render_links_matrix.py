@@ -34,6 +34,7 @@ os.environ.setdefault("SECRET_KEY", "links-matrix")
 
 from little_sister import app as app_module  # noqa: E402
 from little_sister.app import app  # noqa: E402
+from tests.browser_binary import chromium  # noqa: E402
 from tests.browser_server import PageServer  # noqa: E402
 
 # Imported and never started (ADR-0091): these are the pages a server without an
@@ -58,11 +59,9 @@ def main(out: Path) -> None:
     server, base = serve()
     try:
         with sync_playwright() as play:
-            # The sandbox pins one browser build; a venv-installed Playwright
-            # may expect a different one, so point it at what is there.
-            executable = Path("/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
-            browser = play.chromium.launch(
-                executable_path=str(executable) if executable.is_file() else None)
+            # the browser the environment brings, where it brings one
+            # (`tests/browser_binary.py`)
+            browser = play.chromium.launch(executable_path=chromium())
             page = browser.new_page(viewport={"width": 1280, "height": 900},
                                     device_scale_factor=2)
 

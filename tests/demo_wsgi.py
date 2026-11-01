@@ -96,6 +96,12 @@ slots.register("reason.actions", "tests.demo_extension", "review_action.html",
                demo_extension.review_action)
 slots.register("node.actions", "tests.demo_extension", "node_action.html",
                demo_extension.node_action)
+# A node's *Notes* tab files a ticket from the words (ADR-0148): a button after each
+# kind's own, and in the small form a reader who may set no kind is given, which posts
+# the form to the library's route in a new tab; the route calls the draft function
+# registered here and sends the tab to the address it returns.
+slots.register("notes.actions", "tests.demo_extension", "notes_action.html",
+               draft=demo_extension.draft_issue)
 slots.register_assets("tests.demo_extension", "demo.css", "demo.js")
 
 # The third seam a package registers into (ADR-0048): the origin its script *reaches*.
@@ -107,6 +113,9 @@ slots.register_assets("tests.demo_extension", "demo.css", "demo.js")
 # assembled *there*, which is the whole of "assembled, never a constant".
 csp = importlib.import_module("little_sister.csp")
 csp.allow("connect-src", "https://tracker.example.org", by="tests.demo_extension")
+# And the tracker a draft is sent to: the route answers the button's post with a
+# redirect there, which `form-action` holds where the policy is enforced (ADR-0148).
+csp.allow("form-action", "https://tracker.example.org", by="tests.demo_extension")
 
 from little_sister.app import app  # noqa: E402
 

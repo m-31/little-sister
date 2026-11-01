@@ -1,6 +1,6 @@
-"""The anonymized tree of backlog #91's §3.9: a deployment's tree, its names replaced.
+"""The anonymized tree: a deployment's tree, its names replaced.
 
-``tests/fixtures/anonymized_tree.json`` is the file the note's prototype drew its boards
+``tests/fixtures/anonymized_tree.json`` is the file the wall's prototype drew its boards
 from — for each node its path, its code and the lengths of its lines, taken from a real
 deployment on 2026-10-10: 265 nodes under two team roots of 98 and 99 leaves, six levels
 at the deepest, the widest level 20 repositories with 63 workflows, 234 lines of which
@@ -8,8 +8,7 @@ half are under 56 characters while the security check's *informational* band hol
 findings over 1,000. The teams are *alpha* and *beta*, every repository, queue, function
 and workflow has a generic name, and every line here is made-up text of the recorded
 length, so the wall's cost is measured on the deployment's shape without a word of its
-own (R13). The file is read by eye and it stays the prototype's: ``test_wall_cost.py``
-holds the two copies identical while the prototype is in the tree.
+own. The file is read by eye.
 
 What the shapes do not record is filled in as the deployment has it, generically: the
 titles its ``nodes.yaml`` and types give the levels, an *about* on a team and on each
@@ -19,7 +18,7 @@ so that the wall draws their Copy chips (ADR-0036); a workflow's one line is pro
 aws type's rosters claim ``show_when_quiet`` (ADR-0063), and the severity bands carry
 their declared rank (ADR-0055), as the deployment's do.
 
-Made worse, as §3.9 did it, each a :data:`VARIANTS` key of :func:`build`:
+Made worse, each a :data:`VARIANTS` key of :func:`build`:
 
 - ``recorded`` — the tree as taken.
 - ``outage`` — every workflow of *alpha*'s 20 repositories failing at once.
@@ -29,8 +28,8 @@ Made worse, as §3.9 did it, each a :data:`VARIANTS` key of :func:`build`:
 - ``findings`` — *alpha*'s *informational* band with 300 findings, the check's reading
   cap.
 
-And mounted as the deployment that runs mounts its checks (backlog #91's note, §2,
-2026-10-17), the wall it is mostly looked at on:
+And mounted as the deployment that runs mounts its checks, the wall it
+is mostly looked at on:
 
 - ``deployed`` — *alpha*'s five checks at the root, each a card, beside the engine's
   own node, and nothing of *beta*'s. Every node of *alpha*'s keeps what it had beneath
@@ -62,7 +61,7 @@ from tests import family_looks
 #: The shapes: ``[path, code, [length, …]]`` per node a check wrote, containers implied.
 SHAPES = Path(__file__).resolve().parent / "fixtures" / "anonymized_tree.json"
 
-#: The deployment's ``reason_cap`` (§3.9); depth at its default.
+#: The deployment's ``reason_cap``; depth at its default.
 REASON_CAP = 30
 
 VARIANTS = ("recorded", "outage", "blackout", "wide", "findings", "deployed")

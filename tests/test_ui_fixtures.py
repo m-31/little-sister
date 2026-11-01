@@ -92,11 +92,13 @@ class FixtureRenderTests(TestCase):
         self.assertIn("planned kernel upgrade", html)  # and its pin's note
         self.assertIn("undefined", html)               # the never-reported node
 
-    def test_a_deep_pin_is_surfaced_by_the_pill_and_a_pip(self):
+    def test_a_deep_pin_is_surfaced_by_the_pill_and_a_door(self):
         html = self._render("maintenance_deep_pin")
         self.assertIn('maintenance-pill__count">1<', html)
         self.assertIn("/nexus/disk/smart/bay-7", html)
-        self.assertIn('data-pop-for="/nexus"', html)   # the card's pip
+        # the card's door, lit with the pin beneath it (ADR-0147 decision 2)
+        self.assertIn('href="/notes/nexus" title="Handle it — 1 handled: 1 node '
+                      'in maintenance"', html)
 
     def test_twelve_pins_fold_behind_the_cap(self):
         html = self._render("maintenance_many_pins")
@@ -145,13 +147,13 @@ class FixtureRenderTests(TestCase):
     def test_maintenance_editor_fixture_has_read_and_edit_states(self):
         html = self._render("maintenance_editor_member_leaf")
         self.assertIn("<strong>Ada owns this</strong>", html)
-        # the node's block and the pinned line's, each with its editor, and a
-        # pause mark on the lines still to be pinned (ADR-0104)
+        # the node's block and the pinned line's, each with its editor, and ◇ in
+        # the seat of each line nothing handles (ADR-0104, ADR-0147 decision 1)
         self.assertIn("Edit<span class=\"visually-hidden\"> this node's "
                       "maintenance</span>", html)
         self.assertIn("Edit<span class=\"visually-hidden\"> this line's "
                       "maintenance</span>", html)
-        self.assertIn("Set maintenance for this line", html)
+        self.assertIn('title="Handle this line"', html)
         self.assertIn("maintenance-reason-source", html)
         self.assertIn("&lt;script&gt;shown as text&lt;/script&gt;", html)
 

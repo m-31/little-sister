@@ -43,6 +43,7 @@ from little_sister.nodes import NodeMeta
 from little_sister.origins import package_origin
 from little_sister.reasons import RECORD_TIMESTAMP_KEYS, Entry
 from little_sister.render import sign
+from little_sister.schedule import Schedule
 from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.tree import StatusTree
 from little_sister.users import AvatarFile
@@ -329,7 +330,7 @@ class WebTests(TestCase):
 
     def test_a_damped_node_says_so_on_its_card_and_on_its_page(self):
         # a red leaf under a green parent is what a broken roll-up looks like, so
-        # the count is on both surfaces in words (backlog #38 B)
+        # the count is on both surfaces in words (ADR-0083)
         self._login()
         self.tree.upsert("/svc/api", StatusCode.OK, escalate_after=3)
         self.tree.upsert("/svc/api", StatusCode.ERROR)
@@ -348,7 +349,7 @@ class WebTests(TestCase):
         self.assertNotIn("to escalate", page)
 
     def test_record_shown_on_detail_page_as_dotted_names(self):
-        # the record reaches the node's own page (backlog #32): a list of names
+        # the record reaches the node's own page (ADR-0082): a list of names
         # and values, dotted the way the field is addressed. How a time in it
         # reads is RecordTimeTests'.
         self._login()
@@ -1011,9 +1012,10 @@ class WebTests(TestCase):
         self.tree.upsert("/nas/zeta/probe", StatusCode.ERROR, "zeta down")
 
     def test_no_level_folds_its_boxes_behind_more(self):
-        # the interactive wall's flip took *+N more* and `branch_cap` away (backlog
-        # #91 §3.4): a level nobody speaks for starts open, its quiet boxes and the
-        # erupting one alike, in the page and in the ~10s refresh's fragment
+        # the interactive wall's flip took *+N more* and `branch_cap` away
+        # (ADR-0127 decision 6): a level nobody speaks for starts open, its quiet
+        # boxes and the erupting one alike, in the page and in the ~10s refresh's
+        # fragment
         self._login()
         self._branchy_card()
         for url in ("/status", "/status?fragment=1"):
@@ -1301,25 +1303,29 @@ class WebTests(TestCase):
         self.assertIn("planned-host", body)      # maintenance card stays visible
         self.assertNotIn("idle-host", body)      # never-reported card hidden
 
-    def test_maintenance_pip_on_ancestor_card(self):
-        # a card whose subtree holds a pin (but isn't itself pinned) gets a clickable
-        # pip button (maintenance.js opens its popover); a glance shows where to drill
+    def test_a_pin_beneath_a_card_lights_its_door(self):
+        # a card whose subtree holds a pin gets its door, ◇, lit with it (ADR-0147
+        # decision 2): a glance shows where to drill, and a click opens the tab that
+        # lists it
         self._login()
         self._pinned("/rack/shelf/box", "planned", hours=3)
         body = self.client.get("/status").get_data(as_text=True)
-        self.assertIn("maintenance-pip", body)
-        self.assertIn('aria-haspopup="true"', body)   # the pip opens a popover
-        self.assertIn('data-pop-for="/rack"', body)    # keyed to the card
+        self.assertIn('<a class="door-mark state-door door is-lit" '
+                      'data-control="door" data-door href="/notes/rack" '
+                      'title="Handle it — 1 handled: 1 node in maintenance"', body)
+        self.assertNotIn("maintenance-pip", body)
 
-    def test_maintenance_pip_popover_is_scoped_to_its_card(self):
-        # each pip's popover source lists only that card's pins, not another card's
+    def test_a_door_counts_its_own_card_alone(self):
+        # each door counts only what stands at and beneath its own node
         self._login()
         self._pinned("/rack/a/x", "swap", hours=2)
         self._pinned("/other/b/y", "swap", hours=2)
+        self.tree.upsert("/calm", StatusCode.OK)
         body = self.client.get("/status").get_data(as_text=True)
-        frag = body.split('data-pop-for="/rack"', 1)[1].split("</template>", 1)[0]
-        self.assertIn("/rack/a/x", frag)         # /rack's own pin is in its popover
-        self.assertNotIn("/other/b/y", frag)     # another card's pin is not
+        for card in ("/rack", "/other"):
+            self.assertIn(f'href="/notes{card}" title="Handle it — 1 handled: '
+                          f'1 node in maintenance"', body)
+        self.assertIn('href="/notes/calm" title="Handle it"', body)
 
     def test_no_maintenance_surfaces_without_pins(self):
         self._login()
@@ -1445,10 +1451,12 @@ class WebTests(TestCase):
                          description="The API health check", frequency_seconds=300)
         body = self.client.get("/status/svc/api").get_data(as_text=True)
         self.assertIn("The API health check", body)
-        # its status in its frame's head, as a box says it (backlog #91 §3.5)
+        # its status in its frame's head, as a box says it (ADR-0127 decision 8)
         self.assertIn('<span class="status-node__state">', body)
         self.assertIn("History", body)
-        self.assertIn("Set maintenance", body)   # pan is an admin
+        # its door, which opens its Notes tab, where every kind is set — pan is an
+        # admin
+        self.assertIn('href="/notes/svc/api" title="Handle it"', body)
 
     def test_history_page(self):
         self._login()
@@ -1810,7 +1818,10 @@ class WebTests(TestCase):
                 "pins": [{"path": "/db", "slug": "", "id": "5c1d0a7e3f4b2c18",
                           "kind": "maintenance", "note": "from the backup",
                           "set_at": "2026-01-01T00:00:00Z",
-                          "expires_at": far.isoformat(), "set_by": "ada"}]}))
+                          "schedule": Schedule.one_off(
+                              datetime(2026, 1, 1, tzinfo=UTC), far,
+                              "Europe/Berlin").text(),
+                          "set_by": "ada"}]}))
             app_module._restore_state(_Roots(), state)  # type: ignore[arg-type]
             self._login()   # pan is an admin
             self.tree.upsert("/little-sister", StatusCode.OK, frequency_seconds=3600)
@@ -2066,7 +2077,7 @@ class WebTests(TestCase):
         self.assertIn('<td class="text-muted">2,811 B, refused</td>', body)
 
     def test_system_says_what_each_check_is_reached_through(self):
-        # the graph on one page (backlog #38 A): *how many* checks one
+        # the graph on one page (ADR-0084): *how many* checks one
         # dependency can quiet is the question to ask before declaring it, and
         # node by node it is not a question anybody asks
         from little_sister.engine import CheckInfo
@@ -2768,7 +2779,7 @@ class WebTests(TestCase):
         self.assertIn('data-ls-layout="kiosk"', body)
 
     def test_the_way_out_is_the_menus_first_row_and_out_of_the_bar(self):
-        # The session's row stands first in the menu (backlog #91): whom this browser is
+        # The session's row stands first in the menu (ADR-0029): whom this browser is
         # signed in as, by the name a pin is recorded against, and Log out — above the
         # looks and outside their form, the one way to /logout on the page.
         self._login()
@@ -2798,7 +2809,7 @@ class WebTests(TestCase):
 
     def test_the_looks_stand_under_a_headline_that_says_where_they_are_kept(self):
         # *Display*, and beneath it the line that says where the choices are kept
-        # (backlog #91): the form they post in is named and described by the two, and
+        # (ADR-0029): the form they post in is named and described by the two, and
         # both stand before the first group.
         self._login()
         form = parse(self.client.get("/status").get_data(as_text=True)).one(
@@ -3070,7 +3081,7 @@ class WebTests(TestCase):
 
 
 class ConfiguredLookTests(TestCase):
-    """The page draws the first look its files say (ADR-0128, backlog #91 §7.5): a
+    """The page draws the first look its files say (ADR-0128): a
     level closed where its node's `chips` says so, the failure budget's openings, a
     node's configured fold standing from the first paint, and each box's own line
     budget — and a level nobody spoke for drawn as the built-in look, open but for
@@ -3132,9 +3143,10 @@ class ConfiguredLookTests(TestCase):
                          "false")
 
     def test_a_level_nobody_speaks_for_starts_open_and_a_big_one_as_chips(self):
-        # the built-in look (§3.4): five quiet aspects and their probes open, and the
-        # thirty-one quiet leaves of a level the net calls big start as chips, priced
-        # as the planner prices a configured run — until a file says otherwise
+        # the built-in look (ADR-0128 decision 2): five quiet aspects and their
+        # probes open, and the thirty-one quiet leaves of a level the net calls big
+        # start as chips, priced as the planner prices a configured run — until a
+        # file says otherwise
         for name in ("a1", "a2", "a3", "a4", "a5"):
             self.tree.upsert(f"/nas/{name}/probe", StatusCode.OK)
         for index in range(31):
@@ -3836,7 +3848,7 @@ class SettingResolutionTests(TestCase):
         with self.assertLogs("little_sister", level="WARNING") as caught:
             key = app_module._session_key()
         self.assertEqual(len(key), 64)
-        # …and says so where somebody looks, not only in the log (backlog #70):
+        # …and says so where somebody looks, not only in the log:
         # a standing note, WARN, for the life of the process.
         line = self._noted("secret-key")
         self.assertIs(line.code, StatusCode.WARN)
@@ -3987,12 +3999,13 @@ class FailingLinesFirstTests(TestCase):
 
     @staticmethod
     def _said(line):
-        """A line's words, without the chips of its actions rail."""
+        """A line's words, without the chips of its actions rail and the mark of
+        what handles it (ADR-0143)."""
         parts = []
         for child in line.children:
             if isinstance(child, str):
                 parts.append(child)
-            elif not child.has("reason-actions"):
+            elif not (child.has("reason-actions") or child.has("line-mark")):
                 parts.append(child.text())
         return " ".join("".join(parts).split())
 
@@ -4430,7 +4443,7 @@ class RunArrowTests(TestCase):
 
     def test_the_leaf_page_says_the_next_update(self):
         # The Time card states the next update on its own line (ADR-0044 decision
-        # 8), and since a leaf's page is framed as a branch's is (backlog #91 §3.5)
+        # 8), and since a leaf's page is framed as a branch's is (ADR-0127 decision 8)
         # its head carries the time and its arrow as every head does — the branch's
         # page has both, its head's arrow and its Time card. The fact under test is
         # unchanged: this page names the check, so this page carries its next
@@ -4586,7 +4599,7 @@ class LookTests(TestCase):
                          [("outline", True, "outline"), ("wash", False, "wash")])
 
     def test_each_group_says_beneath_its_heading_what_it_changes(self):
-        # The page's help on its settings, beside the choice (backlog #91): a line
+        # The page's help on its settings, beside the choice (ADR-0029): a line
         # beneath every heading, the layout's too; each group is a radio group its
         # heading names and its line describes, so a screen reader says both as the
         # focus enters it; the failures' line, beside the words that say what they do,
@@ -4717,8 +4730,8 @@ class ChipRunWidthTests(TestCase):
     share — the characters of the widest of its children's names, open or closed, at
     most one and a half times their 90th percentile, and of the largest count of
     leaves among its branches, each at 0.85 of a `0` of the chip's font, and the
-    chip's padding, border, cue and margins at their size (backlog #91's note, §2,
-    2026-10-17) — and that count, which `tree.js` keeps room for when it measures the
+    chip's padding, border, cue and margins at their size (ADR-0127
+    decision 12) — and that count, which `tree.js` keeps room for when it measures the
     names. Taken from what never changes with status: a leaf brings no room for its
     lines, and the leaves are counted on the unfiltered tree, as the chips count
     them."""
@@ -4790,8 +4803,8 @@ class ChipRunWidthTests(TestCase):
                          " + 20px + 1.65em)")
 
     def test_the_planner_takes_each_chips_own_width_beside_its_levels(self):
-        # what a run that holds one column wraps by (backlog #91's note, §2,
-        # 2026-10-17): each closed child's name and the digits of its leaves where it
+        # what a run that holds one column wraps by (ADR-0127 decision 12):
+        # each closed child's name and the digits of its leaves where it
         # is a branch, with the chrome of a chip that draws a count or none, in the
         # planner's tenths of a pixel — from what never changes with status, as its
         # level's estimate is; a level the look leaves open takes none
@@ -4852,7 +4865,7 @@ class ChipRunWidthTests(TestCase):
 
 
 class NodeFactsTests(TestCase):
-    """The shared node-facts block (ADR-0044 decision 8, questions §4.8): time,
+    """The shared node-facts block (ADR-0044 decision 8): time,
     `report` and `config` in one partial, rendered by the leaf page and — for the
     first time — by the branch page, so a container stops being the one node whose
     stored text nothing renders."""
@@ -5111,6 +5124,7 @@ class ContainerHeadTests(TestCase):
         head = self._page(branch).split('class="status-node viewed-head ', 1)[1]
         cue = re.search(r"status-cue--([a-z]+)", head)
         word = re.search(r'status-node__state">'
+                         r'(?:<a class="door-mark state-door.*?</a>)?'
                          r'(?:<span class="status-card__time">[^<]*</span>)?'
                          r"([a-z]+)", head)
         assert cue is not None and word is not None
@@ -5390,7 +5404,8 @@ class TimeCardTests(TestCase):
         # Observed, as the card says it: a node the instance re-asserts on its own
         # tick goes stale too, and nothing checks it. Said once in the page's head,
         # as on every box, and the Time card says when: the sentence beneath the
-        # lines that said it a third time went with the framed page (backlog #91 §3.5).
+        # lines that said it a third time went with the framed page
+        # (ADR-0127 decision 8).
         self.tree.upsert("/svc/api", StatusCode.OK, stale_after=0.01)
         time.sleep(0.05)
         body = self.client.get("/status/svc/api").get_data(as_text=True)
@@ -5409,7 +5424,7 @@ class AboutCardTests(TestCase):
     stands in the band or the head any more, and the node's other views say neither.
 
     The `about` stood open in the band on every view of a node, beneath the trail and
-    the title (backlog #91 §3.5), where on a phone it took most of the first screen
+    the title (ADR-0127 decision 8), where on a phone it took most of the first screen
     before the node's status; the `description` stood beneath the head's row. The
     card stands beside *Time* where the facts' block is wide enough for both and
     before *Configuration* where it is not — the block's stylesheet decides, below,
@@ -5943,10 +5958,11 @@ class ContentSecurityPolicyTests(TestCase):
     def test_the_switches_and_the_menu_radios_submit_through_the_script(self):
         self._login()
         body = self.client.get("/status").get_data(as_text=True)
-        # two filters, six themes, three layouts, two values of each of five looks
-        # and four of the head's buttons — the chips switch and the depth control
-        # went with dense mode (ADR-0127 decision 7)
-        self.assertEqual(body.count("data-ls-submit"), 25)
+        # two filters and *◇ details* (ADR-0147 decision 6), six themes, three
+        # layouts, two values of each of five looks and four of the head's buttons —
+        # the chips switch and the depth control went with dense mode (ADR-0127
+        # decision 7)
+        self.assertEqual(body.count("data-ls-submit"), 26)
         self.assertIn("js/prefs.js", body)
 
     def test_each_preference_form_keeps_a_noscript_submit(self):
@@ -6927,7 +6943,7 @@ class SubjectSeriesTests(TestCase):
 
 
 class TreeMarkupTests(TestCase):
-    """The tree's markup (ADR-0127, backlog #91 §7.7): what rides on each node for
+    """The tree's markup (ADR-0127): what rides on each node for
     `tree.js` — the markers, the chip's counts in their words, the head's icons and
     their pressed states, the band's three buttons — and what the server does not
     draw: a pin editor in every head, icons on the kiosk."""
@@ -6996,6 +7012,15 @@ class TreeMarkupTests(TestCase):
                  if not isinstance(control, str)
                  and control.attrs.get("data-control") == kind]
         assert len(found) == 1, f"{len(found)} {kind} icons on {path}"
+        return found[0]
+
+    def _door(self, page, path):
+        """The head's door, ◇, wherever the look stands it: among the icons, or lit in
+        the state cluster under the looks whose toolbar shows only under the pointer
+        (ADR-0147 decision 1)."""
+        found = [link for link in self._head(self._node(page, path)).all(tag="a")
+                 if link.attrs.get("data-control") == "door"]
+        assert len(found) == 1, f"{len(found)} doors on {path}"
         return found[0]
 
     # --- the boxes' fills ---
@@ -7150,7 +7175,7 @@ class TreeMarkupTests(TestCase):
         self.assertTrue(page.one("status-grid").attrs.get("data-rendered-s"))
 
     def test_a_page_marks_its_node_as_the_pages_root(self):
-        # the page's node is its frame, marked as the page's root (§7.7), and the
+        # the page's node is its frame, marked as the page's root, and the
         # grid is the frame's level; the wall has no frame and no root
         self.tree.upsert("/team/a/one", StatusCode.OK)
         page = self._page("/status/team")
@@ -7177,9 +7202,8 @@ class TreeMarkupTests(TestCase):
         self.addCleanup(setattr, app_module, "first_looks", None)
         page = self._page()
         icons = self._icons(self._node(page, "/team"))
-        # ‖ and ✓ last, for an admin: ‖ on a node with no pin of its own, ✓ where
-        # something fails at or beneath it
-        self.assertEqual(self._kinds(icons), ["page", "ok", "chips", "pin", "ack"])
+        # ◇ last, the node's door, for every reader (ADR-0147 decision 1)
+        self.assertEqual(self._kinds(icons), ["page", "ok", "chips", "door"])
         link = self._icon(page, "/team", "page")
         self.assertEqual((link.tag, link.attrs.get("href")), ("a", "/status/team"))
         self.assertEqual(link.attrs.get("aria-label"), "open the page of team")
@@ -7203,7 +7227,7 @@ class TreeMarkupTests(TestCase):
         self.assertEqual(self._node(page, "/team/b").attrs.get("data-chips"), "mixed")
         # a leaf has no ▤, and a node with nothing healthy beneath it no funnel
         self.assertEqual(self._kinds(self._icons(self._node(page, "/team/b/bad"))),
-                         ["page", "pin", "ack"])
+                         ["page", "door"])
         # the shapes are drawn once for the page, outside the grid
         self.assertEqual(len(page.all("icon-sprite")), 1)
         self.assertEqual(self._page("/status?fragment=1").all("icon-sprite"), [])
@@ -7229,7 +7253,7 @@ class TreeMarkupTests(TestCase):
         page = self._page("/status/team?depth=0")
         card = self._node(page, "/team")
         self.assertTrue(card.has("is-closed"))
-        self.assertEqual(self._kinds(self._icons(card)), ["ok", "pin"])
+        self.assertEqual(self._kinds(self._icons(card)), ["ok", "door"])
 
     def test_the_kiosk_draws_no_icons(self):
         self.tree.upsert("/team/a/one", StatusCode.OK)
@@ -7410,82 +7434,126 @@ class TreeMarkupTests(TestCase):
         self.assertEqual(self._own(panel, "reason-more").attrs.get("aria-controls"),
                          "lines/db")
 
-    def test_an_admins_pin_mark_stands_on_every_open_head_without_a_pin(self):
-        # ‖ on a card's head and on a nested box's alike, a link to the node's page
-        # without script, saying whether the pin would cover others, its
-        # `aria-expanded` the script's once it is a control; none on a pinned node,
-        # whose block carries Edit and Clear
+    def test_every_open_head_carries_its_door_for_every_reader(self):
+        # ◇ on a card's head and on a nested box's alike, a link to the node's Notes
+        # tab, lit with how many parts are handled at and beneath it — a pinned node's
+        # own among them — and plain where nothing is (ADR-0147 decisions 1 and 2)
         self.tree.upsert("/team/a/one", StatusCode.OK, "fine")
         self.tree.upsert("/team/b", StatusCode.OK, show_when_quiet=True)
         self.tree.set_maintenance("/team/b", "planned", expires_at=self.far,
                                   set_by="pan")
         page = self._page()
-        card = self._icon(page, "/team", "pin")
+        card = self._door(page, "/team")
         self.assertEqual((card.tag, card.attrs.get("href"), card.attrs.get("title"),
-                          card.attrs.get("aria-label"),
-                          card.attrs.get("aria-expanded")),
-                         ("a", "/status/team", "Set maintenance",
-                          "set maintenance for /team", None))
-        self.assertIn("data-beneath", card.attrs)
+                          card.attrs.get("aria-label")),
+                         ("a", "/notes/team",
+                          "Handle it — 1 handled: 1 node in maintenance",
+                          "handle /team — 1 handled: 1 node in maintenance"))
+        self.assertTrue(card.has("is-lit"))
+        self.assertEqual(card.one("door__count").text(), "1")
         self.assertTrue(card.one("icon-mark").one("", "use").attrs["href"]
-                        .endswith("#ls-icon-pin"))
-        box = self._icon(page, "/team/a", "pin")
-        self.assertEqual(box.attrs.get("href"), "/status/team/a")
-        self.assertIn("data-beneath", box.attrs)
-        leaf = self._icon(page, "/team/a/one", "pin")
-        self.assertNotIn("data-beneath", leaf.attrs)          # a leaf covers itself
-        self.assertEqual(self._kinds(self._icons(self._node(page, "/team/b"))),
-                         ["page"])                            # pinned: no ‖
-        # a node the filter emptied still says the pin would cover what is beneath
-        self.tree.upsert("/team/a", StatusCode.WARN, "the fan is loud")
-        page = self._page("/status?hide_ok=1")
-        self.assertEqual(self._node(page, "/team/a").all("tree-kids"), [])
-        self.assertIn("data-beneath", self._icon(page, "/team/a", "pin").attrs)
-
-    def test_a_page_carries_one_pin_editor_outside_the_grid_and_the_fragment_none(self):
-        self.tree.upsert("/team/a/one", StatusCode.OK)
-        body = self.client.get("/status").get_data(as_text=True)
-        page = parse(body)
-        editors = page.all("", "template")
-        editors = [t for t in editors if t.attrs.get("id") == "pin-editor"]
-        self.assertEqual(len(editors), 1)
-        template = editors[0]
-        # outside #status-grid, where the refresh never reaches it
-        grid = body.index('<div id="status-grid">')
-        self.assertGreater(body.index('<template id="pin-editor">'), body.index(
-            "</div>", grid))
-        fragment = self._page("/status?fragment=1")
-        self.assertEqual([t for t in fragment.all("", "template")
-                          if t.attrs.get("id") == "pin-editor"], [])
-        self.assertNotIn("maintenance-editor-form", self.client.get(
-            "/status?fragment=1").get_data(as_text=True))
-        # the pause mark's disclosure as it was, with the path and the words the
-        # script fills in, and the page's own address to come back to
-        setter = template.one("pin-setter")
-        self.assertTrue(setter.has("maintenance-editor-disclosure"))
-        self.assertEqual(setter.one("pin-editor__what").text(), "this node")
-        form = setter.one(tag="form")
-        hidden = {field.attrs.get("name"): field.attrs.get("value")
-                  for field in form.all(tag="input")
-                  if field.attrs.get("type") == "hidden"}
-        self.assertEqual(hidden, {"path": "", "action": "set", "set_at": "",
-                                  "next": "/status"})
-        deeper = parse(self.client.get("/status?depth=2").get_data(as_text=True))
-        fields = deeper.one("pin-setter").one(tag="form").all(tag="input")
-        self.assertEqual([field.attrs.get("value") for field in fields
-                          if field.attrs.get("name") == "next"], ["/status?depth=2"])
-        # none for a viewer, and none on the kiosk, where no head carries ‖
+                        .endswith("#ls-icon-door"))
+        box = self._icon(page, "/team/a", "door")
+        self.assertEqual((box.attrs.get("href"), box.attrs.get("title")),
+                         ("/notes/team/a", "Handle it"))
+        self.assertFalse(box.has("is-lit"))
+        pinned = self._door(page, "/team/b")
+        self.assertEqual(pinned.attrs.get("title"),
+                         "Handle it — 1 handled: 1 node in maintenance")
+        # a viewer reads the same door in their words
         with self.client.session_transaction() as session:
             session["admin"] = False
-        body = self.client.get("/status").get_data(as_text=True)
-        self.assertNotIn("pin-editor", body)
-        self.assertNotIn('data-control="pin"', body)
-        with self.client.session_transaction() as session:
-            session["admin"] = True
+        seen = self._door(self._page(), "/team")
+        self.assertEqual((seen.attrs.get("title"), seen.attrs.get("aria-label")),
+                         ("Notes — 1 handled: 1 node in maintenance",
+                          "the notes of /team — 1 handled: 1 node in maintenance"))
+
+    def test_a_filter_changes_nothing_a_door_says(self):
+        # a line pinned on a leaf that hide ok drops is still counted on the door above
+        # it: the route counts every door from the tree as it stands, before a filter
+        self.tree.upsert("/team/a/one", StatusCode.OK, [
+            Entry("x", "fine", code=StatusCode.OK),
+            Entry("y", "fine too", code=StatusCode.OK)], members=True)
+        self.tree.set_entry_maintenance("/team/a/one", "x", "planned",
+                                        expires_at=self.far, set_by="pan")
+        self.tree.upsert("/team/a", StatusCode.WARN, "the fan is loud")
+        words = "Handle it — 1 handled: 1 line in maintenance"
+        self.assertEqual(self._door(self._page(), "/team/a").attrs.get("title"), words)
+        page = self._page("/status?hide_ok=1")
+        self.assertEqual(self._node(page, "/team/a").all("tree-kids"), [])
+        self.assertEqual(self._door(page, "/team/a").attrs.get("title"), words)
+
+    def test_where_the_toolbar_hides_at_rest_a_lit_door_stands_in_the_state(self):
+        # ADR-0147 decision 1: under `pointer`, the library's look, and
+        # `pointer-name`, a lit ◇ stands at the start of the state cluster, a door as
+        # a mark is, and the toolbar carries none; a plain ◇ stays among the icons
+        self.tree.upsert("/team/a/one", StatusCode.OK, "fine")
+        self.tree.upsert("/team/b", StatusCode.OK, show_when_quiet=True)
+        self.tree.set_maintenance("/team/b", "planned", expires_at=self.far,
+                                  set_by="pan")
+        for look in ("", "pointer-name"):
+            with self.subTest(look=look or "the library's"):
+                if look:
+                    self.client.set_cookie("ls_prefs", f"head_buttons={look}")
+                page = self._page()
+                for path in ("/team", "/team/b"):
+                    door = self._door(page, path)
+                    self.assertTrue(door.has("is-lit"), path)
+                    self.assertTrue(door.has("state-door"), path)
+                    self.assertIn("data-door", door.attrs)
+                    state = door.parent
+                    assert state is not None
+                    self.assertTrue(state.has("status-card__state")
+                                    or state.has("status-node__state"), path)
+                    self.assertIs(state.first(), door, path)
+                    self.assertNotIn("door", self._kinds(self._icons(
+                        self._node(page, path))))
+                plain = self._icon(page, "/team/a", "door")
+                self.assertFalse(plain.has("is-lit"))
+
+    def test_where_the_toolbar_always_shows_the_door_stands_in_it_lit_or_plain(self):
+        self.tree.upsert("/team/b", StatusCode.OK, show_when_quiet=True)
+        self.tree.set_maintenance("/team/b", "planned", expires_at=self.far,
+                                  set_by="pan")
+        for look in ("line", "name"):
+            with self.subTest(look=look):
+                self.client.set_cookie("ls_prefs", f"head_buttons={look}")
+                page = self._page()
+                door = self._icon(page, "/team", "door")
+                self.assertTrue(door.has("is-lit"))
+                self.assertFalse(door.has("state-door"))
+                self.assertEqual(page.all("state-door"), [])
+
+    def test_no_page_carries_an_editor_of_a_new_pin_nor_the_kiosk_a_door(self):
+        # ‖ and the page's one editor went with the door: a new pin is set on the
+        # node's Notes tab (ADR-0147 decision 1)
+        self.tree.upsert("/team/a/one", StatusCode.OK)
+        for url in ("/status", "/status/team", "/status/team/a/one"):
+            with self.subTest(url=url):
+                body = self.client.get(url).get_data(as_text=True)
+                self.assertNotIn("pin-editor", body)
+                self.assertNotIn('data-control="pin"', body)
+                self.assertNotIn("rule-setter", body)
+                self.assertNotIn("maintenance-editor-form", body)
+        # the kiosk draws no control: where nothing is handled, no door at all
         self.client.set_cookie("ls_prefs", "layout=kiosk")
         body = self.client.get("/status").get_data(as_text=True)
-        self.assertNotIn("pin-editor", body)
-        self.assertNotIn('data-control="pin"', body)
+        self.assertNotIn('data-control="door"', body)
+        self.assertNotIn("door-mark", body)
+
+    def test_the_kiosk_shows_a_lit_door_as_a_mark(self):
+        self.tree.upsert("/team/a/one", StatusCode.OK)
+        self.tree.set_maintenance("/team/a/one", "planned", expires_at=self.far,
+                                  set_by="pan")
+        self.client.set_cookie("ls_prefs", "layout=kiosk")
+        page = self._page()
+        mark = self._head(self._node(page, "/team")).one("door-mark")
+        self.assertEqual(mark.tag, "span")
+        self.assertEqual(mark.attrs.get("title"),
+                         "1 handled: 1 node in maintenance")
+        self.assertEqual(mark.text(), "1 — 1 handled: 1 node in maintenance")
+        self.assertNotIn('data-control="door"', self.client.get("/status").get_data(
+            as_text=True))
 
     # --- the band ---
 
@@ -7503,13 +7571,13 @@ class TreeMarkupTests(TestCase):
                          ["Close all", "As configured", "Open all"])
         form = page.one("status-filters")
         self.assertEqual([field.attrs.get("name") for field in form.all("", "input")],
-                         ["view", "hide_ok", "hide_idle"])
+                         ["view", "hide_ok", "hide_idle", "handled_details"])
         self.assertFalse(modes.within(form))
         self.assertEqual(page.all("status-filters__depth"), [])
 
 
 class NodeFrameTests(TestCase):
-    """A node's page draws its node in a frame (backlog #91 §3.5): the page is the
+    """A node's page draws its node in a frame (ADR-0127 decision 8): the page is the
     same tree as the wall, rooted at the node, which is always open — framed with
     everything that is part of it. Its head is the frame's top, the rules acting on
     the node stated at its head and its lines beneath; its children inside; and its
@@ -7616,26 +7684,17 @@ class NodeFrameTests(TestCase):
         self.assertEqual([el for el in row.walk()
                           if el.attrs.get("data-control") == "toggle"], [])
 
-    def test_the_frames_head_carries_the_funnel_chips_and_pin_but_no_arrow(self):
+    def test_the_frames_head_carries_the_funnel_chips_and_door_but_no_arrow(self):
         self._team()
-        page = self._page("/status/team")            # an admin: ‖ on every card
+        page = self._page("/status/team")
         _frame, box = self._frame(page)
         icons = self._parts(box)[0].one("node-icons")
         self.assertEqual(
             [icon.attrs.get("data-control") for icon in self._parts(icons)],
-            ["ok", "chips", "pin", "ack"])
-        # ‖ opens the editor the head keeps, a button the script shows: without
-        # it the head's own *Set maintenance* stands beneath the row; ✓ the same
-        # for its *Mark seen*
-        pin, ack = self._parts(icons)[2:]
-        self.assertEqual((pin.tag, pin.attrs.get("aria-controls"),
-                          pin.attrs.get("aria-expanded"), pin.attrs.get("hidden")),
-                         ("button", "head-setter", "false", ""))
-        self.assertEqual(page.with_id("head-setter").tag, "details")
-        self.assertEqual((ack.tag, ack.attrs.get("aria-controls"),
-                          ack.attrs.get("aria-expanded"), ack.attrs.get("hidden")),
-                         ("button", "head-ack-setter", "false", ""))
-        self.assertEqual(page.with_id("head-ack-setter").tag, "details")
+            ["ok", "chips", "door"])
+        # ◇ is the page's door to its Notes tab, as every head's is (ADR-0147)
+        door = self._parts(icons)[2]
+        self.assertEqual((door.tag, door.attrs.get("href")), ("a", "/notes/team"))
         funnel = self._parts(icons)[0]
         # two healthy children and the node's own line, which rolls up an error
         self.assertEqual(
@@ -7713,22 +7772,23 @@ class NodeFrameTests(TestCase):
                     self.assertGreater(line.order, rules.order)
                 self.assertEqual(page.all("rule-frame"), [])
 
-    def test_an_admin_sets_the_nodes_pin_in_its_head_without_script(self):
+    def test_the_head_sets_nothing_new_its_door_opens_the_tab_that_does(self):
+        # no *Set maintenance* and no *Mark seen or silence* beneath the head's row:
+        # a new act is set on the node's Notes tab, which the door opens, with
+        # script and without (ADR-0147 decision 1)
         self._team()
         page = self._page("/status/team")
         head = self._parts(self._frame(page)[1])[0]
-        setter, = [part for part in self._parts(head) if part.has("rule-setter")]
-        self.assertEqual((setter.tag, setter.attrs.get("id")),
-                         ("details", "head-setter"))
-        self.assertIn("Set maintenance", self._parts(setter)[0].text())
-        self.assertIn("It puts everything beneath it in maintenance",
-                      setter.one("rule-block__scope").text())
-        self.assertGreater(setter.order, head.one("status-node__self").order)
+        self.assertEqual([part for part in self._parts(head)
+                          if part.has("rule-setter") or part.has("ack-setter")], [])
+        self.assertEqual([element for element in page.walk()
+                          if element.attrs.get("id") in ("head-setter",
+                                                         "head-ack-setter")], [])
         self._viewer()
         head = self._parts(self._frame(self._page("/status/team"))[1])[0]
-        self.assertEqual(head.all("rule-setter"), [])
-        self.assertEqual([icon for icon in head.all("node-icon")
-                          if icon.attrs.get("data-control") == "pin"], [])
+        (door,) = [icon for icon in head.all("node-icon")
+                   if icon.attrs.get("data-control") == "door"]
+        self.assertEqual(door.attrs.get("title"), "Notes")
 
     def test_its_own_lines_mark_the_healthy_ones_the_funnel_folds(self):
         self.tree.upsert("/svc/api", StatusCode.WARN, [
@@ -7741,9 +7801,9 @@ class NodeFrameTests(TestCase):
                          [True, False, True])            # the check's order
         head = self._parts(self._frame(page)[1])[0]
         icons = head.one("node-icons")
-        self.assertEqual(                                # pan is an admin
+        self.assertEqual(
             [icon.attrs.get("data-control") for icon in self._parts(icons)],
-            ["ok", "pin", "ack"])
+            ["ok", "door"])
         self.assertEqual(self._parts(icons)[0].attrs.get("data-n"), "2")
         mark = page.one("tree-ok")
         self.assertEqual(mark.attrs.get("hidden"), "")

@@ -209,7 +209,7 @@ class CodedEntryTests(TestCase):
 
 
 class SubjectTests(TestCase):
-    """What a line is about (backlog #32), carried and bounded."""
+    """What a line is about (ADR-0082), carried and bounded."""
 
     def test_a_subject_travels_and_declares_nothing(self):
         # data about a claim is not a claim: prose carrying a subject stays prose
@@ -227,7 +227,7 @@ class SubjectTests(TestCase):
 
 
 class RecordTests(TestCase):
-    """The record on an entry: what the check read, kept (backlog #32).
+    """The record on an entry: what the check read, kept (ADR-0082).
 
     The seam is `CheckResult`, so the tests that matter go through it — a record
     that travels only as far as `Entry` has not been validated at all.

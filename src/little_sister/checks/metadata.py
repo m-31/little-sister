@@ -34,7 +34,9 @@ of the node, whatever its name — and so do a check's file's top level, a ``nod
 entry and a type's declarations. :func:`read_stated` reads them out of any of those
 mappings into a :class:`Stated`, :func:`parse_subnode_looks` out of the block, and
 :func:`unknown_keys` names what one of them says that nothing reads, for the one line
-each loader writes about it. Which statement wins is :mod:`little_sister.first_look`'s.
+the ``nodes.yaml`` loader and a type's declarations write about it — in a check's file
+:func:`unknown_check_keys` finds it, and the check refuses it (ADR-0151). Which
+statement wins is :mod:`little_sister.first_look`'s.
 """
 from __future__ import annotations
 
@@ -120,8 +122,8 @@ class Statements:
     nodes the check writes: ``own`` for the check's own node, its ``children`` for
     each child of it, and ``by_name`` for every subnode of a name, at any depth
     (ADR-0128). The two places are kept apart because the file's ``children:``
-    stands between the file's names and the type's (§3.4 of the interactive wall's
-    note): the resolver asks them in that order."""
+    stands between the file's names and the type's (ADR-0128 decisions 2 and 3): the
+    resolver asks them in that order."""
     own: Stated = field(default_factory=Stated)
     by_name: Mapping[str, Stated] = field(default_factory=dict)
 
@@ -355,21 +357,31 @@ def parse_subnode_tags(config: dict[str, Any],
     return stated
 
 
-def unknown_check_keys(config: Mapping[str, Any]) -> list[str]:
-    """What a check's file says the library does not read, of the keys the library
-    owns: in a ``subnodes:`` entry, in a ``children:`` block under one, and in the
-    top level's ``children:`` block. The rest of the top level is the type's, which
-    the library cannot judge."""
-    found: list[str] = []
-    raw = config.get("children")
-    if isinstance(raw, Mapping):
-        found.extend(unknown_keys(raw, CHILDREN_KEYS, "children"))
+def unknown_check_keys(config: Mapping[str, Any]
+                       ) -> list[tuple[str, list[str], tuple[str, ...]]]:
+    """What a check's file writes that nothing takes in the blocks the library reads
+    beneath its top level (ADR-0151 decision 3): for each place — the top level's
+    ``children:`` block, a ``subnodes:`` entry, a ``children:`` block under one — its
+    dotted name, the keys it writes that it does not take, sorted, and the keys it
+    takes. The top level itself is the check's to judge, which knows what its type
+    states; the check refuses every place at once."""
+    found: list[tuple[str, list[str], tuple[str, ...]]] = []
+
+    def place(bag: object, known: tuple[str, ...], where: str) -> None:
+        if not isinstance(bag, Mapping):
+            return
+        keys = sorted(str(key) for key in bag if str(key) not in known)
+        if keys:
+            found.append((where, keys, known))
+
+    place(config.get("children"), CHILDREN_KEYS, "children")
     subnodes = config.get("subnodes")
     if isinstance(subnodes, Mapping):
         for name, meta in subnodes.items():
+            place(meta, STATED_SUBNODE_KEYS, f"subnodes.{name}")
             if isinstance(meta, Mapping):
-                found.extend(unknown_keys(meta, STATED_SUBNODE_KEYS,
-                                          f"subnodes.{name}"))
+                place(meta.get("children"), CHILDREN_KEYS,
+                      f"subnodes.{name}.children")
     return found
 
 def resolve_text(configured: str, default: str,

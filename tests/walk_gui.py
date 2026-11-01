@@ -26,8 +26,8 @@ with a gallery, the marked steps first::
     uv run python tests/walk_gui.py                          # → var/gui-walk/index.html
 
 A fact that is fixed moves into a test of Mode 5, which is where a claim is held;
-``tests/test_walk_gui.py`` holds the facts themselves, each seen marking a page
-that is broken in its way and passing one that is not.
+``tests/test_walk_gui_browser.py`` holds the facts themselves, each seen marking a
+page that is broken in its way and passing one that is not.
 
 Dev-only: lives under ``tests/`` and never ships in the package.
 """
@@ -52,6 +52,12 @@ from urllib.parse import urlencode
 
 _HERE = Path(__file__).resolve().parent
 _REPO_ROOT = _HERE.parent
+# Run as a script, this file is no part of the `tests` package: the repository's root
+# goes on the path, as `tests/sweep_contrast.py` puts it, for the browser every browser
+# file launches.
+sys.path.insert(0, str(_REPO_ROOT))
+from tests.browser_binary import chromium  # noqa: E402
+
 _DEFAULT_OUT = _REPO_ROOT / "var" / "gui-walk"
 
 #: What the pages load from a CDN, vendored as Mode 4 vendors Bootstrap: a URL of
@@ -59,10 +65,6 @@ _DEFAULT_OUT = _REPO_ROOT / "var" / "gui-walk"
 #: the file is, so a walk needs no network and measures no unstyled page.
 VENDORED = _REPO_ROOT / "var" / "bootstrap" / "node_modules"
 _CDN = re.compile(r"https://cdn\.jsdelivr\.net/npm/((?:@[^/@]+/)?[^/@]+)@[^/]+/(.+)")
-
-#: A sandbox pins one browser build; a Playwright from the lock may expect another,
-#: so the one that is there is what runs (as ``tests/sweep_contrast.py`` does).
-_SANDBOX_CHROMIUM = Path("/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
 
 #: How far a page's layout may shift during a step before the step is marked: the
 #: line web vitals draws between a layout that is stable and one that needs work.
@@ -134,7 +136,7 @@ def chosen_looks(asked: Sequence[str]) -> dict[str, str]:
 #: The facts a step is measured against: a name, what it holds a page to, and a
 #: script that answers every place the page does not hold it — an empty list where
 #: it does. Each is a function of the document alone, so a test can hand it a page
-#: broken in its way (``tests/test_walk_gui.py``).
+#: broken in its way (``tests/test_walk_gui_browser.py``).
 FACTS: dict[str, tuple[str, str]] = {
     "page-width": (
         "A page is no wider than its screen.",
@@ -581,8 +583,8 @@ ABOVE = "/ci/jobs"
 
 
 def _pin_what_goes(walk: Walk, base: str, wait: Callable[[float], None]) -> bool:
-    """Pin the job name that comes and goes while its node stands, through the wall's
-    own editor; whether the pin was set."""
+    """Pin the job name that comes and goes while its node stands, in the drawer its
+    card's ◇ opens over the page (ADR-0147); whether the pin was set."""
     page = walk.page
     for _ in range(40):
         walk.goto(f"{base}/status{ABOVE}")
@@ -595,16 +597,26 @@ def _pin_what_goes(walk: Walk, base: str, wait: Callable[[float], None]) -> bool
         walk.step("pin: the node never stood", "no pin set")
         return False
     try:
-        card.first.locator('.status-card__head [data-control="pin"]').first.click(
+        card.first.locator('.status-card__head [data-control="door"]').first.click(
             timeout=3000)
+        # Each wait is a function, which Playwright calls as one: an expression it
+        # has to wait on it compiles in the page, which the page's policy refuses
+        # and reports — a report the walk would then mark as the page's own.
         page.wait_for_function(
-            "document.activeElement !== null"
-            " && document.activeElement.name === 'note'", timeout=3000)
-        page.keyboard.type("The walk pins what comes and goes.")
-        walk.step("pin: the editor open in its card")
-        with page.expect_navigation(timeout=5000):
-            card.first.locator(
-                "form.maintenance-editor-form button[type=submit]").first.click()
+            "() => { const f = document.querySelector('.ls-drawer__frame');"
+            " const d = f && f.contentDocument;"
+            " return document.getElementById('ls-drawer').open && d"
+            " && d.readyState === 'complete' && d.body"
+            " && d.body.hasAttribute('data-ls-panel'); }", timeout=5000)
+        frame = page.frame_locator(".ls-drawer__frame")
+        frame.locator(".ack-kind", has_text="Maintenance").click(timeout=3000)
+        form = frame.locator(".ls-kind-form[data-kind=maintenance]")
+        form.locator("textarea[name=note]").fill("The walk pins what comes and goes.")
+        walk.step("pin: the drawer open on its card")
+        form.locator(".maintenance-editor-form__actions > button[type=submit]").click(
+            timeout=3000)
+        page.wait_for_function("() => !document.getElementById('ls-drawer').open",
+                               timeout=5000)
         walk.step("pin: set")
         return True
     except Exception as error:
@@ -822,8 +834,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     with demo() as base:
         try:
             with sync_playwright() as play:
-                browser = play.chromium.launch(executable_path=(
-                    str(_SANDBOX_CHROMIUM) if _SANDBOX_CHROMIUM.is_file() else None))
+                browser = play.chromium.launch(executable_path=chromium())
                 # the demo's checks run every few seconds: let each have read once,
                 # and the kept series have something to draw
                 time.sleep(20)

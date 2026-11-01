@@ -137,9 +137,49 @@ info:
     the `occurrence` it is bound to, its `expires_at` null where it was given no end.
     `schema_version` is 3.
 
+    3.1.0 adds two kinds of pin. `silenced`: a failure that flaps, held through every
+    recovery until a deadline. Its part keeps its `code` and is counted above at the
+    silence's level — `OK`, or a warning at most — `contribution.by` saying
+    `silenced`; its item's `counts_as` is that level's table, `{"WARN": "OK", "ERROR":
+    "OK"}` or `{"ERROR": "WARN"}`, and its `expires_at` is never null. And `done`: an
+    entry's failure that is an event — a failed run — looked into and over, closed.
+    Its entry keeps its `code` and is counted `OK` in its node until it reads anything
+    other than the failure it closed, `contribution.by` saying `done`; its item says
+    that failure, `status`, and the event, `occurrence`, which is never null, and its
+    `expires_at` is null. A configured rule that counts how many of its parts fail
+    counts a part a person holds, seen or silenced, as it reads, and one marked done
+    as OK, which its `failing` says. A period's `cause` gains the silence's six, the
+    done's three, a line pin's edit, and a maintenance window's opening and closing, a
+    node's and a line's.
+    And a node's `entries` gains `not_reported`: each entry a pin or a person's
+    acknowledgment stands on that the node does not report now — a finding that comes
+    and goes, or every entry of a node whose check failed — its `slug` and its
+    `handled`, in the order it was set, and never among `items`: what stands on one
+    holds nothing until it is reported again. And a node gains `nodes_not_reported`,
+    beside its `children` and never among them: each node beneath it that is not
+    reported now — its check no longer returns it, or has not written it since the
+    instance started — and that a pin or a person's acknowledgment stands on, listed
+    at the nearest node above it that stands, with its `path`, what stands on it,
+    `handled`, and on its entries, `not_reported`, in the order what stands on it was
+    set; what stands on one holds nothing until it is reported again. And maintenance
+    is planned: an entry is a schedule — one window, set ahead or now, or a series —
+    and holds while a window of it is open. Every maintenance item in `handled` gives
+    the window open, `starts_at` and `expires_at` — a one-off's start and its end —
+    and `until`, its schedule's end, the last window it writes, and `sentence`, the
+    entry in the words the dashboard says it in, the deployment's zone and time format,
+    which a client shows as it is. A node gains `planned`, beside `handled` and never
+    among it: its own entry that stands and holds nothing now and its entries', an
+    entry's with its `slug`, the soonest first, each the pin's fields without
+    `counts_as` — it counts nothing until a window opens — with its next window,
+    `starts_at` and `expires_at`, both null where none is to open, `until`, `sentence`
+    and `why`, the dashboard's words for why no window is to open or from when its
+    windows stop. An entry or a node not reported now carries what is planned for it in
+    its own record, `planned` beside `handled`, and such a record now stands for a
+    planned window alone. Nothing else moves, and `schema_version` stays 3.
+
     See `docs/api/README.md` (linked below) for auth, `curl` examples and how tokens
     are provisioned.
-  version: 3.0.0
+  version: 3.1.0
   contact:
     name: little-sister
     url: https://github.com/m-31/little-sister
@@ -515,6 +555,18 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Handled"
+        planned:
+          description: >-
+            What is planned for this node and for the entries it reports: its own
+            maintenance entry that stands and holds nothing now — a window set ahead,
+            or a series between two of its windows — and its entries', an entry's with
+            its `slug`, the soonest next window first and then any with none to open.
+            Never among `handled`: an entry is in one list at a time, and one listed
+            here counts nothing until a window of it opens. Empty on most nodes. Since
+            3.1.0.
+          type: array
+          items:
+            $ref: "#/components/schemas/Planned"
         stale:
           type: boolean
           description: >-
@@ -577,6 +629,18 @@ components:
             and case-insensitive, so `node2` precedes `node10`.
           items:
             $ref: "#/components/schemas/Status"
+        nodes_not_reported:
+          type: array
+          description: >-
+            The nodes beneath this one that are not reported now — their check no
+            longer returns them, or has not written them since the instance started —
+            and that a pin or a person's acknowledgment stands on, each listed at the
+            nearest node above it that stands, in the order what stands on each was
+            set. Never among `children`: none is a node now, and what stands on one
+            holds nothing until it is reported again. A node whose whole branch is
+            gone is listed at the root. Empty on most nodes. Since 3.1.0.
+          items:
+            $ref: "#/components/schemas/NodeNotReported"
       required:
         - path
         - name
@@ -592,10 +656,12 @@ components:
         - order
         - show_when_quiet
         - handled
+        - planned
         - stale
         - changes
         - entries
         - children
+        - nodes_not_reported
 
     Contribution:
       type: object
@@ -623,13 +689,19 @@ components:
             many times in a row as this deployment asked for, so the parent still counts
             what it published before. `seen` — a person accepted the node's failure
             as it stands, so the parent counts it `OK` until it changes, the node's
-            own `code` staying what it reads. `aggregation` — a rule the deployment
+            own `code` staying what it reads. `silenced` — a person silenced the
+            node's failure until a deadline, so the parent counts it at the silence's
+            level, `OK` or a warning at most, through every recovery, the node's own
+            `code` staying what it reads. `aggregation` — a rule the deployment
             configured changes what the parent counts of it: a cap, healing, a floor,
             the node left out, or any of them while fewer than a number of its
             siblings fail; the code is what is counted, null where it counts nothing,
             and the node's own `code` stays what it reads. On an entry the same object
             says what the entry's node counted of it — `seen` an entry whose failure a
-            person accepted, counted `OK` in its node. Further rules add further names,
+            person accepted, counted `OK` in its node, `done` one whose failure a
+            person closed, counted `OK` in its node until it reads anything else, and
+            `silenced` one a person silenced, counted at its level. Further rules add
+            further names,
             which is a compatible change; treat an unknown name as "something changed
             what this node contributed" and show it.
           examples: ["maintenance"]
@@ -695,9 +767,21 @@ components:
             The entries, in the order the check emitted them. Never sorted.
           items:
             $ref: "#/components/schemas/Entry"
+        not_reported:
+          type: array
+          description: >-
+            What stands on or is planned for an entry the node does not report now — a
+            pin, a person's acknowledgment, or a maintenance entry planned — a finding
+            that comes and goes, or every entry of a node whose check failed, in the
+            order what stands on each was set. Never among `items`: none is an entry
+            now, and what stands on one holds nothing until it is reported again. Empty
+            on most nodes. Since 3.1.0.
+          items:
+            $ref: "#/components/schemas/NotReported"
       required:
         - addressable
         - items
+        - not_reported
 
     Entry:
       type: object
@@ -809,6 +893,80 @@ components:
         - handled
         - contribution
 
+    NotReported:
+      type: object
+      description: >-
+        An entry its node does not report now, by its key, and what stands on or is
+        planned for it, holding nothing until the entry is reported again. Since 3.1.0.
+      properties:
+        slug:
+          type: string
+          description: >-
+            The entry's key, as its check last wrote it, and what stands on it is held
+            against.
+          examples: ["stress-api-pr-42"]
+        handled:
+          type: array
+          description: >-
+            What stands on the entry: its pin, a person's acknowledgment, or both, each
+            as an entry's `handled` lists it. Empty where the entry has a window
+            planned alone.
+          items:
+            $ref: "#/components/schemas/Handled"
+        planned:
+          type: array
+          description: >-
+            Its maintenance entry that stands and holds nothing now, as a node's
+            `planned` lists one, without the `slug` this record has. Empty where
+            something stands on it alone; never empty with `handled`.
+          items:
+            $ref: "#/components/schemas/Planned"
+      required:
+        - slug
+        - handled
+        - planned
+
+    NodeNotReported:
+      type: object
+      description: >-
+        A node beneath the one that lists it that is not reported now, by its path,
+        and what stands on or is planned for it and its entries, holding nothing until
+        it is reported again. Since 3.1.0.
+      properties:
+        path:
+          type: string
+          description: >-
+            Absolute, slash-separated location of the node, where what stands on it is
+            held against.
+          examples: ["/platform/actions/retired-runner"]
+        handled:
+          type: array
+          description: >-
+            What stands on the node itself: its pin, a person's acknowledgment, or
+            both, each as a node's `handled` lists it. Empty where nothing does.
+          items:
+            $ref: "#/components/schemas/Handled"
+        planned:
+          type: array
+          description: >-
+            Its own maintenance entry that stands and holds nothing now, as a node's
+            `planned` lists one. Empty where it has none.
+          items:
+            $ref: "#/components/schemas/Planned"
+        not_reported:
+          type: array
+          description: >-
+            What stands on or is planned for its entries, each as a node's
+            `entries.not_reported` lists one, in the order what stands on each was set.
+            Of the three, one at least is not empty.
+          items:
+            $ref: "#/components/schemas/NotReported"
+      required:
+        - path
+        - handled
+        - planned
+        - not_reported
+
     OwnPeriod:
       type: object
       description: |-
@@ -838,9 +996,16 @@ components:
           type: string
           description: >-
             What moved it: `reading`, `pin-set`, `pin-edited` or `pin-ended`,
-            `line-pin-set` or `line-pin-ended`, `seen-set`, `seen-edited` or
+            `line-pin-set`, `line-pin-edited` or `line-pin-ended`, `pin-opened` or
+            `pin-closed` and `line-pin-opened` or `line-pin-closed` — a maintenance
+            window opening or closing, a node's or a line's — `seen-set`, `seen-edited` or
             `seen-ended`, `line-seen-set`, `line-seen-edited` or `line-seen-ended` — a
-            failure marked seen, that mark changed, or its end — `removed`, or, on
+            failure marked seen, that mark changed, or its end — `silenced-set`,
+            `silenced-edited` or `silenced-ended`, `line-silenced-set`,
+            `line-silenced-edited` or `line-silenced-ended` — a failure silenced, the
+            silence changed, or its end — `line-done-set`, `line-done-edited` or
+            `line-done-ended` — a line's failure marked done, that done's note changed,
+            or its end — `removed`, or, on
             `period` alone, `stale` — a reading gone stale beneath the node, or a
             shield ended by its dependency's silence — and `rule` — a rule the
             deployment configures beginning to count beneath it, which `Period.rule`
@@ -965,8 +1130,9 @@ components:
         One thing that handles a node or an entry now: a pin a person set, or a rule
         the deployment configured. Every one has an `id`, a `kind`, a `source`, a
         `note` and what it makes its part count as; a pin says who set it and when
-        and until when, a `seen` the failure it accepted as well, and a configured
-        rule where it is written, since when, and where it acts.
+        and until when, a `seen` the failure it accepted as well, a `done` the
+        failure it closed, and a configured rule where it is written, since when,
+        and where it acts.
       properties:
         id:
           type: string
@@ -980,10 +1146,12 @@ components:
           description: >-
             What it is, the word `contribution.by` says it in: `maintenance` for a
             pin that puts its part in maintenance, `seen` for one that accepts its
-            part's failure as it stands, `aggregation` for a configured rule. Further
-            kinds add further words, which is a compatible change; show an unknown
-            one as it is.
-          examples: ["maintenance", "seen", "aggregation"]
+            part's failure as it stands, `done` for one that closes an entry's failure
+            that is an event, looked into and over, `silenced` for one that holds its
+            part's failure at a level through every recovery until a deadline,
+            `aggregation` for a configured rule. Further kinds add further words, which
+            is a compatible change; show an unknown one as it is.
+          examples: ["maintenance", "seen", "done", "silenced", "aggregation"]
         source:
           type: string
           enum: ["person", "configuration"]
@@ -1002,7 +1170,9 @@ components:
             rule is written in: `nothing`, or each status it names with what that
             counts as — `{"ERROR": "WARN"}` a cap, `{"WARN": "OK"}` healing. A
             maintenance pin's part counts `nothing`, and a seen one's failure `OK`,
-            `{"WARN": "OK", "ERROR": "OK"}`.
+            `{"WARN": "OK", "ERROR": "OK"}`, as a done one's does; a silenced one's as
+            its level holds it, the same table or a warning at most, `{"ERROR":
+            "WARN"}`.
           oneOf:
             - type: string
               enum: ["nothing"]
@@ -1033,20 +1203,54 @@ components:
             nobody has edited; clearing and setting it again honestly starts a new
             creation, and a new `id`.
           examples: ["2026-09-06T18:00:00Z"]
+        starts_at:
+          type: string
+          format: date-time
+          description: >-
+            A maintenance pin's — when the window open now began (RFC 3339, UTC): a
+            series' window's start, or a one-off's, which is where it was set unless it
+            was set ahead. Since 3.1.0.
+          examples: ["2026-11-07T21:00:00Z"]
         expires_at:
           type: [string, "null"]
           format: date-time
           description: >-
-            A pin's — when it ends by itself (RFC 3339, UTC). Every maintenance pin has
-            one; a `seen` has one only where it was given one, and is null otherwise,
-            ending as what it accepted changes.
+            A pin's — when it ends by itself (RFC 3339, UTC). A maintenance pin's, when
+            the window open now ends, which is its time left — a one-off's end, and for
+            a series never its schedule's end a year away, which is `until`; every
+            `silenced` has one, its deadline; a `seen` has one only where it was given
+            one, and is null otherwise, ending as what it accepted changes; a `done`
+            never has one, ending as its entry reads anything other than the failure it
+            closed.
           examples: ["2026-09-13T18:00:00Z", null]
+        until:
+          type: string
+          format: date-time
+          description: >-
+            A maintenance pin's — when its schedule ends (RFC 3339, UTC): the end of the
+            last window it writes, which is the pin's own end, where nothing is left of
+            it. A one-off's is its `expires_at`. Since 3.1.0.
+          examples: ["2027-10-31T04:00:00Z"]
+        sentence:
+          type: string
+          description: >-
+            A maintenance pin's — its schedule in the words the dashboard says it in,
+            its instants in the deployment's zone and time format: *Once, from … until
+            …*, or a series' rule, the time of day its windows start at and how long
+            each is, `until`, and the holiday list its rule leaves out — *Every Saturday
+            from 22:00 for 8 hours, until 2027-10-31 05:00:00, not on holidays in
+            Bavaria* — the entry's zone named beside its time of day where it is not
+            the deployment's. A client shows it as it is and computes nothing from it.
+            Since 3.1.0.
+          examples: ["Every Saturday from 22:00 for 8 hours, until 2027-10-31 05:00:00"]
         status:
           type: string
           enum: [WARN, ERROR]
           description: >-
             A `seen`'s — the status its part read when it was marked seen. A worse one
-            ends it, a better one does not.
+            ends it, a better one does not. A `done`'s — the failure it closed, which
+            its entry may read milder while it stands; a worse one ends it, as `OK`
+            does.
           examples: ["ERROR"]
         occurrence:
           type: [string, "null"]
@@ -1054,8 +1258,9 @@ components:
             A `seen`'s — what tells the failure it accepted from the next: its line's
             occurrence, the field its check type names or the identity of the reading
             the line was written from. Another one ends it. Null where it is bound to
-            the failing stretch it was set in, a node's own failure among them. Never
-            parse it.
+            the failing stretch it was set in, a node's own failure among them. A
+            `done`'s — the event it closed, the same field, and never null: another one
+            ends it. Never parse it.
           examples: ["7/1", null]
         file:
           type: string
@@ -1099,7 +1304,8 @@ components:
           type: integer
           description: >-
             A configured rule's that counts — how many of the parts it counts report a
-            status its table names now.
+            status its table names now, a part a person holds, seen or silenced,
+            counted as it reads, and one marked done as OK.
           examples: [1]
       required:
         - id
@@ -1107,6 +1313,107 @@ components:
         - source
         - note
         - counts_as
+
+    Planned:
+      type: object
+      description: >-
+        A maintenance entry that stands and holds nothing now: a window set ahead, a
+        series between two of its windows, or one whose holiday list keeps every
+        window left shut. The pin's fields as `handled` gives them, without
+        `counts_as` — it counts nothing until a window opens, and is then listed in
+        `handled` instead — with its next window and the words the dashboard lists it
+        in. Since 3.1.0.
+      properties:
+        slug:
+          type: string
+          description: >-
+            The entry's key, where it is planned for one of a node's entries and the
+            node lists it; absent where the node's own entry is, or where a record
+            names its part already.
+          examples: ["runner-2"]
+        id:
+          type: string
+          description: The pin's id, as `handled` gives it, kept when a window opens.
+          examples: ["7d9f1b3c5e7a9c2e"]
+        kind:
+          type: string
+          description: Its kind, `maintenance`; a further kind adds a word.
+          examples: ["maintenance"]
+        source:
+          type: string
+          enum: ["person"]
+          description: That a person set it.
+        note:
+          type: string
+          description: Why it stands, as raw Markdown, as `handled` gives it.
+          examples: ["Certificate rotation"]
+        set_by:
+          type: string
+          description: The person who last wrote it.
+          examples: ["ada"]
+        set_at:
+          type: string
+          format: date-time
+          description: When it was last written (RFC 3339, UTC).
+          examples: ["2026-11-01T09:00:00Z"]
+        created_by:
+          type: string
+          description: The person who first set it.
+          examples: ["ada"]
+        created_at:
+          type: string
+          format: date-time
+          description: When it was first set (RFC 3339, UTC).
+          examples: ["2026-11-01T09:00:00Z"]
+        starts_at:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            When its next window starts (RFC 3339, UTC), or null where no window is to
+            open — its holiday list cannot be had, or keeps every window left shut —
+            which `why` says.
+          examples: ["2026-11-14T21:00:00Z", null]
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            When its next window ends (RFC 3339, UTC), null beside a null `starts_at`.
+          examples: ["2026-11-15T03:00:00Z", null]
+        until:
+          type: string
+          format: date-time
+          description: >-
+            When its schedule ends (RFC 3339, UTC), the end of the last window it
+            writes: it stands until then, whatever its holiday list keeps shut.
+          examples: ["2027-10-31T04:00:00Z"]
+        sentence:
+          type: string
+          description: >-
+            Its schedule in the dashboard's words, as `Handled.sentence` gives it.
+          examples: ["Once, from 2026-11-14 22:00:00 until 2026-11-15 04:00:00"]
+        why:
+          type: [string, "null"]
+          description: >-
+            The dashboard's words for why no window is to open — *applies not at all*,
+            with why its holiday list cannot be had — or from when its windows stop,
+            beside a next start: *from 2028-01-01 00:00:00 its windows do not apply:
+            the list is not complete for 2028*. Null where its list stops none, which
+            is every entry that names no list.
+          examples: ["applies not at all: config/holidays.yaml lists no DE-BY", null]
+      required:
+        - id
+        - kind
+        - source
+        - note
+        - set_by
+        - set_at
+        - created_by
+        - created_at
+        - starts_at
+        - expires_at
+        - until
+        - sentence
+        - why
 
     Instance:
       type: object

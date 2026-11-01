@@ -1,7 +1,7 @@
 # ADR-0109 — A node says its children are complete, and one it no longer returns is removed
 
 - **Status:** Accepted
-- **Date:** 2026-10-25 (accepted 2026-10-03)
+- **Date:** 2026-11-01 (accepted 2026-10-03)
 - **Related:** [ADR-0007](0007-check-result-branches.md) (children are not pruned: the
   deferral this ends, and which this amends), [ADR-0060](0060-a-line-makes-no-claim.md)
   (decision 3: a child left out could not be read, which holds where nothing is said),
@@ -28,7 +28,9 @@
   [ADR-0110](0110-what-every-node-last-showed-is-kept-beside-the-log.md) (what is kept
   of a node beside the log),
   [ADR-0116](0116-a-path-with-no-node-says-what-is-known-of-it.md) (what a removed
-  node's own pages say of its path)
+  node's own pages say of its path),
+  [ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)
+  (decision 2: what stands on a node it no longer returns, counted where it stands)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -111,9 +113,15 @@ run, with everything it had.
 ### 4. Absence suspends a pin, and only its expiry disposes of it
 
 A pin on a removed node stays, and so does one on any of its lines and on the nodes
-beneath it. *Handled* lists it as a pin whose node is *not reported at present*
+beneath it: what stands on a node — a pin or a silence, on it or on one of its lines —
+stands as every pin does, whether or not its part is reported now
+([ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)
+decision 2). The snapshot carries it beside the nearest node above it that stands, never
+among that node's children: that node's door and its *Notes* tab count and list it, a
+closed chip's ◇ and the band's pill count it, and *Handled* lists it under its own path
+as standing on a node *not reported now*
 ([ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
-decision 8); it holds again the moment a node returns at its path; and it ends by its
+decision 8). It holds again the moment a node returns at its path, and it ends by its
 own expiry, as every pin does ([ADR-0014](0014-maintenance-persistence.md)). This is the
 rule a line's pin has ([ADR-0036](0036-addressable-reasons.md) decision 6), one level
 up, and a pin set for a migration survives its subject leaving and returning during it.
@@ -126,9 +134,10 @@ ends with its node, its row before the removal's
 start or adopted, and a node the tree makes at that path takes it. The rule is one for
 every pin and not for a removed node's alone, and it amends
 [ADR-0014](0014-maintenance-persistence.md) decision 3. A pin whose node was removed
-writes its set, its edit and its end as rows that change nothing. *Not reported at
-present* is also true of a pinned node no check has written yet since a start, which
-*Handled* lists the same way until its first reading.
+writes its set, its edit and its end as rows that change nothing. *Not reported now* is
+also true of a node no check has written since a start, which every start leaves for
+its next run to write: what stands on it is carried, counted and listed the same way
+until its first reading, and the words hold for both and never say *removed*.
 
 ### 5. A removal is an event, one for each node removed
 

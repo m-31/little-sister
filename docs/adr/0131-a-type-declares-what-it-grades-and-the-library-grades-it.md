@@ -1,7 +1,7 @@
 # ADR-0131 — A type declares what it grades, and the library grades it
 
 - **Status:** Accepted
-- **Date:** 2026-10-17
+- **Date:** 2026-11-01 (accepted 2026-10-17)
 - **Related:** [ADR-0086](0086-a-check-measures-and-grades.md) (a grading, pure over its
   records, its configuration and the clock — decision 6 — and a window graded by a call
   of its own — decision 8), [ADR-0126](0126-a-line-is-a-template-over-its-record.md)
@@ -18,7 +18,9 @@
   [ADR-0049](0049-the-check-authoring-surface.md) (the surface this adds to),
   [ADR-0080](0080-the-envelope-is-the-snapshot-published.md) (the envelope, which
   carries an entry's grading), little-sister-aws ADR-0003 (the pair, its spelling and
-  its comparison, which this makes the family's)
+  its comparison, which this makes the family's),
+  [ADR-0151](0151-a-type-states-the-keys-its-file-takes-and-any-other-stops-the-start.md)
+  (the keys a type states beside its gradings — decision 2 amended)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -55,12 +57,16 @@ what each declined is under *Alternatives considered*.
 
 ### 1. A type declares what it grades, and the library grades it
 
-A type declares every value it grades: a name, which is a stored key, one sentence, the
-record field it reads by its dotted name — the names a template addresses
+A type declares every value it grades, but a map that decides which bands it writes
+(decision 9): a name, which is a stored key, one sentence, the record field it reads by
+its dotted name — the names a template addresses
 ([ADR-0126](0126-a-line-is-a-template-over-its-record.md) decision 5) — its kind, and
 for a pair which way it grades, its default, and the key a deployment writes it under in
-the block of what it grades. The declarations pass to `Check.__init__` beside the forms,
-words and fields, and are checked when a check is built.
+the block of what it grades. A grading is named for the record field it reads, so that a
+template that writes the field and a configuration that writes its level say one word: a
+pair over `remaining` is `min_remaining`, one over `repositories` `min_repositories`. The
+declarations pass to `Check.__init__` beside the forms, words and fields, and are checked
+when a check is built.
 
 The grading asks the library for a verdict, `Check.verdict(name, reading, …)`: the
 code the named grading gives the reading under this check's configuration and the rule
@@ -86,22 +92,38 @@ number, a duration, a size, an amount or a share, as the type declares. A **set 
 accepted values** is a kind of its own, `http`'s `expected_status`. A rule writes the
 same spelling (decision 6).
 
-The others retire. This library's `thresholds:` blocks of `host-metrics`, `macos-memory`
-and `qnap-metrics`, `macos-memory`'s `warn_mb` and `error_mb`, and the `file` check's
+The others retire, and a retired spelling carries no refusal of its own
+([ADR-0151](0151-a-type-states-the-keys-its-file-takes-and-any-other-stops-the-start.md)
+decision 4). This library's `thresholds:` blocks of `host-metrics`, `macos-memory` and
+`qnap-metrics`, `macos-memory`'s `warn_mb` and `error_mb`, and the `file` check's
 `max_age` with `stale_code`, which become a pair with one level, are refused at start,
-naming the file and the key that replaces each; a package's own spellings retire when it
-adopts. The release notes say each at the top (PL10).
+each refusal naming the file and what its place takes: `thresholds:` and `stale_code`
+as keys their check does not take, a process entry's `warn_mb` and `error_mb` as keys
+the entry does not take, and `max_age` with a level as the pair's bare key refuses any
+value but null. A package's own spellings retire the same way when it adopts. The
+release notes say each at the top, since every configuration written against a retired
+key breaks.
 
 ### 3. A pair passes at its level: a maximum fails above it, a minimum below
 
 A level is the last value that passes. A pair grades one way, which its type declares
 and its name says — `max_…` fails above its levels, `min_…` below them — so a number in
 a configuration reads the same everywhere: `max_per_name_warn: 1` allows one, and
-`min_repos_warn: 20` asks for twenty. Equal levels, and an error level that is not
-beyond the warn level, are refused at start. The family's two minimums mean what they
-did as `min_` pairs, and the `file` check passed at its level already; the host metrics
-move by one step at the boundary, and `null` replaces a level written never to be
-reached.
+`min_repositories_warn: 20` asks for twenty. Equal levels, and an error level that is
+not beyond the warn level, are refused at start. So, on Lex's word of 2026-10-31, is a
+minimum's level that could never fire: a level of 0 under a `min_…` pair whose unit is a
+count, a size or a share, none of which is ever below 0, so that a deployment that wrote
+one would hold a judgment switched off while it still looked set. `<key>: null` is the
+one way to switch a minimum off, and the refusal says so, naming the key — written in a
+block or in a rule's keys, or declared as a type's default. An amount is left out, since
+a month's cost goes below zero where its credits exceed its charges, and a minimum of 0
+over one can fire; so is a number, which may be negative; and a duration's level is a
+second at least already. The family's three minimums mean what they did as `min_`
+pairs — `little-sister-github`'s `expect_min_repos`, `little-sister-aws`'s
+`cloudwatch.expect_min_alarms`, which refused a 0 for the same reason, and the
+`github-rate-limit` type's `warn_below` and `error_below`, which become `min_remaining`
+— and the `file` check passed at its level already; the host metrics move by one step at
+the boundary, and `null` replaces a level written never to be reached.
 
 ### 4. A map folds its words, and says a key that names none
 
@@ -161,6 +183,24 @@ within 26 h*. It reads codes and times and no field of the type's, so any check 
 keeps a series can take it. **`change`** is a declared number's newest value against the
 record before it, as a ratio: a minimum, so `min_size_change_warn: 50%` says *it did not
 shrink by half*. It needs a type to declare the number, and comes once one does.
+
+### 9. A map that decides which bands a type writes stays its type's
+
+A map whose words decide which bands a type writes stays its type's, outside the seam:
+`little-sister-wiz`'s `severity_map`, and `little-sister-github`'s
+`security_advisories.severity_map`, `code_scanning_security.severity_map` and
+`code_scanning_quality.severity_map`. Such a map is the shape of the tree its type
+writes more than a value it grades: a band it names stands while it holds nothing, what
+each band says follows the code the map gives it, and the band carries that code where
+its lines carry none ([ADR-0042](0042-entries-carry-their-own-code.md)). Taking it
+through the seam would need two things the seam has no use for elsewhere — a line named
+by its grading that carries no code of its own, and text a type declares that follows
+what a map grades, which the library resolves before it reads the map — and would give
+a deployment a line on `/system/installed` and one in the log that its bands already
+make plain: each band and its handbook say the map in force, and a key the type does
+not know is a band of its own. So each type reads such a map itself, and every other
+value it grades adopts as decision 1 says — `little-sister-github`'s minimums, and its
+`actions.disabled_severity_map`, which codes a line.
 
 ## Consequences
 

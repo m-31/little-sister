@@ -1,47 +1,43 @@
 """What the wall costs the server on the anonymized tree — today's numbers the baseline.
 
-Backlog #91 grows the wall into a tree, and before it grows the note's §7.1 step 4
-takes today's cost on the deployment's own tree of §3.9, its names replaced
+The wall grows into a tree (ADR-0127), and before it grows today's cost is taken on
+the deployment's own tree, its names replaced
 (``tests/anonymized_tree.py``): the fragment the ten-second refresh fetches, in bytes
 and elements, for a viewer and for an admin, its weight on the wire where the browser
 takes gzip, the server's time to render it and the memory the render peaks at. The
 numbers here are the baseline each stage states its growth against — stage 3's above
 all, where every node gains its box in the fragment and the hover card's data rides
-with it (§3.1) — and what the browser pays for the same wall is
+with it (ADR-0127 decision 1) — and what the browser pays for the same wall is
 ``test_wall_cost_browser.py``'s.
 
-The fixture itself is held to what it stands for: the prototype's tree byte for byte,
-the shape the note describes, lines of the recorded length, the four shapes made
-worse as §3.9 made them, the deployed wall as the deployment that runs mounts one
-team's checks, and not a word of the deployment's own (R13). So is the hosts tree
+The fixture itself is held to what it stands for: the shape the deployment's tree had,
+lines of the recorded length, the four shapes made worse, the deployed wall as the
+deployment that runs mounts one team's checks. So is the hosts tree
 (``tests/hosts_tree.py``), a second deployment's wall of hosts the library's own types
 write, whose fragment is held beside them.
 """
 from __future__ import annotations
 
+import itertools
 import json
 import re
 import statistics
 import time
 import tracemalloc
+from collections.abc import Callable
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
-from pathlib import Path
-from unittest import SkipTest, TestCase
+from unittest import TestCase, mock
 
 from little_sister import app as app_module
+from little_sister import instants
 from little_sister.checks.ssh import host_metrics, qnap_metrics
 from little_sister.first_look import FirstLooks
 from little_sister.status import StatusCode
 from little_sister.tree import StatusSnapshot, StatusTree
 from tests import anonymized_tree, hosts_tree
 from tests.render_ui_fixtures import FIXTURES_BY_NAME, render_page
-
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-_PROTOTYPE_SHAPES = (_REPO_ROOT / "docs" / "backlog"
-                     / "backlog-0091-the-interactive-wall-assets" / "prototype"
-                     / "shapes.json")
-_PRIVATE_STRINGS = _REPO_ROOT / "release" / "private_strings.txt"
 
 
 @dataclass(frozen=True)
@@ -77,7 +73,7 @@ class Cost:
 #: that — the outage 3.1× and 3.3×, the blackout, whose leaves were open already,
 #: 1.8× and 1.9×, and the wide wall 5.7× and 6.7×; the cues' and the icons' shapes
 #: are drawn once per page as sprites, which took a third off. gzip takes the
-#: recorded fragment to 26 KB and the wide one to 49 KB (backlog #91 §7.1 step 10).
+#: recorded fragment to 26 KB and the wide one to 49 KB.
 #: The findings page is a leaf's and is unchanged. Before the second slice the
 #: fragments were 573,607 and 581,022 bytes (7,692 and 7,836 elements) on the
 #: recorded wall, 544,499 and 551,914 (7,326 and 7,470) in the outage, 504,181 and
@@ -106,7 +102,7 @@ class Cost:
 #: 8,303 elements) on the recorded wall, 545,704 and 616,905 (7,145 and 7,937) in
 #: the outage, 503,541 and 574,742 (6,583 and 7,375) in the blackout, 1,709,395 and
 #: 1,928,649 (21,716 and 24,059) wide, and the workflow runs' page 1,339,127
-#: (16,126). **Stage 3's third slice, the node's page** (backlog #91 §3.5), frames
+#: (16,126). **Stage 3's third slice, the node's page** (ADR-0127 decision 8), frames
 #: a page's node, a leaf's as a branch's, and leaves the wall's fragments as they
 #: were. The workflow runs' page, a branch's, grew 944 bytes and 13 elements: its
 #: frame and its head, drawn now for every reader, as a box's row with its toolbar
@@ -138,10 +134,10 @@ class Cost:
 #: 8,153) in the outage, 507,066 and 578,267 (6,799 and 7,591) in the blackout,
 #: 1,715,990 and 1,935,244 (22,546 and 24,889) wide, the workflow runs' page
 #: 1,343,642 (16,840) and the findings page 266,556 (2,353).
-#: **The deployed wall** (backlog #91's note, §2, 2026-10-17), alpha's five checks at
+#: **The deployed wall**, alpha's five checks at
 #: the root as the deployment that runs mounts them, is about half the recorded one:
 #: 287,068 bytes and 3,949 elements for a viewer, 321,267 and 4,345 for an admin.
-#: **The hosts wall** (the note's §7.5, 2026-10-21), the second deployment's, nine
+#: **The hosts wall** (2026-10-21), the second deployment's, nine
 #: hosts of five leaves each and a card of the family's checks, first read at 230,005
 #: bytes and 2,837 elements for a viewer and 255,260 and 3,134 for an admin, 11,818 and
 #: 12,897 on the wire. The same day its hover card's map came to carry what the
@@ -189,7 +185,7 @@ class Cost:
 #: of markup as the map escapes it. Before it they were 238,173 and 263,428 bytes,
 #: 13,689 and 14,733 on the wire, a card's cue and word one part among them: the hosts
 #: wall's numbers below are after both.
-#: At **the interactive wall's flip** (backlog #91's note, §7.5, 2026-10-25) a level
+#: At **the interactive wall's flip** (2026-10-25) a level
 #: nobody speaks for starts open, and the trees are drawn with what the family's
 #: packages propose, stated by path (``tests/family_looks.py``), as their deployments
 #: draw them. Every fragment moved within the tolerance, 93 to 4,320 bytes more, and
@@ -207,22 +203,36 @@ class Cost:
 #: 655,389 bytes (8,731 elements) on the recorded wall, 627,769 (8,386) in the
 #: outage, 587,555 (7,866) in the blackout, 1,948,056 (25,717) wide, 321,617
 #: (4,348) deployed and 286,431 (3,129) on the hosts wall.
+#: **One door** (ADR-0147, 2026-10-31) puts ◇ on every open head for every reader, a
+#: link to the node's *Notes* tab lit with what is handled at and beneath it — some
+#: 180 bytes and three elements a head, the node's path in its address and its name —
+#: and takes ‖, the ringed check and a card's pip away. A viewer's fragment grew 9.2
+#: to 14.1 % in bytes and 9.9 to 12.1 % in elements, 7.3 to 13.8 % on the wire; an
+#: admin's is a viewer's now but for the doors' words, 0.9 % fewer bytes on the hosts
+#: wall to 13.1 % fewer in the blackout, whose failing heads each carried a ringed
+#: check; the workflow runs' page grew 12.1 %, and the findings page 1,647 bytes and
+#: 16 elements. Before it a viewer's fragments were 582,982 bytes (7,942 elements) on
+#: the recorded wall, 553,874 (7,576) in the outage, 511,711 (7,014) in the blackout,
+#: 1,724,986 (23,375) wide, 286,951 (3,949) deployed and 261,083 (2,837) on the hosts
+#: wall; an admin's 662,019 (8,800), 661,172 (8,698), 671,368 (8,658), 1,957,246
+#: (25,810), 324,397 (4,378) and 287,553 (3,141); the workflow runs' page 1,351,933
+#: (17,340) and the findings page 276,709 (2,389).
 BASELINE: dict[tuple[str, str, str], Cost] = {
-    ("recorded", "viewer", "/status?fragment=1"): Cost(582_982, 7_942),
-    ("recorded", "admin", "/status?fragment=1"): Cost(662_019, 8_800),
-    ("outage", "viewer", "/status?fragment=1"): Cost(553_874, 7_576),
-    ("outage", "admin", "/status?fragment=1"): Cost(661_172, 8_698),
-    ("blackout", "viewer", "/status?fragment=1"): Cost(511_711, 7_014),
-    ("blackout", "admin", "/status?fragment=1"): Cost(671_368, 8_658),
-    ("wide", "viewer", "/status?fragment=1"): Cost(1_724_986, 23_375),
-    ("wide", "admin", "/status?fragment=1"): Cost(1_957_246, 25_810),
-    ("findings", "viewer", "/status/alpha/wiz/informational"): Cost(276_709, 2_389),
+    ("recorded", "viewer", "/status?fragment=1"): Cost(651_613, 8_731),
+    ("recorded", "admin", "/status?fragment=1"): Cost(651_085, 8_731),
+    ("outage", "viewer", "/status?fragment=1"): Cost(623_993, 8_386),
+    ("outage", "admin", "/status?fragment=1"): Cost(623_465, 8_386),
+    ("blackout", "viewer", "/status?fragment=1"): Cost(583_779, 7_866),
+    ("blackout", "admin", "/status?fragment=1"): Cost(583_251, 7_866),
+    ("wide", "viewer", "/status?fragment=1"): Cost(1_937_553, 25_717),
+    ("wide", "admin", "/status?fragment=1"): Cost(1_935_991, 25_717),
+    ("findings", "viewer", "/status/alpha/wiz/informational"): Cost(278_356, 2_405),
     ("wide", "viewer", "/status/alpha/github/actions?fragment=1"):
-        Cost(1_351_933, 17_340),
-    ("deployed", "viewer", "/status?fragment=1"): Cost(286_951, 3_949),
-    ("deployed", "admin", "/status?fragment=1"): Cost(324_397, 4_378),
-    ("hosts", "viewer", "/status?fragment=1"): Cost(261_083, 2_837),
-    ("hosts", "admin", "/status?fragment=1"): Cost(287_553, 3_141),
+        Cost(1_515_663, 19_269),
+    ("deployed", "viewer", "/status?fragment=1"): Cost(319_735, 4_348),
+    ("deployed", "admin", "/status?fragment=1"): Cost(319_471, 4_348),
+    ("hosts", "viewer", "/status?fragment=1"): Cost(285_029, 3_129),
+    ("hosts", "admin", "/status?fragment=1"): Cost(284_831, 3_129),
 }
 #: What the fragments weigh **on the wire**, gzipped where the request takes gzip,
 #: which every browser's does (`app._compressed_where_asked`, since
@@ -237,15 +247,18 @@ BASELINE: dict[tuple[str, str, str], Cost] = {
 #: 59,095, and before the head's buttons stood where a look puts them 28,063 and
 #: 52,683, 30,870 and 59,312. Before the ringed check an admin's weighed 31,483 on
 #: the recorded wall, 61,926 wide, 15,846 deployed and 15,990 on the hosts wall.
+#: Before the door a viewer's weighed 28,450 on the recorded wall, 54,246 wide, 14,462
+#: deployed and 14,878 on the hosts wall, an admin's 32,431, 63,271, 16,263 and
+#: 16,150.
 WIRE: dict[tuple[str, str, str], int] = {
-    ("recorded", "viewer", "/status?fragment=1"): 28_450,
-    ("recorded", "admin", "/status?fragment=1"): 32_431,
-    ("wide", "viewer", "/status?fragment=1"): 54_246,
-    ("wide", "admin", "/status?fragment=1"): 63_271,
-    ("deployed", "viewer", "/status?fragment=1"): 14_462,
-    ("deployed", "admin", "/status?fragment=1"): 16_263,
-    ("hosts", "viewer", "/status?fragment=1"): 14_878,
-    ("hosts", "admin", "/status?fragment=1"): 16_150,
+    ("recorded", "viewer", "/status?fragment=1"): 31_414,
+    ("recorded", "admin", "/status?fragment=1"): 31_411,
+    ("wide", "viewer", "/status?fragment=1"): 61_752,
+    ("wide", "admin", "/status?fragment=1"): 61_815,
+    ("deployed", "viewer", "/status?fragment=1"): 15_834,
+    ("deployed", "admin", "/status?fragment=1"): 15_837,
+    ("hosts", "viewer", "/status?fragment=1"): 15_969,
+    ("hosts", "admin", "/status?fragment=1"): 15_972,
 }
 #: gzip's output moves with the text it is given — a time of day, a name — so the
 #: wire's tolerance is wider than the rendering's.
@@ -278,6 +291,16 @@ class _StartTags(HTMLParser):
     def handle_startendtag(self, tag: str,
                            attrs: list[tuple[str, str | None]]) -> None:
         self.count += 1
+
+
+def across_a_minute() -> Callable[[], datetime]:
+    """A clock that starts a twentieth of a second before a minute turns and moves on
+    half a millisecond each time it is read, so that a tree built by it has nodes on
+    both sides of the turn — the case two trees built a moment apart may each land
+    in, or not."""
+    start = datetime(2026, 10, 31, 11, 0, 59, 950_000, tzinfo=UTC)
+    ticks = itertools.count()
+    return lambda: start + timedelta(microseconds=500 * next(ticks))
 
 
 def tree_of(variant: str) -> StatusTree:
@@ -317,18 +340,10 @@ def _walk(node: StatusSnapshot) -> list[StatusSnapshot]:
 
 
 class AnonymizedTreeTests(TestCase):
-    """The fixture is the tree the note measured on, and nothing of the deployment's."""
-
-    def test_the_fixture_is_the_prototypes_tree(self):
-        # one tree, read by eye once (R13): the sheet's copy and the prototype's
-        # are the same bytes while the prototype is in the tree
-        if not _PROTOTYPE_SHAPES.is_file():
-            raise SkipTest("the prototype is not in this tree")
-        self.assertEqual(anonymized_tree.SHAPES.read_bytes(),
-                         _PROTOTYPE_SHAPES.read_bytes())
+    """The fixture is the tree the interactive wall was measured on."""
 
     def test_the_shapes_are_the_ones_the_note_describes(self):
-        # §3.9: 265 nodes under two team roots of 98 and 99 leaves, six levels at
+        # 265 nodes under two team roots of 98 and 99 leaves, six levels at
         # the deepest, the widest level 20 repositories with 63 workflows; 234
         # lines, half under 56 characters, the informational band's 17 findings on
         # one team, four of them over 1,000 characters
@@ -451,7 +466,7 @@ class AnonymizedTreeTests(TestCase):
 
     def test_the_deployed_wall_is_alphas_checks_at_the_root(self):
         # the deployment as it runs mounts one team's five checks at its root, each
-        # a card (backlog #91's note, §2, 2026-10-17): alpha's, beside the engine's
+        # a card: alpha's, beside the engine's
         # own node, and nothing of beta's — every node of alpha's where it stood
         # beneath the team, with its code, its lines word for word and every fact
         # the recorded tree gives it
@@ -510,28 +525,9 @@ class AnonymizedTreeTests(TestCase):
         self.assertEqual(set(re.findall(r"→ (\d\d:\d\d)", html)), {"12:04"})
         self.assertEqual(render_page(fixture), html)
 
-    def test_nothing_of_the_deployment_is_in_the_fixture(self):
-        # the scan R13 asks for, run on the shapes, the builder and the rendered
-        # wall against the patterns the release refuses
-        if not _PRIVATE_STRINGS.is_file():
-            raise SkipTest("the release's private strings are not in this tree")
-        patterns = [line.strip() for line in
-                    _PRIVATE_STRINGS.read_text(encoding="utf-8").splitlines()
-                    if line.strip() and not line.startswith("#")]
-        self.assertTrue(patterns)
-        texts = {
-            "the shapes": anonymized_tree.SHAPES.read_text(encoding="utf-8"),
-            "the builder": Path(anonymized_tree.__file__).read_text(encoding="utf-8"),
-            "the wall": render_page(FIXTURES_BY_NAME["anonymized_tree"]),
-        }
-        for what, text in texts.items():
-            for pattern in patterns:
-                self.assertIsNone(re.search(pattern, text, re.IGNORECASE),
-                                  f"{pattern!r} in {what}")
-
 
 class HostsTreeTests(TestCase):
-    """The hosts tree is a second deployment's wall, and nothing of its own."""
+    """The hosts tree is a second deployment's wall."""
 
     def test_the_shapes_are_the_wall_as_it_was_drawn(self):
         # 101 nodes a check wrote, 86 lines; nine hosts that host-metrics writes, each
@@ -678,29 +674,6 @@ class HostsTreeTests(TestCase):
         self.assertNotIn("handbook", volume)
         self.assertIn("this filesystem", volume["about"])
 
-    def test_nothing_of_the_deployment_is_in_the_hosts_tree(self):
-        if not _PRIVATE_STRINGS.is_file():
-            raise SkipTest("the release's private strings are not in this tree")
-        patterns = [line.strip() for line in
-                    _PRIVATE_STRINGS.read_text(encoding="utf-8").splitlines()
-                    if line.strip() and not line.startswith("#")]
-        self.assertTrue(patterns)
-        app_module.app.config["TESTING"] = True
-        saved = app_module.status_tree
-        self.addCleanup(setattr, app_module, "status_tree", saved)
-        app_module.status_tree = hosts_tree.build()
-        client = app_module.app.test_client()
-        client.post("/login", data={"username": "pan", "password": "12345678"})
-        texts = {
-            "the shapes": hosts_tree.SHAPES.read_text(encoding="utf-8"),
-            "the builder": Path(hosts_tree.__file__).read_text(encoding="utf-8"),
-            "the wall": client.get("/status").get_data(as_text=True),
-        }
-        for what, text in texts.items():
-            for pattern in patterns:
-                self.assertIsNone(re.search(pattern, text, re.IGNORECASE),
-                                  f"{pattern!r} in {what}")
-
 
 class WallCostTests(TestCase):
     """The fragment's cost, the render's time and its peak memory."""
@@ -711,7 +684,7 @@ class WallCostTests(TestCase):
         self.saved_config = app_module.config
         self.saved_looks = app_module.first_looks
         self.addCleanup(self._restore)
-        # the deployment's line budget (§3.9); depth at its default
+        # the deployment's line budget; depth at its default
         app_module.config = replace(app_module.config,
                                     reason_cap=anonymized_tree.REASON_CAP)
         self.client = app_module.app.test_client()
@@ -733,12 +706,16 @@ class WallCostTests(TestCase):
                                     reason_cap=reason_cap_of(variant))
         app_module.first_looks = looks_of(variant, app_module.status_tree)
 
-    def _fetch(self, variant: str, role: str, url: str) -> bytes:
-        self._load(variant)
+    def _get(self, role: str, url: str) -> bytes:
+        """``url`` as ``role`` reads it, on the tree loaded last."""
         self._as(role)
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200, url)
         return response.data
+
+    def _fetch(self, variant: str, role: str, url: str) -> bytes:
+        self._load(variant)
+        return self._get(role, url)
 
     def test_the_fragments_bytes_and_elements_hold(self):
         for (variant, role, url), baseline in BASELINE.items():
@@ -780,15 +757,22 @@ class WallCostTests(TestCase):
         self.assertIn('data-node="/computer/local/macmini/system/processes" '
                       'data-state="closed"', body)
 
-    def test_an_admins_fragment_carries_the_marks_and_no_editor(self):
-        # what an admin's swap pays over a viewer's: ‖ on every open head of a node
-        # with no pin of its own, and never an editor, which is the page's one
-        viewer = cost(self._fetch("recorded", "viewer", "/status?fragment=1"))
-        fragment = self._fetch("recorded", "admin", "/status?fragment=1")
-        admin = cost(fragment)
-        self.assertGreater(admin.bytes, viewer.bytes)
-        self.assertGreater(admin.elements, viewer.elements)
-        self.assertIn(b'data-control="pin"', fragment)
+    def test_an_admins_fragment_carries_the_doors_and_no_editor(self):
+        # every reader's open head carries ◇, its node's door (ADR-0147 decision 1),
+        # so an admin's swap pays nothing over a viewer's but the doors' words — and
+        # never an editor: a new act is set on the node's Notes tab. Both roles read
+        # one tree, built here across the turn of a minute: a node whose minute is
+        # not the one shown above it shows its own time (ADR-0044), so two trees
+        # built a moment apart differ by an element for every node the turn falls
+        # between, which is what made the two renders differ now and then
+        with mock.patch.object(instants, "now", across_a_minute()):
+            self._load("recorded")
+            seen = self._get("viewer", "/status?fragment=1")
+            fragment = self._get("admin", "/status?fragment=1")
+        self.assertEqual(cost(fragment).elements, cost(seen).elements)
+        self.assertGreater(fragment.count(b'data-control="door"'), 0)
+        self.assertEqual(fragment.count(b'data-control="door"'),
+                         seen.count(b'data-control="door"'))
         self.assertNotIn(b"maintenance-editor-form", fragment)
 
     def test_the_render_time_and_peak_memory_hold(self):

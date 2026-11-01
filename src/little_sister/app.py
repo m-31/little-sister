@@ -5,15 +5,16 @@ import math
 import os
 import re
 import threading
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from functools import cache, partial
 from importlib.resources import files
 from pathlib import Path
 from secrets import token_hex
 from typing import Any, ClassVar, Literal
 from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from flask import (
     Flask,
@@ -31,7 +32,8 @@ from flask import (
 )
 from flask.sessions import SecureCookieSessionInterface
 from flask.typing import ResponseReturnValue
-from jinja2 import ChoiceLoader, StrictUndefined
+from jinja2 import ChoiceLoader, StrictUndefined, pass_context
+from jinja2.runtime import Context as TemplateContext
 from markupsafe import Markup, escape
 
 from little_sister import (
@@ -43,6 +45,7 @@ from little_sister import (
     instants,
     local_login,
     noise,
+    notes_tab,
     readiness,
     self_report,
     slots,
@@ -69,7 +72,7 @@ from little_sister.checks.base import (
     TypeOrigin,
     registered_types,
 )
-from little_sister.config import config
+from little_sister.config import Config, config
 from little_sister.config_dir import (
     CONFIG_DIR_ENV,
     announce_aspects,
@@ -82,6 +85,7 @@ from little_sister.copy_action import register_copy_filler
 from little_sister.copy_status import (
     NotesSaid,
     Origin,
+    PinSaid,
     TimeStyle,
     format_node_markdown,
     format_reason_markdown,
@@ -120,6 +124,7 @@ from little_sister.event_filter import (
 )
 from little_sister.first_look import Drawn, FirstLooks
 from little_sister.grading import MAP, PAIR, SET, SINCE, Graded, Grading
+from little_sister.holidays import NO_HOLIDAYS, Holidays, load_holidays
 from little_sister.icons import known_names, read_icon
 from little_sister.instance import this_instance
 from little_sister.keeper import registered_keeper
@@ -137,13 +142,39 @@ from little_sister.nodes import (
     run_consistency_pass,
     tag_places,
 )
-from little_sister.notes import Note, NoteStore, context_of, notes_book
+from little_sister.notes import (
+    Context,
+    Note,
+    NoteStore,
+    context_of,
+    entries_of,
+    notes_book,
+)
 from little_sister.origins import PackageOrigin, package_origin
 from little_sister.paths import shown_path
-from little_sister.pins import MAINTENANCE, NO_NOTE, SEEN, Pin, PinStore
+from little_sister.pins import DONE, MAINTENANCE, NO_NOTE, SEEN, SILENCED, Pin, PinStore
 from little_sister.reasons import RECORD_TIMESTAMP_KEYS, record_leaves
+from little_sister.reasons import Entry as LineEntry
+from little_sister.reasons import slug as line_slug
 from little_sister.render import first_block, render_markdown, render_markdown_inline
 from little_sister.rule_words import rule_said
+from little_sister.schedule import (
+    DAILY,
+    MONTHLY,
+    WEEKDAYS,
+    WEEKLY,
+    Length,
+    Rule,
+    Schedule,
+    Window,
+    day_off,
+    first_start,
+    last_end,
+)
+from little_sister.schedule import Day as ScheduleDay
+from little_sister.schedule import days as schedule_days
+from little_sister.schedule import instant as wall_instant
+from little_sister.schedule import sentence as schedule_sentence
 from little_sister.secrets import (
     SecretError,
     check_reference,
@@ -173,13 +204,25 @@ from little_sister.tags import note_unknown as note_unknown_tags
 from little_sister.tags import spelled as spelled_tag
 from little_sister.titles import Labeled, shown_title
 from little_sister.tree import (
+    AGGREGATION_RULE,
+    CAUSE_LINE_DONE_EDITED,
+    CAUSE_LINE_DONE_ENDED,
+    CAUSE_LINE_DONE_SET,
+    CAUSE_LINE_PIN_CLOSED,
+    CAUSE_LINE_PIN_EDITED,
     CAUSE_LINE_PIN_ENDED,
+    CAUSE_LINE_PIN_OPENED,
     CAUSE_LINE_PIN_SET,
     CAUSE_LINE_SEEN_EDITED,
     CAUSE_LINE_SEEN_ENDED,
     CAUSE_LINE_SEEN_SET,
+    CAUSE_LINE_SILENCED_EDITED,
+    CAUSE_LINE_SILENCED_ENDED,
+    CAUSE_LINE_SILENCED_SET,
+    CAUSE_PIN_CLOSED,
     CAUSE_PIN_EDITED,
     CAUSE_PIN_ENDED,
+    CAUSE_PIN_OPENED,
     CAUSE_PIN_SET,
     CAUSE_REACHED,
     CAUSE_READING,
@@ -188,33 +231,44 @@ from little_sister.tree import (
     CAUSE_SEEN_EDITED,
     CAUSE_SEEN_ENDED,
     CAUSE_SEEN_SET,
+    CAUSE_SILENCED_EDITED,
+    CAUSE_SILENCED_ENDED,
+    CAUSE_SILENCED_SET,
     CAUSE_STALE,
-    ENDED_CLOCK,
-    ENDED_GONE,
-    ENDED_HAND,
-    ENDED_OCCURRENCE,
-    ENDED_RECOVERY,
-    ENDED_WORSENING,
+    ENDED_WORDS,
+    NOT_LATER,
     STATE_CODE,
+    WINDOW_CLOSED,
     Acceptable,
     Beginning,
     ChipCounts,
+    DoorCount,
+    EntryWords,
     Event,
+    HandledPart,
     HandledRule,
+    OpenWindow,
+    Planned,
     ReasonLine,
     RuleAt,
+    Shut,
     StatusPeriod,
     StatusSnapshot,
     acknowledgeable_parts,
     chip_counts,
+    door_counts,
     events_from_payload,
     failing,
     failing_first,
     handled_beneath,
+    handled_parts,
     healthy,
     last_alive,
     line_healthy,
+    line_rail,
+    line_shows,
     lines_rules,
+    node_rail,
     nodes_from_payload,
     parts_digest,
     rules_beneath,
@@ -404,17 +458,19 @@ def _slot(name: str, /, **context: object) -> Markup:
 
 #: The slots whose filler may draft from its node what leaves the instance — a
 #: ticket, as ``little-sister-jira``'s does — and is handed, beside the node, what
-#: such a draft is written with (:data:`little_sister.slots.SLOTS`).
-_DRAFTING_SLOTS = frozenset({"node.actions", "reason.actions"})
+#: such a draft is written with (:data:`little_sister.slots.SLOTS`): every slot the
+#: library declares.
+_DRAFTING_SLOTS = frozenset({"node.actions", "reason.actions", "notes.actions"})
 
 
 def _drafting(node: StatusSnapshot) -> dict[str, object]:
     """What a filler of an action slot drafts from ``node`` with (ADR-0133 decisions 4
     to 6): ``written_out``, which writes a text of the node out as the Copy document
     writes one, a link in the short form to the absolute address of the node's
-    handbook; and ``details``, the rows of its *About* card written out the same way.
-    Functions rather than values, so that what a slot filled for every node at every
-    render does not cost is paid by the draft that asks."""
+    handbook; ``details``, the rows of its *About* card written out the same way; and
+    ``notes_url``, the absolute address of the node's *Notes* tab, where a draft links
+    back to (ADR-0148). Functions rather than values, so that what a slot filled for
+    every node at every render does not cost is paid by the draft that asks."""
     path = node.path
 
     def node_written_out(text: str, inline: bool = False) -> str:
@@ -423,7 +479,21 @@ def _drafting(node: StatusSnapshot) -> dict[str, object]:
     def details() -> tuple[tuple[str, str], ...]:
         return written_details(_card_details(node), _handbook_here)
 
-    return {"written_out": node_written_out, "details": details}
+    def notes_url() -> str:
+        return _notes_here(path)
+
+    return {"written_out": node_written_out, "details": details,
+            "notes_url": notes_url}
+
+
+def _notes_here(path: str) -> str:
+    """The absolute address of the *Notes* tab of the node at ``path``, as this
+    request came by — or ``""`` where there is none, the root having no tab, and
+    outside a request, which has no base to write it from (ADR-0148)."""
+    branch = _url_branch(path)
+    if not branch or not has_request_context():
+        return ""
+    return url_for('notes', path=branch, _external=True)
 
 
 def _handbook_here(path: str) -> str:
@@ -747,7 +817,9 @@ def _at_line(address: str, slug: str) -> str:
 def _focus_of(branch: str, node: StatusSnapshot | None
               ) -> tuple[str, Pin | None]:
     """The line a node's page was asked at (``?reason=<slug>``, ADR-0036 decision
-    12), and the pin on that slug where the current run did not report the line.
+    12), and the pin on that slug where the current run did not report the line —
+    read from the snapshot, which carries such a line beside the lines it reports
+    (``StatusSnapshot.not_reported``, ADR-0080 decision 1).
 
     Such a pin is **suspended, not deleted** (decision 6): the pin is real and the
     line is absent, and the node's own page is the one surface that can say so — a
@@ -757,9 +829,8 @@ def _focus_of(branch: str, node: StatusSnapshot | None
     if not branch or node is None:
         return "", None
     focus = request.args.get("reason", "")
-    if not focus or any(line.slug == focus for line in node.reasons):
-        return focus, None
-    return focus, status_tree.entry_maintenance(branch, focus)
+    return focus, next((line.maintenance for line in node.not_reported
+                        if focus and line.slug == focus), None)
 
 
 @app.route("/preferences", methods=["POST"])
@@ -814,12 +885,17 @@ def _failing_first(lines: Iterable[ReasonLine]) -> list[ReasonLine]:
 
 # --- the wall's tree (ADR-0127): what the templates ask of each node ----------------
 #
-# One vocabulary over what a node contributes (`tree.py`, backlog #91 §7.9): what the
-# healthy fold folds, what a close's incident reads, what a chip counts.
+# One vocabulary over what a node contributes (`tree.py`): what the healthy fold
+# folds, what a close's incident reads, what a chip counts.
 
 app.jinja_env.globals["healthy"] = healthy
 app.jinja_env.globals["failing"] = failing
 app.jinja_env.globals["line_healthy"] = line_healthy
+# What a part counts as one level up, where that is not what it shows (ADR-0143):
+# the state its rail is drawn in, or none.
+app.jinja_env.globals["line_rail"] = line_rail
+app.jinja_env.globals["line_shows"] = line_shows
+app.jinja_env.globals["node_rail"] = node_rail
 # A configured rule's sentence (ADR-0137): what it makes of its part, in the page's
 # words, each status a placeholder the renderer draws as its sign.
 app.jinja_env.globals["rule_said"] = rule_said
@@ -875,56 +951,157 @@ app.jinja_env.globals["rules_here"] = _rules_here
 
 
 @dataclass(frozen=True)
-class _Offer:
-    """What a ringed check on a node's head accepts (ADR-0142 decision 5): the parts
-    at and beneath it that fail now, as they stand, each to be its own *seen* — how
-    many, and the digest its editor carries back, so that a set that finds others
-    failing there is refused and shows them rather than accepting one nobody saw."""
-    parts: tuple[Acceptable, ...]
+class _PlannedHere:
+    """A maintenance entry planned for a node or one of its lines, as a page lists it
+    under *Planned* (ADR-0150): the node's ``path``, its line's ``slug`` — empty for
+    the node's own — and text, empty for a line its node does not report now
+    (``reported`` false); its node's ``title``, where *Handled* lists it; ``suspended``
+    where no node stands at its path now; and the snapshot's ``planned`` entry."""
+    path: str
+    slug: str
+    text: str
+    planned: Planned
+    reported: bool = True
+    title: str = ""
+    suspended: bool = False
 
-    @property
-    def count(self) -> int:
-        return len(self.parts)
 
-    @property
-    def digest(self) -> str:
-        return parts_digest(self.parts)
+def _soonest(item: _PlannedHere) -> tuple[Any, ...]:
+    """Planned entries the soonest next window first, then those with none to open
+    by when they were first set (ADR-0150, decision 5 of #35's note)."""
+    upcoming = item.planned.next
+    if upcoming is not None:
+        return 0, upcoming.start, item.path, item.slug
+    return 1, item.planned.pin.created_at, item.path, item.slug
 
 
-def _offers(node: StatusSnapshot | None, *, covered: bool = False
-            ) -> dict[str, _Offer]:
-    """What a ringed check on each node's head accepts (:class:`_Offer`), by path,
-    read from the **unfiltered** snapshot as the pins' editors are — a filter changes
-    what the page shows, never what a ✓ marks — once for the page: each node's own
-    parts (:func:`~little_sister.tree.acknowledgeable_parts`) and those beneath it.
-    ``covered`` says a pin above ``node`` holds it. Nodes with nothing to accept are
-    left out."""
-    if node is None:
-        return {}
-    walked: list[tuple[StatusSnapshot, bool]] = []
-    stack = [(node, covered)]
+def _planned_here(node: StatusSnapshot) -> tuple[_PlannedHere, ...]:
+    """What is planned for ``node`` and its lines (ADR-0150), the soonest first: its
+    own entry and each line's that stands and holds nothing now — those it reports and
+    those it does not — read from the snapshot, which carries each apart from what
+    stands, so that a node's page and its *Notes* tab list what the envelope's
+    ``planned`` does (ADR-0080 decision 1). Counted nowhere: the door, the pill and the
+    chips read what holds."""
+    found = []
+    if node.planned_entry is not None:
+        found.append(_PlannedHere(node.path, "", "", node.planned_entry))
+    found += [_PlannedHere(node.path, line.slug, line.text, line.planned)
+              for line in node.reasons if line.planned is not None]
+    found += [_PlannedHere(node.path, line.slug, "", line.planned, reported=False)
+              for line in node.not_reported if line.planned is not None]
+    return tuple(sorted(found, key=_soonest))
+
+
+def _planned_everywhere(whole: StatusSnapshot | None) -> tuple[_PlannedHere, ...]:
+    """Every maintenance entry planned at or beneath ``whole``, for *Handled*'s
+    *Planned* (ADR-0150): each node's (:func:`_planned_here`), and each on a node not
+    reported now, beside the nearest node above it that stands
+    (``StatusSnapshot.nodes_not_reported``), the soonest first."""
+    found: list[_PlannedHere] = []
+    stack = [whole] if whole is not None else []
     while stack:
-        current, held = stack.pop()
-        held = (held or current.maintenance or current.maintenance_entry is not None
-                or current.reported_code is StatusCode.MAINTENANCE)
-        walked.append((current, held))
-        stack.extend((child, held) for child in current.children)
-    found: dict[str, tuple[Acceptable, ...]] = {}
-    for current, held in reversed(walked):
-        own = () if held else acknowledgeable_parts(replace(current, children=()))
-        found[current.path] = own + tuple(
-            part for child in current.children for part in found[child.path])
-    return {path: _Offer(parts) for path, parts in found.items() if parts}
+        node = stack.pop()
+        stack.extend(node.children)
+        found += [replace(item, title=node.title) for item in _planned_here(node)]
+        for gone in node.nodes_not_reported:
+            if gone.planned_entry is not None:
+                found.append(_PlannedHere(gone.path, "", "", gone.planned_entry,
+                                          suspended=True))
+            found += [_PlannedHere(gone.path, line.slug, "", line.planned,
+                                   reported=False, suspended=True)
+                      for line in gone.not_reported if line.planned is not None]
+    return tuple(sorted(found, key=_soonest))
 
 
-def _ack_offer(node: StatusSnapshot) -> _Offer | None:
-    """What a ringed check on ``node``'s head accepts, as the page's view read it
-    (:func:`_offers`) — ``None`` where nothing fails there, or the page read none."""
-    offers: dict[str, _Offer] = g.get("offers", {})
-    return offers.get(node.path)
+app.jinja_env.globals["planned_here"] = _planned_here
 
 
-app.jinja_env.globals["ack_offer"] = _ack_offer
+@app.template_filter("planned_count")
+def _planned_count(planned: Sequence[_PlannedHere]) -> str:
+    """What a list of planned entries counts, each listed by its next window
+    (ADR-0150): a window set ahead is one window, and any other entry a schedule —
+    *1 window and 2 schedules*."""
+    windows = sum(1 for item in planned
+                  if item.planned.pin.schedule is not None
+                  and item.planned.pin.schedule.is_one_off)
+    schedules = len(planned) - windows
+    said = [f"{count} {word}{'' if count == 1 else 's'}"
+            for count, word in ((windows, "window"), (schedules, "schedule")) if count]
+    return " and ".join(said)
+
+
+@app.template_filter("whole_words")
+def _whole_words(text: str) -> Markup:
+    """``text`` with each of its words kept whole — a line ends between two of them
+    and never inside one — as a block keeps an instant's (`_rule_block.html`'s
+    ``instant``): a hyphen is a place for a line to end, and a narrow box ended one
+    inside a date, *until 2027-* and the rest on the next line."""
+    return Markup(" ").join(Markup('<span class="text-nowrap">{}</span>').format(word)
+                            for word in str(text).split())
+
+
+#: Where an instant stands in a sentence while the rest of it is escaped
+#: (:func:`_whole_instants`): a character no word a page writes carries.
+_HELD_INSTANT = re.compile("\x00(\\d+)\x00")
+
+
+def _whole_instants(write: Callable[[Callable[[datetime], str]], str]) -> Markup:
+    """The sentence ``write`` makes with the writer of an instant it is handed, each
+    instant written as the page writes every instant and kept whole
+    (:func:`_whole_words`), the rest of it escaped as the text it is."""
+    held: list[str] = []
+
+    def at(moment: datetime) -> str:
+        held.append(_format_local(moment))
+        return f"\x00{len(held) - 1}\x00"
+
+    said = str(escape(write(at)))
+    return Markup(_HELD_INSTANT.sub(
+        lambda found: str(_whole_words(held[int(found.group(1))])), said))
+
+
+@app.template_filter("sentence")
+def _sentence(entry: Pin) -> Markup:
+    """A maintenance entry in the page's words (ADR-0150): the one sentence
+    ``schedule.sentence`` writes, its instants as the page writes every instant
+    (:func:`_entry_words`), each kept whole (:func:`_whole_instants`)."""
+    words = _entry_words()
+    return _whole_instants(lambda at: replace(words, at=at).sentence(entry))
+
+
+@app.template_filter("planned_why")
+def _planned_why(planned: Planned) -> Markup:
+    """Why no window of a planned entry is to open, or from when its windows stop,
+    in the page's words, its instants kept whole — empty where its holiday list stops
+    none (ADR-0150)."""
+    words = _entry_words()
+    return _whole_instants(lambda at: replace(words, at=at).why(planned))
+
+
+@app.template_filter("starts_in")
+def _starts_in(moment: datetime) -> str:
+    """How long until a planned window starts, as its row counts it down: *6d*,
+    *3h 20m*, the time left's humanizer read forward (:func:`_humanize_remaining`) —
+    *a moment* for one the next tick opens."""
+    remaining = _humanize_remaining((moment - _now()).total_seconds())
+    return "a moment" if remaining == "expired" else remaining
+
+
+def _door_of(node: StatusSnapshot) -> DoorCount:
+    """What ``node``'s door, ◇, says (ADR-0147 decision 2): how many parts at and
+    beneath it something handles now, by job — read from the **unfiltered** snapshot,
+    which the route counts once for the page (``g.doors``,
+    :func:`~little_sister.tree.door_counts`) before a filter takes anything away, as
+    the band's pill is, so that a filter changes what the page shows and never what a
+    door says. Where the route counted none, ``node`` is counted, and what is beneath
+    it with it."""
+    doors: dict[str, DoorCount] = g.setdefault("doors", {})
+    if node.path not in doors:
+        doors.update(door_counts(node))
+    return doors[node.path]
+
+
+app.jinja_env.globals["door_of"] = _door_of
 
 
 def _chip_counts_map(node: StatusSnapshot | None) -> dict[str, ChipCounts]:
@@ -961,8 +1138,8 @@ def _leaves_map(node: StatusSnapshot | None) -> dict[str, int]:
 
 
 #: How far past the rest a level's widest name may size its runs' columns: at most
-#: this many times the level's 90th-percentile name (backlog #91's note, §2,
-#: 2026-10-15), a name past it wrapping inside its column.
+#: this many times the level's 90th-percentile name (ADR-0127 decision 12), a name
+#: past it wrapping inside its column.
 CHIP_NAME_BOUND = 1.5
 
 
@@ -975,8 +1152,7 @@ class ChipRoom:
     measures the names in pixels. The estimate counts each character at the theme's
     letter of a `0` — 0.85 in the system's faces, a whole one in cyberpunk's — and
     adds the chip's chrome, a count's margin among it where the level counts
-    (`dashboard_layout.chip_width`, backlog #91's note, §2, 2026-10-17 and
-    2026-10-18)."""
+    (`dashboard_layout.chip_width`)."""
 
     chars: int
     leaves: int
@@ -1014,8 +1190,8 @@ def _chip_room(children: Sequence[StatusSnapshot],
 def _chip_own(child: StatusSnapshot, leaves: Mapping[str, int],
               face: ChipFace) -> int:
     """A closed child's chip at its own width, in the planner's tenths of a pixel, as
-    a run that holds one column draws it, wrapping as it comes (backlog #91's note,
-    §2, 2026-10-17): its name and the digits of the leaves beneath it where it is a
+    a run that holds one column draws it, wrapping as it comes (ADR-0127 decision 12):
+    its name and the digits of the leaves beneath it where it is a
     branch — a leaf brings none, as its level's estimate has it — with the chrome of
     a chip that draws its count, or none, in ``face``
     (`dashboard_layout.chip_width`)."""
@@ -1041,7 +1217,7 @@ def _first_drawn(node: StatusSnapshot | None, depth_closed: int | None,
                  looks: FirstLooks | None = None, *,
                  failures_open: bool = True) -> Drawn:
     """What the page draws of ``node``'s nodes as they arrive (`first_look.draw`,
-    backlog #91 §7.5): the configured look, the built-in look where nobody spoke —
+    ADR-0128): the configured look, the built-in look where nobody spoke —
     open, but a big level as chips — and the failure budget's openings unless the
     browser's *Failures* look keeps them shut (:func:`_failures_open`); nothing where
     the page draws no tree."""
@@ -1053,7 +1229,7 @@ def _first_drawn(node: StatusSnapshot | None, depth_closed: int | None,
 
 def _failures_open() -> bool:
     """Whether this browser's failures open their way, the failure budget's
-    openings (backlog #91 §3.3): its look *Failures*, the deployment's default where
+    openings (ADR-0127 decision 5): its look *Failures*, the deployment's default where
     it chose none — `chips` keeps a failure the chip its look drew, and the wall its
     size."""
     return _presentation()["failures"] == "open"
@@ -1217,8 +1393,10 @@ app.jinja_env.globals["has_handbook"] = _has_handbook
 
 
 def _notes_count(branch: str) -> int:
-    """How many notes the Notes view of the node at ``branch`` lists (ADR-0140): the
-    node's own and its lines', which its tab carries as Series carries its curves."""
+    """How many entries the Notes tab of the node at ``branch`` lists (ADR-0140,
+    ADR-0145 decision 6): the node's own and its lines', an act's one, and the acts
+    made on it — standing or not — which its tab carries as Series carries its
+    curves."""
     return notes_book.count(join_path(branch))
 
 
@@ -1245,8 +1423,8 @@ _NAME_BREAK = re.compile(r"([_.-])(?=.)")
 
 @app.template_filter("breakable")
 def _breakable(name: object) -> Markup:
-    """``name`` escaped, a `<wbr>` after each `_`, `.` and `-` inside it (backlog
-    #91's note, §2, 2026-10-16) — for a name drawn where it may wrap: a card's or
+    """``name`` escaped, a `<wbr>` after each `_`, `.` and `-` inside it
+    (ADR-0127 decision 12) — for a name drawn where it may wrap: a card's or
     a box's head, a node page's head and heading, the trail. `<wbr>` is no
     character, so a copied name, a find and the name a screen reader is given are
     the name as it is; an attribute takes the name itself."""
@@ -2337,8 +2515,19 @@ def _reading_row(reading: Placed,
 
 def _copy_style() -> TimeStyle:
     """The clock a copy document is written with: this deployment's zone and
-    format, resolved once per document so one hand-off cannot straddle a reload."""
-    return TimeStyle(config.tzinfo, config.time_format)
+    format, resolved once per document so one hand-off cannot straddle a reload —
+    and a holiday list by its name, as a maintenance entry's sentence says it."""
+    return TimeStyle(config.tzinfo, config.time_format, status_tree.list_name,
+                     status_tree.open_series)
+
+
+def _entry_words() -> EntryWords:
+    """How a page says a maintenance entry (ADR-0150): its instants as the page
+    writes every instant, in the configured zone and ``time_format``
+    (:func:`_format_local`), the entry's own zone named where it is not that one, and
+    a holiday list by its name — the words the envelope carries too, so that a client
+    shows what the page says (ADR-0080 decision 1)."""
+    return EntryWords(_format_local, config.timezone, status_tree.list_name)
 
 
 @app.template_filter("localtime")
@@ -2530,10 +2719,21 @@ class _MaintenancePin:
 
     ``suspended`` says that **no node stands at the pin's path** (ADR-0109 decision
     4): its check no longer reports the node, or has not written it yet in this
-    process. The pin is held all the same, silences nothing, and holds again when
-    the node returns. Such a pin has no title and no line to show — both went with
-    the node — and only *Handled* lists it: the wall counts what is
-    silenced now.
+    process, a start leaving every node for its next run to write. The pin is held
+    all the same, silences nothing, and holds again when the node returns. Such a
+    pin has no title and no line to show — both went with the node, or have not come
+    yet — and it **stands**, as every pin stands whether or not its part is reported
+    now (ADR-0147 decision 2): the snapshot carries it beside the nearest node above
+    it that stands (``StatusSnapshot.nodes_not_reported``), whose door and *Notes*
+    tab, a closed chip's ◇ and the band's pill count and list it with what stands
+    there, and *Handled* states it under its own path, *not reported at present*.
+
+    ``unreported`` says that the node stands and **does not report the pin's line
+    now** — the line gone from this run, or the node's lines no members, a check's
+    error standing in for them (``StatusSnapshot.not_reported``). The pin holds
+    nothing until the line is back (ADR-0036 decision 6): its block names no line,
+    *A line not reported now*, as the node's *Notes* tab says it, and it comes after
+    the lines the node reports.
     """
     path: str
     title: str
@@ -2552,6 +2752,7 @@ class _MaintenancePin:
     set_by: str = ""
     entry: Pin | None = None
     suspended: bool = False
+    unreported: bool = False
 
     @property
     def name(self) -> str:
@@ -2587,6 +2788,14 @@ class _MaintenanceRow:
     entry pins they are empty, because showing one of three justifications as if it
     were the row's is worse than showing none (``/maintenance`` carries them all).
     ``slug`` is likewise the sole entry pin's, for the deep link.
+
+    ``away`` is how many of the ``quiet`` entry pins stand on a line the node does
+    not report now (``_MaintenancePin.unreported``): they are none of its ``total``
+    reasons, so the row says them apart — *1 of 3 reasons, 1 line not reported now*.
+
+    ``suspended`` says that no node stands at the row's path now
+    (``_MaintenancePin.suspended``): it has no reasons to count its pins against, and
+    the row says it is *not reported now*.
     """
     path: str
     title: str
@@ -2597,6 +2806,8 @@ class _MaintenanceRow:
     pinned: bool = False
     quiet: int = 0
     total: int = 0
+    away: int = 0
+    suspended: bool = False
 
 
 def _humanize_remaining(seconds: float) -> str:
@@ -2618,6 +2829,21 @@ def _time_left(value: datetime | None) -> str:
         return "expired"
     remaining = _humanize_remaining((value - _now()).total_seconds())
     return remaining if remaining == "expired" else f"{remaining} left"
+
+
+@app.template_filter("ends")
+def _ends(entry: Pin | None) -> datetime | None:
+    """When a pin ends by itself, as its block says it: a maintenance pin's window
+    open — its time left, never a series' schedule's end a year away — asked of the
+    tree's one implementation of the windows (ADR-0150 decision 2), and any other
+    pin's own end."""
+    if entry is None:
+        return None
+    if entry.kind == MAINTENANCE and entry.schedule is not None:
+        window = status_tree.open_window(entry)
+        if window is not None:
+            return window.end
+    return entry.expires_at
 
 
 @app.template_filter("expiry_input")
@@ -2660,102 +2886,44 @@ def _brand_accent(text: object) -> Markup:
     return span.join(Markup.escape(part) for part in str(text).split(BRAND_NAME))
 
 
-def _pin_remaining(entry: Pin, now: datetime) -> str:
-    """How long a pin has left at ``now``, as an index row words it — nothing for an
-    acknowledgment given no end, which ends as what it accepted changes."""
-    if entry.expires_at is None:
+def _pin_remaining(ends: datetime | None, now: datetime) -> str:
+    """How long a pin has left at ``now``, ``ends`` when it ends by itself — a
+    maintenance pin's window open (:attr:`~little_sister.tree.HandledRule.ends`) — as
+    an index row words it; nothing for an acknowledgment given no end, which ends as
+    what it accepted changes."""
+    if ends is None:
         return ""
-    return _humanize_remaining((entry.expires_at - now).total_seconds())
+    return _humanize_remaining((ends - now).total_seconds())
 
 
 def _pin_view(node: StatusSnapshot, entry: Pin, now: datetime, *,
-              slug: str = "", line: str = "", slot: int = -1) -> _MaintenancePin:
+              slug: str = "", line: str = "", slot: int = -1,
+              unreported: bool = False,
+              ends: datetime | None = None) -> _MaintenancePin:
     """One stored pin as an index row. ``slug`` / ``line`` / ``slot`` are set for an
-    **entry** pin and left at their defaults for a node's own."""
+    **entry** pin and left at their defaults for a node's own; ``unreported`` for an
+    entry pin on a line the node does not report now; ``ends`` when it ends by
+    itself, its window open's end, where that is not its own."""
+    ends = ends or entry.expires_at
     return _MaintenancePin(
         path=node.path, title=node.title, note=entry.note,
-        remaining=_pin_remaining(entry, now), slug=slug, line=line, slot=slot,
-        total=len(node.reasons), expires_at=entry.expires_at,
-        set_by=entry.set_by, entry=entry)
-
-
-def _suspended_pins(whole: StatusSnapshot | None,
-                    now: datetime) -> list[_MaintenancePin]:
-    """The pins **no node stands for** (ADR-0109 decision 4), for the Maintenance
-    page: every pin the tree holds against a path that ``whole`` — the snapshot the
-    page lists the others from — holds no node at. Read against that one snapshot,
-    so a node that leaves or returns while the page is built puts its pins in one
-    list or the other, and never in both or in neither.
-
-    A node's own pin first, then its lines' **in the order they were pinned**: the
-    check's order went with the lines, and a slug is opaque."""
-    reported: set[str] = set()
-    stack = [whole] if whole is not None else []
-    while stack:
-        node = stack.pop()
-        reported.add(node.path)
-        stack.extend(node.children)
-    nodes, lines = status_tree.pins()
-    pins = [
-        _MaintenancePin(
-            path=path, title="", note=entry.note,
-            remaining=_pin_remaining(entry, now), expires_at=entry.expires_at,
-            set_by=entry.set_by, entry=entry, suspended=True)
-        for path, entry in nodes.items() if path not in reported]
-    held = sorted(((path, slug, entry) for (path, slug), entry in lines.items()
-                   if path not in reported),
-                  key=lambda pin: (pin[0], pin[2].created_at, pin[1]))
-    for slot, (path, slug, entry) in enumerate(held):
-        pins.append(_MaintenancePin(
-            path=path, title="", note=entry.note,
-            remaining=_pin_remaining(entry, now), slug=slug, slot=slot,
-            expires_at=entry.expires_at, set_by=entry.set_by, entry=entry,
-            suspended=True))
-    return pins
-
-
-@dataclass(frozen=True)
-class _ShownNote:
-    """One note as the Notes view and the page of a path no node stands at state it
-    (ADR-0140): the note; the line it is on as it reads now — the run's words where
-    the run reports the line, the words it was written beside where it does not —
-    and whether the run reports it (ADR-0047 decision 8); whether it is the note of
-    a pin that still stands, which is edited with that pin; and whether the reader
-    may edit it here, which a note of its own is while it is the newest on its node
-    (decision 5)."""
-    note: Note
-    line: str = ""
-    reported: bool = True
-    pin_stands: bool = False
-    editable: bool = False
-
-
-def _shown_notes(notes: Sequence[Note], node: StatusSnapshot | None, *,
-                 admin: bool = False) -> list[_ShownNote]:
-    """``notes`` as a page states them, against ``node`` — the one they are on, or
-    ``None`` on the page of a path no node stands at, where every line is gone with
-    its node — each editable where ``admin`` reads it and the book allows it."""
-    lines = {line.slug: line.text for line in node.reasons} if node is not None else {}
-    shown = []
-    for note in notes:
-        reported = not note.slug or node is None or note.slug in lines
-        said = lines.get(note.slug, "") or next(
-            (line.text for line in note.context.lines if line.slug == note.slug), "")
-        shown.append(_ShownNote(
-            note, line=said if note.slug else "", reported=reported,
-            pin_stands=_pin_stands(note),
-            editable=admin and notes_book.editable(note)))
-    return shown
+        remaining=_pin_remaining(ends, now), slug=slug, line=line, slot=slot,
+        total=len(node.reasons), expires_at=ends,
+        set_by=entry.set_by, entry=entry, unreported=unreported)
 
 
 def _pin_stands(note: Note) -> bool:
     """Whether ``note`` is the note of a pin that is still in the table: the pin it
-    names by its creation, on its node or on its line (ADR-0047 decision 5)."""
+    names by its creation, on its node or on its line (ADR-0047 decision 5) — a
+    maintenance pin, or a person's acknowledgment, which stands beside it (ADR-0142,
+    ADR-0144)."""
     if not note.pin:
         return False
-    entry = (status_tree.entry_maintenance(note.path, note.slug) if note.slug
-             else status_tree.maintenance_entry(note.path))
-    return entry is not None and instants.stamp(entry.created_at) == note.pin
+    maintenance = (status_tree.standing_line_entry(note.path, note.slug) if note.slug
+                   else status_tree.standing_entry(note.path))
+    return any(entry is not None and instants.stamp(entry.created_at) == note.pin
+               for entry in (maintenance,
+                             status_tree.acknowledgment(note.path, note.slug)))
 
 
 @dataclass(frozen=True)
@@ -2773,10 +2941,12 @@ class _NoNode:
     the root — ``above_series`` whether that node has a Series view, and
     ``first_level`` whether the path is one segment long, so that the root is its
     parent and not merely what is left. ``pins`` are the ones held against the path
-    or beneath it (:func:`_suspended_pins`), in that function's order: by path, a
-    node's own first. ``notes`` are the notes written for the path and for the paths
-    beneath it, newest first: they outlive the node (ADR-0047 decision 7), and here,
-    where no node's Notes view stands, is where they are found (ADR-0140)."""
+    or beneath it, read from the snapshot, which carries each beside the nearest node
+    above it that stands (``StatusSnapshot.nodes_not_reported``), in *Handled*'s
+    order: by path, a node's own first. ``notes`` are the entries written for the
+    path and for the paths beneath it, newest first, an act's one (ADR-0145 decision
+    5): they outlive the node (ADR-0047 decision 7), and here, where no node's Notes
+    tab stands, is where they are found (ADR-0140)."""
 
     path: str
     pin_path: str
@@ -2787,7 +2957,7 @@ class _NoNode:
     above_series: bool
     first_level: bool
     pins: list[_MaintenancePin]
-    notes: list[_ShownNote] = field(default_factory=list)
+    notes: tuple[notes_tab.Shown, ...] = ()
 
 
 def _no_node(branch: str, now: datetime) -> _NoNode:
@@ -2816,9 +2986,16 @@ def _no_node(branch: str, now: datetime) -> _NoNode:
         events=url_for('events', under=held) if recorded else "",
         above=above, above_series=bool(above) and _series_tab(above),
         first_level=len(names) == 1,
-        pins=[pin for pin in _suspended_pins(status_tree.snapshot(""), now)
-              if pin.path == held or pin.path.startswith(held + "/")],
-        notes=_shown_notes(notes_book.beneath(held), None))
+        pins=[pin for pin in _maintenance_pins(*_maintenance_view(
+                  status_tree.snapshot(""), now))
+              if pin.suspended
+              and (pin.path == held or pin.path.startswith(held + "/"))],
+        notes=notes_tab.shown(
+            entries_of(notes_book.beneath(held)), here=held,
+            # every line is gone with its node, and says what it said
+            line_now=lambda _at, _slug: "", stands=_pin_stands,
+            editable=lambda _note: False,
+            act_size=lambda pin: len(notes_book.act(pin))))
 
 
 def _no_node_page(user: identity.Identity, branch: str) -> ResponseReturnValue:
@@ -2835,72 +3012,71 @@ def _no_node_page(user: identity.Identity, branch: str) -> ResponseReturnValue:
 
 def _maintenance_view(
     node: StatusSnapshot | None, now: datetime,
-) -> tuple[list[_MaintenancePin], list[_MaintenancePin], set[str]]:
+) -> tuple[list[_MaintenancePin], list[_MaintenancePin]]:
     """Surface the maintenance side-table (ADR-0014, ADR-0036) for the dashboard,
     read from the **unfiltered** snapshot so it survives hide-idle and any render
-    depth: the **node** pins, the **entry** pins, and the set of every path that
-    holds a pin somewhere below it (for the "contains maintenance" card pip).
+    depth: the **node** pins and the **entry** pins.
 
-    Three things rather than two because the two surfaces answer different questions
-    and must not be given one shape: ``/maintenance`` lists every pin
-    (:func:`_maintenance_pins`), the capped popover summarizes each node
+    Read from the one function that gives a node's door its number and its *Notes*
+    tab its list (:func:`~little_sister.tree.handled_parts`, ADR-0147 decision 2),
+    so that *Handled* and the band's pill list and count what ◇ and the tab do: a
+    line's pin while the node reports it, in the check's order, and after them one
+    on a line it does not report now, in the order it was set — ``unreported``,
+    holding nothing until its line is back, and stated with *Clear* all the same —
+    and a pin on a node not reported now, or on one of its lines, which the snapshot
+    carries beside the nearest node above it that stands
+    (``StatusSnapshot.nodes_not_reported``) — ``suspended``, holding nothing until
+    the node is reported again, its lines' in the order they were set.
+
+    Two surfaces answer different questions from them and must not be given one
+    shape: ``/maintenance`` lists every pin (:func:`_maintenance_pins`), and the
+    band's capped popover summarizes each node over the page
     (:func:`_maintenance_rows`).
-
-    **Only a node pin excludes a node from the ancestor set.** That exclusion exists
-    for two reasons — the card shows its own pin, and a node pin cancels its whole
-    subtree (ADR-0041), so a pip pointing below it would point at something
-    already covered. An **entry** pin cancels nothing below it: it silences one of
-    this node's own lines and leaves every child reporting exactly as before. So an
-    entry-pinned container that also holds a pinned descendant gets the pip, and
-    needs it; for its *own* entry pins it needs none, because its card already draws
-    the quiet count. The pip earns its place wherever a node is drawn as a chip: a
-    node whose members are all pinned reads ``MAINTENANCE`` — neither warn nor error —
-    so where its level starts as chips it stays one, and a chip renders no reasons and
-    no quiet count at all; the same disappearance happens under the depth ceiling.
-
-    Deliberately **not render-aware**: the set is computed from the snapshot, not
-    from what the template ended up drawing, so the pip can be redundant beside a
-    visible pinned box. That is already true of node pins today, and coupling the
-    maintenance index to the layout would be the worse trade — please do not
-    "improve" it.
-
-    One consequence to know before reasoning about "ancestors": the set holds **every**
-    ancestor of a pin, at every depth, but ``_status_grid.html`` only ever consumes it
-    in a **card head** — never in ``render_nodes``. So a nested box's path can be in
-    here and draw no pip; what the viewer gets is the pip on the card *containing* it,
-    which is the intent. A statement about this set is not a statement about what is
-    drawn.
     """
     node_pins: list[_MaintenancePin] = []
     entry_pins: list[_MaintenancePin] = []
-    ancestors: set[str] = set()
-
-    def walk(current: StatusSnapshot) -> bool:
-        """Record ``current``'s pins; return whether it or its subtree holds one."""
-        below = False
-        for child in current.children:
-            # Not `any(...)`: every child must be walked, and `any` short-circuits.
-            if walk(child):
-                below = True
-        entry = current.maintenance_entry
-        if entry is not None:
-            node_pins.append(_pin_view(current, entry, now))
-        here = False
-        for slot, reason_line in enumerate(current.reasons):
-            if reason_line.maintenance is not None:
-                here = True
-                entry_pins.append(_pin_view(
-                    current, reason_line.maintenance, now, slug=reason_line.slug,
-                    line=reason_line.text, slot=slot))
-        if below and entry is None:
-            ancestors.add(current.path)
-        return below or entry is not None or here
-
-    if node is not None:
-        walk(node)
+    if node is None:
+        return node_pins, entry_pins
+    nodes: dict[str, StatusSnapshot] = {}
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        nodes[current.path] = current
+        stack.extend(current.children)
+    gone_lines: dict[str, int] = {}
+    for part in handled_parts(node):
+        found = nodes.get(part.path)
+        for rule in part.rules:
+            entry = rule.entry
+            if entry is None or entry.kind != MAINTENANCE:
+                continue
+            if found is None:
+                # a node not reported now: no node to read a title or a line from
+                slot = -1
+                if part.slug:
+                    slot = gone_lines.get(part.path, 0)
+                    gone_lines[part.path] = slot + 1
+                (entry_pins if part.slug else node_pins).append(_MaintenancePin(
+                    path=part.path, title="", note=entry.note,
+                    remaining=_pin_remaining(rule.ends, now), slug=part.slug,
+                    slot=slot, expires_at=rule.ends, set_by=entry.set_by,
+                    entry=entry, suspended=True))
+                continue
+            current = found
+            if not part.slug:
+                node_pins.append(_pin_view(current, entry, now, ends=rule.ends))
+                continue
+            away = next((index for index, line in enumerate(current.not_reported)
+                         if line.slug == part.slug), -1)
+            slot = (len(current.reasons) + away if away >= 0 else
+                    next(index for index, line in enumerate(current.reasons)
+                         if line.slug == part.slug))
+            entry_pins.append(_pin_view(current, entry, now, slug=part.slug,
+                                        line=rule.line, slot=slot,
+                                        unreported=away >= 0, ends=rule.ends))
     node_pins.sort(key=lambda pin: pin.path)
     entry_pins.sort(key=lambda pin: (pin.path, pin.slot))
-    return node_pins, entry_pins, ancestors
+    return node_pins, entry_pins
 
 
 def _pins_above(branch: str) -> list[tuple[str, Pin]]:
@@ -2927,14 +3103,12 @@ def _pins_above(branch: str) -> list[tuple[str, Pin]]:
 
 
 def _maintenance_pins(node_pins: list[_MaintenancePin],
-                      entry_pins: list[_MaintenancePin],
-                      suspended: Sequence[_MaintenancePin] = ()
+                      entry_pins: list[_MaintenancePin]
                       ) -> list[_MaintenancePin]:
     """Every pin in one list for ``/maintenance``: by path, a node's own pin first,
     then its entries in the check's order — and among them the ``suspended`` ones,
-    which no node stands for (:func:`_suspended_pins`)."""
-    return sorted([*node_pins, *entry_pins, *suspended],
-                  key=lambda pin: (pin.path, pin.slot))
+    which no node stands for (``StatusSnapshot.nodes_not_reported``)."""
+    return sorted([*node_pins, *entry_pins], key=lambda pin: (pin.path, pin.slot))
 
 
 def _oldest_first(pins: Sequence[_MaintenancePin]
@@ -2966,7 +3140,9 @@ def _maintenance_rows(node_pins: list[_MaintenancePin],
             path=pin.path, title=pin.title, note=pin.note,
             remaining=pin.remaining, set_by=pin.set_by, pinned=True,
             quiet=len(entries.get(pin.path, ())),
-            total=pin.total)
+            total=pin.total,
+            away=sum(1 for each in entries.get(pin.path, ()) if each.unreported),
+            suspended=pin.suspended)
         for pin in node_pins]
     pinned = {pin.path for pin in node_pins}
     for path, found in entries.items():
@@ -2981,9 +3157,18 @@ def _maintenance_rows(node_pins: list[_MaintenancePin],
             path=path, title=found[0].title,
             note=sole.note if sole else "", remaining=soonest.remaining,
             set_by=sole.set_by if sole else "", slug=sole.slug if sole else "",
-            quiet=len(found), total=found[0].total))
+            quiet=len(found), total=found[0].total,
+            away=sum(1 for each in found if each.unreported),
+            suspended=found[0].suspended))
     rows.sort(key=lambda row: row.path)
     return rows
+
+
+#: The jobs a branch's *why* card and a node's *Notes* tab group what is handled by,
+#: in the order *Handled* lists its sections (ADR-0135 decision 8): in maintenance,
+#: accepted — *seen*'s (ADR-0142) and *done*'s (ADR-0146), the job's key the seen's —
+#: silenced (ADR-0144), and by a rule (ADR-0137).
+HANDLED_JOBS: tuple[str, ...] = (MAINTENANCE, SEEN, SILENCED, AGGREGATION_RULE)
 
 
 # Session signing key (ADR-0003): an explicit SECRET_KEY wins — its value may
@@ -3176,6 +3361,10 @@ state_layer: StateLayer | None = None
 #: The state directory's lease (ADR-0090), once the start has taken it: the readiness
 #: node asks it whether this instance still saves, and the stop lets it go.
 lease: Lease | None = None
+#: The deployment's holidays (ADR-0149), as the start read them from every root's
+#: ``holidays.yaml``, for the life of the process — none until the start has run,
+#: and where no engine runs.
+holiday_lists: Holidays = NO_HOLIDAYS
 _start_lock = threading.Lock()
 _started = False
 _stopped = False
@@ -3273,9 +3462,10 @@ def _start_engine(state: StateLayer, held: Lease, how: str) -> None:
     declared = _read_nodes()
     _seed_tags(built, declared)
     _load_aggregation(built)
+    _load_holidays()
     _restore_state(built, state)
+    _retain_notes(built)
     _restore_series(built, state)
-    _restore_notes(built, state)
     _seed_node_metadata(built, declared)
     engine = built
     built.start()
@@ -3304,6 +3494,16 @@ def _inject_engine_error() -> dict[str, str | None]:
     partial can render its engine-not-started alert without per-route plumbing.
     (The login page does not include the header, so nothing leaks pre-login.)"""
     return {"engine_error": engine_error}
+
+
+@app.context_processor
+def _inject_silence_default() -> dict[str, str]:
+    """Expose the deadline a silence takes where an admin gives none (ADR-0144) to
+    every template, for the ringed check's editor wherever a page draws one — one
+    context processor rather than one more argument on every page that passes
+    ``maintenance_default``. It is the default a blank deadline runs for: the
+    deployment's only where the deployment's is honored (:func:`_silence_default`)."""
+    return {"silence_default": _silence_default()}
 
 
 @app.context_processor
@@ -3408,7 +3608,7 @@ def ready() -> ResponseReturnValue:
 def _inject_signed_in() -> dict[str, str]:
     """Whom the settings menu's first row says this browser is signed in as: the
     identity's name, the one a pin and an event are recorded against, so that two
-    people of one first name can tell which of them it is (backlog #91); empty where
+    people of one first name can tell which of them it is (ADR-0029); empty where
     nobody is."""
     user = identity.current_user()
     return {"signed_in_as": user.name if user is not None else ""}
@@ -3447,6 +3647,17 @@ def _load_aggregation(engine: Engine) -> None:
     not apply fails toward alarming by itself."""
     status_tree.use_aggregation(load_rules(check_roots=engine.check_roots(),
                                            tags=status_tree.written_tags))
+
+
+def _load_holidays() -> None:
+    """Read the deployment's holidays (ADR-0149) — every root's ``holidays.yaml``, a
+    list named in two of them the later root's, whole — once, before the state is
+    restored, and hand them to the tree, whose maintenance entries leave out the days
+    they name (ADR-0150) from the pins' replay on. What cannot be read is a line on
+    the startup record and applies nothing; nothing here stops the monitor."""
+    global holiday_lists
+    holiday_lists = load_holidays()
+    status_tree.use_holidays(holiday_lists)
 
 
 def _read_nodes() -> dict[str, NodeMeta] | CheckError:
@@ -3603,13 +3814,19 @@ def _restore_state(engine: Engine, state: StateLayer) -> None:
                             HEARTBEAT_PATH, local_time(since))
     state.keep(EVENTS_FILE, status_tree.events_payload,
                restore=status_tree.adopt_events)
+    # The notes before the pins: a pin the pins' replay ends — one that ran out while
+    # the instance was down, or one no check covers — is recorded in its note
+    # (ADR-0145 decision 4), and an adoption takes the holder's notes first.
+    _restore_notes(state)
     store = PinStore(state, tree=status_tree)
     status_tree.use_pin_store(store)
     held = store.load_all()
-    status_tree.restore_maintenance(held.nodes, entry_pins=held.lines)
-    # and what a person accepted (ADR-0142), bound to what it accepted, which the
-    # nodes' first readings check
-    status_tree.restore_acknowledgments(held.acknowledged, held.lines_acknowledged)
+    # Every pin the file holds — the maintenance, and what a person acknowledged
+    # (ADR-0142, ADR-0144), bound to what it accepted, which the nodes' first
+    # readings check — and the file written back whole, once: a write between the
+    # two would keep the maintenance alone, and the next start lose the rest.
+    status_tree.restore_pins(held.nodes, held.lines, held.acknowledged,
+                             held.lines_acknowledged)
     # What is covered: the line of every configured check, and the instance's own.
     # Its node and its children are no check's, and a pin on one of them — which
     # ADR-0071 decision 4 and ADR-0076 decision 1 count on — is no orphan.
@@ -3663,23 +3880,34 @@ def _restore_series(engine: Engine, state: StateLayer) -> None:
     state.keep(SERIES_FILE, engine.series.payload, restore=engine.series.restore)
 
 
-def _restore_notes(engine: Engine, state: StateLayer) -> None:
-    """Put back the notes the last process wrote, write them through from now on, and
-    retire on every tick what the configuration says is past keeping (ADR-0140) —
-    once, post-fork, before the engine runs.
+def _restore_notes(state: StateLayer) -> None:
+    """Put back the notes the last process wrote and write them through from now on
+    (ADR-0140) — once, post-fork, before the engine runs — and hear of every pin the
+    tree ends, whose note records it (ADR-0145 decision 4), and of the windows of every
+    maintenance entry, which its note counts (ADR-0150).
 
-    After :func:`_restore_state`, which has fetched what a keeper holds. The file is
-    read whole or not at all: one the layer cannot take is a load failure, a line on
-    the ``state`` child for the life of the process, and the history starts empty.
+    Within :func:`_restore_state`, once it has fetched what a keeper holds and before
+    it replays the pins, so that a pin the replay ends has its note to be recorded in,
+    and a window it replays the note that counted it already.
+    The file is read whole or not at all: one the layer cannot take is a load
+    failure, a line on the ``state`` child for the life of the process, and the
+    history starts empty.
     Nothing reaps a note — it outlives its pin, its node and the configuration that
     made the node (ADR-0047 decision 7) — so the start takes every path the file
     holds, covered or not. The store registers its other direction itself, so a
     takeover's adopted copy, or the backup's, replaces the history (ADR-0077).
-    Retention runs beside the pins' expiry, on the scheduler tick (ADR-0047 decision
-    12): a node that never gets another note still trims."""
+    Retention is the engine's to run (:func:`_retain_notes`)."""
     store = NoteStore(state, book=notes_book)
     notes_book.restore(store.load())
     notes_book.use_store(store)
+    status_tree.on_pin_end(notes_book.pin_ended)
+    status_tree.on_window(notes_book.window_seen)
+
+
+def _retain_notes(engine: Engine) -> None:
+    """Retire on every tick what the configuration says is past keeping (ADR-0140),
+    beside the pins' expiry (ADR-0047 decision 12): a node that never gets another
+    note still trims. Once, at the start, with the engine it runs on."""
     engine.every_tick("notes", _retire_notes)
 
 
@@ -3897,11 +4125,13 @@ def _containers(node: StatusSnapshot | None) -> frozenset[str]:
     """Which of the nodes a page draws hold others: the viewed node and every node
     beneath it with children — a card, a nested box, or its card at depth 0.
 
-    Read before a filter drops a child. A pin on a node covers everything beneath it
-    whether or not the page shows it, and the editor an admin's ‖ opens in a node's
-    box says what its pin would cover (ADR-0104 decision 3, ADR-0127 decision 3) —
-    so a node *hide ok* left without children still says *and everything beneath
-    it*, which its ‖ carries as ``data-beneath``.
+    Read before a filter drops a child, since what a node holds does not change with
+    what the page shows. The page's head and a card hand it to ``own_lines`` as
+    ``beneath``: a node whose lines are all pinned still counts the nodes beneath it
+    (ADR-0124), so its count of quiet lines adds *nothing here is reporting* only
+    where no node is beneath it — never on a node *hide ok* left without children. A
+    new pin is set on the node's *Notes* tab, which ◇ opens, its *On* saying what the
+    pin will cover (ADR-0104 decision 3).
     """
     if node is None:
         return frozenset()
@@ -3931,7 +4161,8 @@ def status(branch: str = "") -> ResponseReturnValue:
         # here, where the reader has already presented a token (ADR-0080).
         return _api_json(status_envelope(node, version=__version__,
                                          engine=_engine_state(),
-                                         handbooks=_handbook_url))
+                                         handbooks=_handbook_url,
+                                         words=_entry_words()))
     # This route is not behind the gate (`identity.SELF_AUTHENTICATING_ENDPOINTS`):
     # the JSON branch above answers a bearer token, and a gate in front of the whole
     # view would redirect an API client to a login form. So the session half is
@@ -3963,7 +4194,8 @@ def status(branch: str = "") -> ResponseReturnValue:
         # with it, because on a node with 150 findings "the right page" is not the
         # same as "the line", and the page marks the one it names.
         focus, focus_orphan = _focus_of(branch, node)
-        g.offers = _offers(node, covered=bool(_pins_above(branch)))
+        # what the head's door says (ADR-0147 decision 2)
+        g.doors = door_counts(node)
         return render_template('check.html', username=user.name,
                                firstname=user.firstname, node=node,
                                # Its fold as its files say (ADR-0128): ✓ ok is a
@@ -4019,21 +4251,30 @@ def status(branch: str = "") -> ResponseReturnValue:
     # Lift the engine self-heartbeat into the status strip (ADR-0056) before filtering,
     # so it shows there always — never as a card, never hidden by hide-ok.
     node, heartbeat = _split_heartbeat(node)
-    # What a pin's editor on this page says and where its write comes back to
-    # (ADR-0104 decisions 3 and 7): which cards hold other nodes, read before a
-    # filter below drops a child, and the page's own address, with its filters and
-    # its depth — the same from the page and from the refresh's fragment.
+    # Which cards hold other nodes, read before a filter below drops a child — a node
+    # with nothing beneath it says so beside its quiet lines — and the page's own
+    # address, with its filters and its depth, where a block's editor on this page
+    # comes back to (ADR-0104 decision 4): the same from the page and from the
+    # refresh's fragment.
     containers = _containers(node)
-    # and what a ringed check on each head would mark, from the same unfiltered
-    # snapshot (ADR-0142)
-    g.offers = _offers(node, covered=bool(pins_above))
+    # and what each head's door says, from the same unfiltered snapshot (ADR-0147
+    # decision 2)
+    g.doors = door_counts(node) if node is not None else {}
     here = _own_address()
     hide_ok = _resolve_flag('hide_ok', False)
     hide_idle = _resolve_flag('hide_idle', False)
+    # *◇ details* (ADR-0147 decision 6): whether the wall draws the blocks of what
+    # handles a part, the button that opens the drawer at each; the deployment's
+    # default where the browser has said nothing, and the default alone on the kiosk,
+    # which has no band to say it with. One name for its default, its query parameter
+    # and its cookie, `handled_details`: `details` alone names a node's (ADR-0133).
+    handled_details = (config.handled_details
+                       if _presentation()["layout"] == KIOSK_LAYOUT
+                       else _resolve_flag('handled_details', config.handled_details))
     # Surface the maintenance set (ADR-0014) from the *unfiltered* snapshot, so the
-    # index and the "contains maintenance" pips survive hide-idle and any depth.
+    # band's index survives hide-idle and any depth.
     now = _now()
-    node_pins, entry_pins, maintenance_ancestors = _maintenance_view(node, now)
+    node_pins, entry_pins = _maintenance_view(node, now)
     maintenance_rows = _maintenance_rows(node_pins, entry_pins)
     # and the parts a configured rule changes the count of now (ADR-0137), and the
     # parts a person has seen (ADR-0142), which the band's pill counts beside the
@@ -4041,6 +4282,8 @@ def status(branch: str = "") -> ResponseReturnValue:
     handled_now = {} if node is None else handled_beneath(node)
     ruled_parts = handled_now.get("rule", 0)
     seen_parts = handled_now.get(SEEN, 0)
+    silenced_parts = handled_now.get(SILENCED, 0)
+    done_parts = handled_now.get(DONE, 0)
     # What each chip counts (ADR-0127 decision 2), from the same unfiltered
     # snapshot: a filter changes what the page shows, never what a chip says.
     chip_counts_by_path = _chip_counts_map(node)
@@ -4085,7 +4328,7 @@ def status(branch: str = "") -> ResponseReturnValue:
     depth = _resolve_depth()
     max_depth = 0 if depth == 0 else MAX_DEPTH
     depth_closed = depth if depth else None
-    # The first look (ADR-0128, backlog #91 §7.5): how each node the filters leave
+    # The first look (ADR-0128): how each node the filters leave
     # starts — as its files say, the built-in look where nobody spoke, the failure
     # budget's openings among them unless this browser's *Failures* look keeps them
     # shut — and what the planner prices of it, which reads no status. `depth=0`'s
@@ -4123,6 +4366,7 @@ def status(branch: str = "") -> ResponseReturnValue:
                                max_depth=max_depth, depth_closed=depth_closed,
                                drawn=drawn, priced=priced,
                                hide_ok=hide_ok, hide_idle=hide_idle,
+                               handled_details=handled_details,
                                chip_counts=chip_counts_by_path,
                                chip_leaves=chip_leaves,
                                rendered_s=rendered_s,
@@ -4140,7 +4384,7 @@ def status(branch: str = "") -> ResponseReturnValue:
                                maintenance_cap=config.maintenance_cap,
                                maintenance_rows=maintenance_rows,
                                ruled_parts=ruled_parts, seen_parts=seen_parts,
-                               maintenance_ancestors=maintenance_ancestors,
+                               silenced_parts=silenced_parts, done_parts=done_parts,
                                nothing_left=nothing_left,
                                tag=tag, tag_line=status_tree.tag_vocabulary.line(tag),
                                tag_context=tagged.context if tagged else {},
@@ -4159,6 +4403,7 @@ def status(branch: str = "") -> ResponseReturnValue:
                                max_depth=max_depth, depth_closed=depth_closed,
                                drawn=drawn, priced=priced,
                                hide_ok=hide_ok, hide_idle=hide_idle,
+                               handled_details=handled_details,
                                chip_counts=chip_counts_by_path,
                                chip_leaves=chip_leaves,
                                rendered_s=rendered_s,
@@ -4174,7 +4419,7 @@ def status(branch: str = "") -> ResponseReturnValue:
                                maintenance_cap=config.maintenance_cap,
                                maintenance_rows=maintenance_rows,
                                ruled_parts=ruled_parts, seen_parts=seen_parts,
-                               maintenance_ancestors=maintenance_ancestors,
+                               silenced_parts=silenced_parts, done_parts=done_parts,
                                nothing_left=nothing_left,
                                tag=tag, tag_line=status_tree.tag_vocabulary.line(tag),
                                tag_context=tagged.context if tagged else {},
@@ -4187,7 +4432,8 @@ def status(branch: str = "") -> ResponseReturnValue:
     # Persist a filter only when the viewer set it explicitly (never on the ~10s
     # poll fragment), so the chosen shape sticks across visits.
     if not request.args.get('fragment'):
-        for name, value in (('hide_ok', hide_ok), ('hide_idle', hide_idle)):
+        for name, value in (('hide_ok', hide_ok), ('hide_idle', hide_idle),
+                            ('handled_details', handled_details)):
             if request.args.getlist(name) or request.args.get('view'):
                 response.set_cookie(name, '1' if value else '0',
                                     max_age=VIEW_COOKIE_MAX_AGE, samesite='Lax',
@@ -4218,8 +4464,13 @@ _WHAT_MOVED: Mapping[str, str] = {
     CAUSE_PIN_SET: "a pin set",
     CAUSE_PIN_EDITED: "a pin edited",
     CAUSE_PIN_ENDED: "a pin ended",
+    CAUSE_PIN_OPENED: "a window opened",
+    CAUSE_PIN_CLOSED: "a window closed",
     CAUSE_LINE_PIN_SET: "a line's pin set",
+    CAUSE_LINE_PIN_EDITED: "a line's pin edited",
     CAUSE_LINE_PIN_ENDED: "a line's pin ended",
+    CAUSE_LINE_PIN_OPENED: "a line's window opened",
+    CAUSE_LINE_PIN_CLOSED: "a line's window closed",
     CAUSE_REMOVED: "a removal",
     CAUSE_STALE: "gone stale",
     CAUSE_RULE: "a rule began",
@@ -4229,6 +4480,15 @@ _WHAT_MOVED: Mapping[str, str] = {
     CAUSE_LINE_SEEN_SET: "a line marked seen",
     CAUSE_LINE_SEEN_EDITED: "a line's seen changed",
     CAUSE_LINE_SEEN_ENDED: "a line no longer seen",
+    CAUSE_SILENCED_SET: "silenced",
+    CAUSE_SILENCED_EDITED: "a silence changed",
+    CAUSE_SILENCED_ENDED: "no longer silenced",
+    CAUSE_LINE_SILENCED_SET: "a line silenced",
+    CAUSE_LINE_SILENCED_EDITED: "a line's silence changed",
+    CAUSE_LINE_SILENCED_ENDED: "a line no longer silenced",
+    CAUSE_LINE_DONE_SET: "a line marked done",
+    CAUSE_LINE_DONE_EDITED: "a line's done changed",
+    CAUSE_LINE_DONE_ENDED: "a line's done ended",
 }
 
 
@@ -4368,75 +4628,575 @@ def handbook(path: str = "") -> ResponseReturnValue:
     return page if text else (page, 404)
 
 
+#: The routes whose answer the drawer frames (ADR-0147 decision 3): a node's *Notes*
+#: tab, and the route of each act its forms post to, whose refusal and conflict pages
+#: come back in the frame the form was sent from.
+_PANEL_ROUTES = frozenset({"notes", "maintenance", "seen", "silenced", "done"})
+
+
+def _in_panel() -> bool:
+    """Whether this answer is drawn in the *Notes* tab's panel mode (ADR-0147 decision
+    3): asked for with ``?panel=1`` by the drawer that frames the tab, and sent back as
+    ``panel=1`` by every form the panel draws, so that whatever answers a write from it
+    — the tab again, a refusal, a kind's conflict page — is drawn in the panel too.
+    Only on the routes the drawer frames: any other page asked so is itself."""
+    return (has_request_context() and request.endpoint in _PANEL_ROUTES
+            and request.values.get("panel") == "1")
+
+
+@app.context_processor
+def _inject_panel() -> dict[str, bool]:
+    """``panel`` for every template (:func:`_in_panel`): under it the shared header
+    leaves out the site's bar and rail and makes every link leave the frame, the band
+    stands aside — the drawer's head names the node — and every form the page draws
+    stays in the frame and says so (:func:`_in_frame`, :func:`_panel_field`)."""
+    return {"panel": _in_panel()}
+
+
+@pass_context
+def _in_frame(context: TemplateContext) -> Markup:
+    """The ``target`` of a form the panel draws, and of a refusal's way back to the tab
+    (ADR-0147 decision 3): the panel's links leave the frame (``<base
+    target="_top">``), and these stay in it. Nothing outside the panel."""
+    return Markup(' target="_self"') if context.get("panel") else Markup("")
+
+
+@pass_context
+def _panel_field(context: TemplateContext, back: str = "") -> Markup:
+    """What a form the panel draws sends with it (ADR-0147 decision 3): ``panel=1``, so
+    that what answers it is drawn in the panel too, and ``back`` as its ``next`` where
+    the form names none of its own — a note's — the address the drawer closes on once
+    the write has gone through. Nothing outside the panel."""
+    if not context.get("panel"):
+        return Markup("")
+    field = Markup('<input type="hidden" name="panel" value="1">')
+    if back:
+        field += Markup('<input type="hidden" name="next" value="{}">').format(back)
+    return field
+
+
+app.jinja_env.globals["in_frame"] = _in_frame
+app.jinja_env.globals["panel_field"] = _panel_field
+
+
 @app.route('/notes/<path:path>', methods=['GET', 'POST'])
 def notes(path: str) -> ResponseReturnValue:
-    """A node's Notes view (ADR-0140): what was written about the node and its lines,
-    newest first — notes of their own and its pins' notes, which enter the history as
-    a pin is set (ADR-0047 decision 4) — each with who wrote it and when and, folded,
-    what the node showed then (decision 6). An admin adds a note at the top, on the
-    node or on one of its lines — the one ``?reason=<slug>`` names, where a line's
-    own control led here — and edits the newest note of its own; a pin's note is
-    edited with its pin while the pin stands (decision 5). Not polled: it is read, as
-    History is. A path no node stands at is answered as its other addresses are, and
-    that page lists the notes written for the path and beneath it (ADR-0116)."""
+    """A node's Notes tab, the place to act (ADR-0145): what fails at and beneath the
+    node, a line on what came before, what stands, the form — a note, or a pin of a
+    kind the reader may set — and the history, what came before, newest first. A note
+    written here posts to this route, a pin to the route of its own act; ``?reason=``
+    opens the form on a line and ``?kind=`` on a kind (decision 2), and ``?at=`` the
+    page at a block under what stands, the job of what handles that line or the node's
+    own part, its editor open, and a configured rule's by its key with ``?rule=``
+    (ADR-0147 decision 3); ``?panel=1`` draws it as the
+    drawer frames it, in its panel mode (:func:`_in_panel`). Not polled: it is read, as
+    History is (ADR-0140 decision 2). A path no node stands at is answered as its
+    other addresses are, and that page lists the notes written for the path and
+    beneath it (ADR-0116)."""
     user = identity.signed_in()
     node = status_tree.snapshot(path)
     if node is None:
         return _no_node_page(user, path)
     if request.method == 'POST':
         return _write_note(user, path, node)
-    return _notes_page(user, path, node, line=request.args.get('reason', ''))
+    return _notes_page(user, path, node, line=request.args.get('reason', ''),
+                       kind=request.args.get('kind', ''),
+                       at=request.args.get('at', ''),
+                       rule=request.args.get('rule', ''))
+
+
+@dataclass(frozen=True)
+class _Offered:
+    """A kind the Notes tab's form offers (ADR-0145 decision 2), with what it may be
+    set on here, each a :class:`~little_sister.notes_tab.Target` — and for maintenance
+    the entry that stands on a part, by its slug, which a window set there joins
+    (ADR-0150, landing 4)."""
+    kind: notes_tab.Kind
+    targets: tuple[notes_tab.Target, ...]
+    entries: Mapping[str, Pin] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _LineStands:
+    """What stands on one of a node's lines, as the Notes tab states it among what
+    stands (ADR-0145 decision 1): the line's slug, and its text as the run reports it
+    — empty for a line the run does not report now, whose pins are suspended, not
+    gone (ADR-0036 decision 6) — its maintenance pin and what a person acknowledged of
+    it, and whether it fails now, which an acknowledgment's editor asks (ADR-0144) —
+    and its occurrence, which a *done* its editor offers closes (ADR-0146)."""
+    slug: str
+    text: str
+    maintenance: Pin | None
+    acknowledgment: Pin | None
+    fails: bool = False
+    occurrence: str = ""
+
+
+#: What a block under a Notes tab's *what stands* may be asked at (ADR-0147
+#: decision 3): a pin's kind, an acknowledgment's, or a configured rule's.
+_AT_JOBS = frozenset({MAINTENANCE, SEEN, SILENCED, DONE, "rule"})
+
+
+@dataclass(frozen=True)
+class _At:
+    """The block a Notes tab was asked at (ADR-0147 decision 3), where a mark's door
+    lands: the ``job`` of what handles the node's own part, or the line ``slug``
+    names — a pin's kind, an acknowledgment's, or ``rule`` — and for a configured
+    rule, which of the tab's rules it is, ``rule``, counted from one in the order the
+    tab states them (:func:`_rules_here`). That block carries the page's one anchor,
+    ``at``, and its editor stands open for whoever may change it. Nothing where the tab
+    was asked at nothing, or at a block that no longer stands."""
+    job: str = ""
+    slug: str = ""
+    rule: int = 0
+
+    def on(self, kind: str, slug: str = "") -> bool:
+        """Whether the block of a person's ``kind`` on the node's own part, or on the
+        line ``slug``, is the one asked at."""
+        return bool(self.job) and self.job == kind and self.slug == slug
+
+
+def _at_of(node: StatusSnapshot, job: str, slug: str, rule: str = "") -> _At:
+    """What ``?at=`` and ``?reason=`` ask a Notes tab at (:class:`_At`): a person's
+    block as asked, the line's where a slug is given, and a configured rule's by its
+    place among the rules the tab states — the rule ``?rule=`` names by its key, as a
+    rule's block on the wall does, the rule a line's mark stands for, which counts its
+    lines, or the first that acts on the node's own part, as the head's mark stands
+    for it."""
+    if job not in _AT_JOBS:
+        return _At()
+    if job != "rule":
+        return _At(job, slug)
+    if rule:
+        found = next((index for index, here in enumerate(_rules_here(node), 1)
+                      if here.at.rule.key == rule), 0)
+    elif slug:
+        line = next((each for each in node.reasons if each.slug == slug), None)
+        if line is None or line.rule is None:
+            return _At()
+        wanted = line.rule.rule.key
+        found = next((index for index, here in enumerate(_rules_here(node), 1)
+                      if here.place == "lines" and here.at.rule.key == wanted), 0)
+    else:
+        found = next((index for index, here in enumerate(_rules_here(node), 1)
+                      if here.place in ("node", "counted") and here.at.changes), 0)
+    return _At(job, slug, found) if found else _At()
+
+
+@dataclass(frozen=True)
+class _NotesTab:
+    """A node's Notes tab (ADR-0145): what fails at and beneath the node — the parts
+    the ringed check would mark (``fails``) — the line on what came before
+    (``before``), and the history, newest first; what stands of its lines (``lines``)
+    and what is handled beneath it, each part once, in every state (``beneath``,
+    :func:`~little_sister.tree.handled_parts`, ADR-0147 decision 2), its own blocks
+    being its snapshot's; the block it was asked at (``at``); and the kinds the
+    reader's form offers, the one it opens on (``chosen``) and every kind's choice of
+    its *On* (``on``), by the kind's name. ``ran`` is what has run of each schedule
+    that stands on the node or one of its lines, by the line's slug — empty for the
+    node's own — which its block's row says (ADR-0150)."""
+    fails: tuple[Acceptable, ...]
+    before: notes_tab.Before
+    history: tuple[notes_tab.Shown, ...]
+    lines: tuple[_LineStands, ...]
+    beneath: tuple[HandledPart, ...]
+    offered: tuple[_Offered, ...]
+    chosen: str = ""
+    on: Mapping[str, str] = field(default_factory=dict)
+    #: For a reader who may set no kind, what the small form a ticket is filed from
+    #: offers under *On* — the node and each of its lines — and the one it opens on,
+    #: the line the tab was asked at where it is one (ADR-0148).
+    files_on: tuple[notes_tab.Target, ...] = ()
+    files_choice: str = ""
+    at: _At = field(default_factory=_At)
+    ran: Mapping[str, notes_tab.Ran] = field(default_factory=dict)
+
+    @property
+    def digest(self) -> str:
+        """The digest of what fails, which the head's act carries (ADR-0142
+        decision 5)."""
+        return parts_digest(self.fails) if self.fails else ""
+
+    @property
+    def beneath_by_job(self) -> tuple[tuple[str, tuple[HandledPart, ...]], ...]:
+        """What is handled beneath, by the job that decides each part, as the
+        *why* card groups its rules under each job's mark (:data:`HANDLED_JOBS`):
+        each job where it holds something, its parts in the tree's order."""
+        jobs: dict[str, list[HandledPart]] = {}
+        for part in self.beneath:
+            jobs.setdefault(part.rules[0].job, []).append(part)
+        return tuple((job, tuple(jobs[job])) for job in HANDLED_JOBS if job in jobs)
+
+    @property
+    def open(self) -> int:
+        """How many parts of each job's list stand open, as the *why* card's
+        rows do (:data:`WHY_OPEN`)."""
+        return WHY_OPEN
 
 
 def _notes_page(user: identity.Identity, path: str, node: StatusSnapshot, *,
-                line: str = "", refused: str = "", mine: str = "",
-                editing: str = "") -> ResponseReturnValue:
-    """The Notes view as a reader sees it, or as a refused write comes back to it:
-    ``refused`` says why nothing was saved, ``mine`` are the admin's words, back in
-    the form they were written in — the newest note's, ``editing`` naming it by its
-    key, where that note may still be edited, and otherwise a new note's, on the line
-    ``line``, so that nothing typed is lost."""
-    shown = _shown_notes(notes_book.of(path), node, admin=user.admin)
-    if editing and not any(entry.editable and entry.note.key == editing
-                           for entry in shown):
+                line: str = "", kind: str = "", refused: str = "", mine: str = "",
+                editing: str = "", at: str = "", rule: str = "",
+                fields: Mapping[str, str] | None = None,
+                view: "_ScheduleView | None" = None,
+                previewing: bool = False) -> ResponseReturnValue:
+    """The Notes tab as a reader sees it, or as a refused write comes back to it
+    (ADR-0145 decision 2): ``refused`` says why nothing was saved above the form, and
+    ``mine`` are the writer's words, back in the form they were written in — the
+    newest note's editor, ``editing`` naming it by its key, where that note may still
+    be edited, and otherwise the form's, its kind ``kind`` and its *On* ``line`` chosen
+    as they were, with the other ``fields`` it was sent with — so that nothing typed is
+    lost; a maintenance editor's are ``view``, which ``previewing`` draws with what it
+    would set beneath it, the page saying it holds words (ADR-0150, landing 4). A
+    first look opens the form on ``?kind=`` and ``?reason=``, and the page at the block
+    ``?at=`` names — a configured rule's by ``?rule=`` (:func:`_at_of`)."""
+    fails = _failing_parts(path)
+    lines_at: dict[str, dict[str, str] | None] = {}
+
+    def line_now(at: str, slug: str) -> str | None:
+        if at not in lines_at:
+            found = status_tree.snapshot(at)
+            lines_at[at] = ({each.slug: each.text for each in found.reasons}
+                            if found is not None else None)
+        reported = lines_at[at]
+        return None if reported is None else reported.get(slug)
+
+    may_note = user.may(notes_tab.NOTE)
+    said = notes_tab.shown(
+        notes_book.entries(path), here=node.path, line_now=line_now,
+        stands=_pin_stands,
+        editable=lambda note: may_note and notes_book.editable(note),
+        act_size=lambda pin: len(notes_book.act(pin)))
+    history = tuple(entry for entry in said if not entry.standing)
+    offered = _offered(user, node, fails,
+                       keep=(kind, line) if refused or previewing else None)
+    failing = (any(part.path == node.path and part.slug == line for part in fails)
+               if line else bool(fails))
+    choices = {each.kind.name: each.targets for each in offered}
+    chosen, _ = notes_tab.opens_on(choices, asked=kind, line=line, failing=failing)
+    # whoever may set no kind still files a ticket, from the part alone (ADR-0148)
+    files_on = () if offered else notes_tab.targets(
+        notes_tab.KINDS_BY_NAME[notes_tab.NOTE],
+        [(each.slug, each.text) for each in node.reasons if each.slug], (),
+        here=node.path)
+    if editing and not any(entry.editable and entry.first.key == editing
+                           for entry in history):
         editing = ""
+    # what has run of each schedule that stands here, which its note counts (ADR-0150)
+    ran = {entry.first.slug: found for entry in said
+           if entry.standing and entry.first.path == node.path
+           and (found := notes_tab.ran_so_far(entry.planned,
+                                              entry.first.tally)) is not None}
+    tab = _NotesTab(fails=fails, before=notes_tab.before(history, said),
+                    history=history, lines=_lines_standing(node),
+                    beneath=tuple(part for part in handled_parts(node)
+                                  if part.path != node.path),
+                    offered=offered, chosen=chosen,
+                    on=notes_tab.opens_each_on(choices, line=line),
+                    at=_at_of(node, at, line, rule), files_on=files_on,
+                    files_choice=notes_tab.opens_each_on(
+                        {"file": files_on}, line=line).get("file", ""), ran=ran)
     return render_template(
         'notes.html', username=user.name, firstname=user.firstname, node=node,
         branch=path, view="notes", series_tab=_series_tab(path),
-        series_count=_series_count(path), notes=shown, may=user.admin,
-        lines=[entry for entry in node.reasons if entry.slug],
-        line=line, refused=refused, mine=mine, editing=editing)
+        series_count=_series_count(path), tab=tab, refused=refused, mine=mine,
+        editing=editing, fields=fields or {}, pins_above=_pins_above(path),
+        editor=view, previewing=previewing,
+        # where a write from the tab comes back to, in the panel the panel's address,
+        # which the drawer closes on (ADR-0147 decision 3)
+        back=(url_for('notes', path=path, panel=1) if _in_panel()
+              else url_for('notes', path=path)),
+        may_maintenance=user.may(MAINTENANCE), may_seen=user.may(SEEN),
+        may_silence=user.may(SILENCED), may_done=user.may(DONE),
+        maintenance_default=config.maintenance_default_expiry,
+        maintenance_timezone=config.timezone, silence_default=_silence_default())
+
+
+def _offered(user: identity.Identity, node: StatusSnapshot,
+             fails: Sequence[Acceptable], *,
+             keep: tuple[str, str] | None = None) -> tuple[_Offered, ...]:
+    """The kinds the Notes tab's form offers ``user`` on ``node`` (ADR-0145 decisions
+    2 and 3), in the form's order: each the reader may set, with what it may be set on
+    — and none that may be set on nothing here, *Seen* where nothing fails that the
+    ringed check would mark. *Silence* is offered besides on every part that could
+    take one later, failing or not, as the tree answers it: the node's own part where
+    it reads by itself, and each line of a node whose lines are members, but a part in
+    maintenance or one a person holds already (ADR-0144 decision 1). A line's
+    maintenance is a member's, as the node's page offers it, and maintenance is
+    offered on a part an entry stands on or is planned for too, carrying that entry,
+    which a window set there joins (#35's note, decision 2; ADR-0150, landing 4).
+    ``keep`` is a refused write's kind and the part it chose, which stays a choice of
+    that kind (:func:`~little_sister.notes_tab.targets`)."""
+    lines = [(line.slug, line.text) for line in node.reasons if line.slug]
+    failing = [(part.path, part.slug) for part in fails]
+    # what tells each line's failure from the next, which a *done* closes
+    # (ADR-0146): only a line that has one takes it
+    events = {line.slug: line.occurrence for line in node.reasons
+              if line.slug and line.occurrence}
+    # the entry that stands on a part, a window of it open or planned (ADR-0150): a
+    # window set there joins it, and replaces it only where the person chooses to
+    entries: dict[str, Pin] = {}
+    own = node.maintenance_entry or (node.planned_entry.pin
+                                     if node.planned_entry is not None else None)
+    if own is not None:
+        entries[""] = own
+    for line in node.reasons:
+        standing = line.maintenance or (line.planned.pin if line.planned is not None
+                                        else None)
+        if line.slug and standing is not None:
+            entries[line.slug] = standing
+    offered = []
+    for kind in notes_tab.KINDS:
+        if not user.may(kind.permission):
+            continue
+        kept = keep[1] if keep is not None and keep[0] == kind.name else None
+        if kind.name == MAINTENANCE:
+            choices = notes_tab.targets(kind, lines if node.members else [],
+                                        failing, here=node.path, keep=kept)
+            if choices:
+                offered.append(_Offered(kind, choices, {
+                    target.slug: entries[target.slug] for target in choices
+                    if target.slug in entries}))
+            continue
+        if kind.on_parts:
+            # every part the tree would take one on now, the parts that fail among
+            # them: what it refuses — a part in maintenance, one held already, a node
+            # that reads by its lines — is not offered
+            members = lines if node.members else []
+            held = [part for part in ("", *(slug for slug, _text in members))
+                    if status_tree.acknowledgeable(node.path, part, kind.name)]
+            choices = notes_tab.targets(kind, members, failing, here=node.path,
+                                        held=held, keep=kept)
+        else:
+            choices = notes_tab.targets(kind, lines, failing, here=node.path,
+                                        keep=kept, events=events)
+        if choices:
+            offered.append(_Offered(kind, choices))
+    return tuple(offered)
+
+
+def _lines_standing(node: StatusSnapshot) -> tuple[_LineStands, ...]:
+    """What stands on ``node``'s lines (:class:`_LineStands`): each line the run
+    reports that a pin or a person's acknowledgment stands on, in the check's order,
+    then each it does not report now, in the order it was set — read from the
+    snapshot, which joins them once for every surface
+    (``StatusSnapshot.not_reported``, ADR-0080 decision 1), so that the tab lists what
+    its door counts (ADR-0147 decision 2) — every one stated where the tab states what
+    stands, with its editor for whoever may (ADR-0104 decision 4)."""
+    said: list[_LineStands] = []
+    for line in node.reasons:
+        if not line.slug or (line.maintenance is None
+                             and line.acknowledgment is None):
+            continue
+        reads = line.code if line.code is not None else node.reported_code
+        said.append(_LineStands(line.slug, line.text, line.maintenance,
+                                line.acknowledgment, fails=reads in _FAILING,
+                                occurrence=line.occurrence))
+    said.extend(_LineStands(line.slug, "", line.maintenance, line.acknowledgment)
+                for line in node.not_reported
+                if line.maintenance is not None or line.acknowledgment is not None)
+    return tuple(said)
 
 
 def _write_note(user: identity.Identity, path: str,
                 node: StatusSnapshot) -> ResponseReturnValue:
-    """An admin's note, added or edited (ADR-0140), answered with the Notes view.
+    """A note, added or edited (ADR-0140), under the permission of its own act,
+    ``note`` (ADR-0145 decision 3), answered with the Notes tab.
 
     A note added is appended to the node's history with what the node showed (ADR-0047
     decision 6). An edit names the note by its key and the token it was drawn with —
     the compare-and-set of decision 5 — and is refused where somebody changed the note
     since, where a newer note was written on the node, and where the note is a pin's:
-    nothing is saved, and the admin's words come back in the form, as a refused pin
-    comes back (ADR-0014). A note without words is refused alike."""
-    if not user.admin:
+    nothing is saved, and the words come back in the form, as a refused pin comes back
+    (ADR-0014). A note without words is refused alike. A write that goes through comes
+    back to the tab, or to where its form says (``next``), as a pin's does: the panel's
+    address, in the drawer (ADR-0147 decision 3)."""
+    if not user.may(notes_tab.NOTE):
         abort(403)
     text = request.form.get('text', '').strip()
+    next_raw = request.form.get('next', '')
+    written = _safe_next(next_raw) if next_raw else url_for('notes', path=path)
     if request.form.get('action') == 'edit':
         key = request.form.get('key', '')
+        # where the note may no longer be edited, the words come back in the form's
+        # note, to be added as a note of their own
         if not text:
-            return _notes_page(user, path, node, refused=_NO_WORDS, mine=text,
-                               editing=key)
+            return _notes_page(user, path, node, kind=notes_tab.NOTE,
+                               refused=_NO_WORDS, mine=text, editing=key)
         write = notes_book.edit(path, key, text, by=user.name,
                                 expected=request.form.get('set_at', ''))
         if write.refused:
-            return _notes_page(user, path, node, refused=_edit_refused(write.current),
-                               mine=text, editing=key)
-        return redirect(url_for('notes', path=path))
+            return _notes_page(user, path, node, kind=notes_tab.NOTE,
+                               refused=_edit_refused(write.current), mine=text,
+                               editing=key)
+        return redirect(written)
     slug = request.form.get('slug', '')
     if not text:
-        return _notes_page(user, path, node, line=slug, refused=_NO_WORDS)
+        return _notes_page(user, path, node, line=slug, kind=notes_tab.NOTE,
+                           refused=_NO_WORDS)
     notes_book.add(path, slug, text, by=user.name, context=context_of(node, slug))
-    return redirect(url_for('notes', path=path))
+    return redirect(written)
+
+
+@app.route('/draft/<path:path>', methods=['POST'])
+def draft(path: str) -> ResponseReturnValue:
+    """A ticket drafted from a node's *Notes* tab (ADR-0148): what the button of a
+    package that fills ``notes.actions`` posts its form to, in a new tab — the part
+    chosen under *On* (``slug``), the words (a note's ``text``, a pin's ``note``) and
+    the package the button names (``draft``), the form's kind in the address. The
+    route calls the draft function that package registered beside its template,
+    handed what a draft is written with — the node and its path, the kind, the part
+    chosen and what it reads (:func:`_draft_parts`), the words written out as a line
+    is and every line break in them a newline, and the functions every slot is handed
+    (:func:`_drafting`) — and answers with the address it returns: a 303 to an http(s)
+    address, and never to an address the request carries. Where it cannot, a page of
+    its own says why in the new tab (:func:`_no_draft`). Whoever is signed in may: the
+    route writes nothing, and the tracker decides who files."""
+    node = status_tree.snapshot(path)
+    branch = _url_branch(join_path(path))
+    if node is None:
+        return _no_draft(branch, f"No node stands at {join_path(path)} any more.",
+                         404)
+    package = request.form.get('draft', '').strip()
+    function = slots.draft_of(package) if package else None
+    if function is None:
+        return _no_draft(
+            branch, (f"Nothing here drafts for {package!r}: no package that fills a "
+                     f"node's Notes tab registered a draft by that name."
+                     if package else "The form named no package to draft with."),
+            404 if package else 400, node=node)
+    kind = request.args.get('kind', '')
+    if kind and kind not in notes_tab.KINDS_BY_NAME:
+        return _no_draft(branch, f"The form named a kind the Notes tab does not "
+                                 f"have, {kind!r}.", 400, node=node)
+    chosen = request.form.get('slug', '')
+    parts = _draft_parts(node, chosen)
+    if parts is None:
+        return _no_draft(branch, "The line chosen is no longer reported here: open "
+                                 "the Notes tab again, and choose from what it "
+                                 "reports now.", 409, node=node)
+    drafting = _drafting(node)
+    # A browser sends a textarea's line breaks as CRLF: a draft function is handed
+    # each as a newline (ADR-0148 decision 3).
+    words = request.form.get('text', request.form.get('note', ''))
+    words = words.replace('\r\n', '\n').replace('\r', '\n').strip()
+    try:
+        address = slots.call_draft(package, function, {
+            **drafting, "node": node, "path": node.path, "kind": kind,
+            "slug": chosen, "parts": parts,
+            "words": written_out(words, handbook=_handbook_here(node.path))})
+    except slots.DraftFailed:
+        return _no_draft(branch, f"{package} could not draft this: its draft "
+                                 f"function failed, which the instance's own node "
+                                 f"says.", 502, node=node)
+    if address is None:
+        return _no_draft(branch, f"{package} has nothing to draft for this.", 200,
+                         node=node)
+    if not _sendable(address):
+        return _no_draft(branch, f"{package} answered with what is not an http or "
+                                 f"https address, so the browser is not sent "
+                                 f"there.", 502, node=node)
+    return redirect(str(address), code=303)
+
+
+def _draft_parts(node: StatusSnapshot,
+                 chosen: str) -> tuple[slots.DraftPart, ...] | None:
+    """What a ticket drafted from ``node``'s Notes tab is about (ADR-0148), each
+    part's lines written out for its own node: the line ``chosen``, where one was —
+    ``None`` where the node reports it no longer; else what fails at and beneath the
+    node, as the tab lists it under *What fails here now*, a line by its text and a
+    node failing by its own reading by every line it reports; and where nothing fails
+    there, the node itself and what it reads."""
+    if chosen:
+        line = next((each for each in node.reasons if each.slug == chosen), None)
+        if line is None:
+            return None
+        return (slots.DraftPart(node.path, chosen,
+                                (_written_for(node.path, line.text),)),)
+    failing = _failing_parts(node.path)
+    if not failing:
+        return (slots.DraftPart(node.path, "", _lines_written(node)),)
+    parts: list[slots.DraftPart] = []
+    for part in failing:
+        if part.slug:
+            parts.append(slots.DraftPart(part.path, part.slug,
+                                         (_written_for(part.path, part.said),)))
+            continue
+        found = status_tree.snapshot(part.path)
+        parts.append(slots.DraftPart(part.path, "",
+                                     _lines_written(found) if found else ()))
+    return tuple(parts)
+
+
+def _written_for(path: str, text: str) -> str:
+    """A line of the node at ``path`` written out of the instance, as the Copy
+    document writes it, its short links to that node's handbook."""
+    return written_out(text, handbook=_handbook_here(path))
+
+
+def _lines_written(node: StatusSnapshot) -> tuple[str, ...]:
+    """Every line ``node`` reports, written out for it."""
+    return tuple(_written_for(node.path, line.text) for line in node.reasons
+                 if line.text.strip())
+
+
+def _sendable(address: object) -> bool:
+    """Whether a draft function's answer is an address a browser may be sent to:
+    an absolute http(s) one naming a host (ADR-0148)."""
+    if not isinstance(address, str):
+        return False
+    split = urlsplit(address)
+    return split.scheme in ("http", "https") and bool(split.netloc)
+
+
+def _no_draft(branch: str, why: str, status: int, *,
+              node: StatusSnapshot | None = None) -> ResponseReturnValue:
+    """What the draft route answers where it sends the tab to no draft (ADR-0148):
+    why, in the new tab the button opened, nothing written — the words are where they
+    were typed — and the way back to the node's Notes tab where the node stands."""
+    user = identity.signed_in()
+    return render_template(
+        'draft_refused.html', username=user.name, firstname=user.firstname,
+        node=node, branch=branch, node_path=join_path(branch), why=why), status
+
+
+def _refused_on_tab(*, kind: str, path: str, slug: str, mine: str,
+                    fields: Mapping[str, str], problem: str | None = None,
+                    stored: Pin | None = None, view: "_ScheduleView | None" = None,
+                    preview: "_ScheduleView | None" = None,
+                    **_said: object) -> ResponseReturnValue:
+    """A pin the Notes tab's form set, refused, as the tab answers it (ADR-0145
+    decision 2): why above the form, and the words in it, the kind and the part chosen
+    as they were — the route's ``problem``, or a pin ``stored`` on the part since the
+    tab was drawn, which now stands under what stands, where it is changed. The tab is
+    drawn anew, so what fails there is listed as it stands, and a head's act sent
+    again marks those. Where no node stands at ``path`` any more, the page of a path no
+    node stands at answers, as the tab's address would. A maintenance editor's fields
+    all come back (``view``, ADR-0150, landing 4), and a ``preview`` is the editor's
+    own button answered as a refusal is, in full, with what it would set beneath it —
+    nothing written, no word of a refusal, and the page saying it holds words, so
+    that the drawer asks before it drops them."""
+    user = identity.signed_in()
+    node = status_tree.snapshot(path)
+    branch = _url_branch(join_path(path))
+    if node is None:
+        return _no_node_page(user, branch)
+    if preview is not None:
+        return _notes_page(user, branch, node, line=slug, kind=kind, mine=mine,
+                           fields=fields, view=preview, previewing=True)
+    part = "line" if slug and slug != notes_tab.OWN_PART else "node"
+    if problem:
+        why = f"{problem} Nothing was saved: your words are below."
+    elif stored is not None:
+        done = {MAINTENANCE: "put in maintenance", SEEN: "marked seen",
+                SILENCED: "silenced", DONE: "marked done"}.get(stored.kind, "pinned")
+        why = (f"This {part} was {done} since this tab was drawn: it stands under "
+               f"What stands, where it is changed. Nothing was saved: your words are "
+               f"below.")
+    else:
+        why = "Nothing was saved: your words are below."
+    return _notes_page(user, branch, node, line=slug, kind=kind, refused=why,
+                       mine=mine, fields=fields, view=view)
 
 
 #: What a note written without words is answered with.
@@ -4506,6 +5266,8 @@ def series(path: str) -> ResponseReturnValue:
 
 
 _DEFAULT_MAINTENANCE_SECONDS = 7 * 24 * 3600   # hard fallback if config is unusable
+#: The fallback as a form names it, where a blank field runs for it.
+_DEFAULT_WORDS = "7d"
 
 # A maintenance window has to be a **positive** number of seconds, and a bounded one
 # (ADR-0014). ADR-0014 promised a *finite* expiry; finite was never enough:
@@ -4525,6 +5287,62 @@ _DEFAULT_MAINTENANCE_SECONDS = 7 * 24 * 3600   # hard fallback if config is unus
 # who typed `-1d` and silently got a week has learned nothing.
 MIN_MAINTENANCE_SECONDS = 1
 MAX_MAINTENANCE_SECONDS = 365 * 24 * 3600
+
+#: The longest a silence may stand (ADR-0144): thirty days, the library's bound rather
+#: than the deployment's, since a bound a deployment could raise would be raised the
+#: first time it bit. A silence that has to stand longer has news each month, which its
+#: extension says, or says how the estate is built, which a configured rule does. Its
+#: deadline is held to the slowest covered check as a window is, and refused, never
+#: clamped, as a window's expiry is.
+MAX_SILENCE_SECONDS = 30 * 24 * 3600
+
+
+def _honored_default(configured: str, longest: int) -> int | None:
+    """The seconds a blank expiry or deadline runs for by the deployment's word —
+    ``maintenance_default_expiry`` (ADR-0014) or ``silence_default_expiry``
+    (ADR-0144) — where ``configured`` reads as a duration of a second up to
+    ``longest``; ``None`` where it does not, and a blank field runs for a week:
+    the one value that falls back rather than refusing, so that a typo in the
+    settings cannot make the form unusable. That it fell back is said once, at
+    start (:func:`_warn_unhonored_defaults`), and the form names the week."""
+    try:
+        seconds = parse_duration(configured, 0)
+    except (CheckError, OverflowError, ValueError):
+        return None
+    return seconds if MIN_MAINTENANCE_SECONDS <= seconds <= longest else None
+
+
+def _silence_default() -> str:
+    """The default a silence's form names (ADR-0144): the deployment's
+    ``silence_default_expiry`` where a blank deadline runs for it, and the week it
+    runs for where that is not honored (:func:`_honored_default`)."""
+    configured = config.silence_default_expiry
+    if _honored_default(configured, MAX_SILENCE_SECONDS) is None:
+        return _DEFAULT_WORDS
+    return configured
+
+
+def _warn_unhonored_defaults(settings: Config) -> list[str]:
+    """Say, once, which configured default a blank field does not run for
+    (:func:`_honored_default`) — a ``silence_default_expiry`` past thirty days, which
+    is valid for maintenance and not for a silence, or one that reads as no duration
+    at all — rather than let the week stand in for it in silence.
+    Answers the settings it named."""
+    named = []
+    for key, longest in (("maintenance_default_expiry", MAX_MAINTENANCE_SECONDS),
+                         ("silence_default_expiry", MAX_SILENCE_SECONDS)):
+        value = getattr(settings, key)
+        if _honored_default(value, longest) is None:
+            logger.warning(
+                "config: %s %r is not a duration of a second up to %s; a blank "
+                "field runs for %s", key, value,
+                "thirty days" if longest == MAX_SILENCE_SECONDS else "a year",
+                _DEFAULT_WORDS)
+            named.append(key)
+    return named
+
+
+_warn_unhonored_defaults(config)
 
 
 class _BadExpiry(Exception):
@@ -4641,20 +5459,24 @@ def _above_the_floor(seconds: float, source: str,
             f"{interval}.")
 
 
-def _configured_wall_time(wall: datetime, source: str) -> datetime:
-    """Attach the configured timezone to one naive wall time, refusing both holes
-    and folds. ``zoneinfo`` accepts either silently; round-tripping both folds via
-    UTC tells a normal instant (one unique result) from a missing one (none) and an
-    ambiguous one (two). An explicit offset never comes through this function."""
+def _configured_wall_time(wall: datetime, source: str,
+                          tz: ZoneInfo | None = None) -> datetime:
+    """Attach the configured timezone — or ``tz``, a maintenance entry's own zone
+    (ADR-0150) — to one naive wall time, refusing both holes and folds. ``zoneinfo``
+    accepts either silently; round-tripping both folds via UTC tells a normal instant
+    (one unique result) from a missing one (none) and an ambiguous one (two). An
+    explicit offset never comes through this function."""
+    zone = tz or config.tzinfo
     choices: dict[datetime, datetime] = {}
     for fold in (0, 1):
-        aware = wall.replace(tzinfo=config.tzinfo, fold=fold)
-        round_trip = aware.astimezone(UTC).astimezone(config.tzinfo)
+        aware = wall.replace(tzinfo=zone, fold=fold)
+        round_trip = aware.astimezone(UTC).astimezone(zone)
         if round_trip.replace(tzinfo=None) == wall:
             choices[aware.astimezone(UTC)] = aware
     if len(choices) != 1:
         raise _BadExpiry(
-            f"{source!r} is not an unambiguous local time in {config.timezone}. "
+            f"{source!r} is not an unambiguous local time in "
+            f"{zone.key if tz is not None else config.timezone}. "
             f"Use an explicit UTC offset for a clock change.")
     return next(iter(choices.values()))
 
@@ -4673,8 +5495,8 @@ def _wall(year: int, month: int, day: int, hour: int = 0,
 
 
 def _next_month_day(month: int, day: int, now: datetime,
-                    source: str) -> datetime:
-    local_now = now.astimezone(config.tzinfo)
+                    source: str, tz: ZoneInfo | None = None) -> datetime:
+    local_now = now.astimezone(tz or config.tzinfo)
     # Eight years covers two leap-day opportunities. The one-year guard below will
     # refuse a distant result; the wider search lets it report the range rather than
     # pretending 02-29 is malformed.
@@ -4682,21 +5504,22 @@ def _next_month_day(month: int, day: int, now: datetime,
         wall = _wall(year, month, day)
         if wall is None:
             continue
-        candidate = _configured_wall_time(wall, source)
+        candidate = _configured_wall_time(wall, source, tz)
         if candidate.astimezone(UTC) > now:
             return candidate
     raise _expiry_help(source)
 
 
-def _next_day_of_month(day: int, now: datetime, source: str) -> datetime:
-    local_now = now.astimezone(config.tzinfo)
+def _next_day_of_month(day: int, now: datetime, source: str,
+                       tz: ZoneInfo | None = None) -> datetime:
+    local_now = now.astimezone(tz or config.tzinfo)
     year, month = local_now.year, local_now.month
     # A numbered day recurs within two months, but twelve keeps this helper plain
     # and makes the no-clamping rule obvious.
     for _ in range(12):
         wall = _wall(year, month, day)
         if wall is not None:
-            candidate = _configured_wall_time(wall, source)
+            candidate = _configured_wall_time(wall, source, tz)
             if candidate.astimezone(UTC) > now:
                 return candidate
         month += 1
@@ -4707,23 +5530,24 @@ def _next_day_of_month(day: int, now: datetime, source: str) -> datetime:
 
 
 def _clock_candidate(hour: int, minute: int, now: datetime,
-                     source: str) -> datetime:
-    local_now = now.astimezone(config.tzinfo)
+                     source: str, tz: ZoneInfo | None = None) -> datetime:
+    local_now = now.astimezone(tz or config.tzinfo)
     wall = _wall(local_now.year, local_now.month, local_now.day, hour, minute)
     if wall is None:
         raise _expiry_help(source)
-    candidate = _configured_wall_time(wall, source)
+    candidate = _configured_wall_time(wall, source, tz)
     if candidate.astimezone(UTC) <= now:
         tomorrow = local_now.date() + timedelta(days=1)
         wall = _wall(tomorrow.year, tomorrow.month, tomorrow.day, hour, minute)
         assert wall is not None
-        candidate = _configured_wall_time(wall, source)
+        candidate = _configured_wall_time(wall, source, tz)
     return candidate
 
 
 def _weekday_candidate(weekday: int, hour: int, minute: int, now: datetime,
-                       source: str, *, allow_today: bool = True) -> datetime:
-    local_now = now.astimezone(config.tzinfo)
+                       source: str, *, allow_today: bool = True,
+                       tz: ZoneInfo | None = None) -> datetime:
+    local_now = now.astimezone(tz or config.tzinfo)
     days = (weekday - local_now.weekday()) % 7
     if days == 0 and not allow_today:
         days = 7
@@ -4731,31 +5555,70 @@ def _weekday_candidate(weekday: int, hour: int, minute: int, now: datetime,
     wall = _wall(wanted.year, wanted.month, wanted.day, hour, minute)
     if wall is None:
         raise _expiry_help(source)
-    candidate = _configured_wall_time(wall, source)
+    candidate = _configured_wall_time(wall, source, tz)
     if candidate.astimezone(UTC) <= now:
         wanted += timedelta(days=7)
         wall = _wall(wanted.year, wanted.month, wanted.day, hour, minute)
         assert wall is not None
-        candidate = _configured_wall_time(wall, source)
+        candidate = _configured_wall_time(wall, source, tz)
     return candidate
 
 
+def _not_ahead(source: str, sentence: str, *, silence: bool, starts: bool = False,
+               begins: str = "") -> _BadExpiry:
+    """The refusal of an end that is not ahead of now: maintenance's own
+    ``sentence``, or a silence's deadline's (ADR-0144) — and of a window's start that
+    has passed (``starts``, ADR-0150), or an end that is not after the start it is
+    read from, ``begins``, a window set ahead."""
+    if silence:
+        return _BadExpiry(
+            f"A silence's deadline has to be in the future — {source!r} is not.")
+    if starts:
+        return _BadExpiry(f"{source!r} has passed. To start the window now, leave "
+                          f"Starts blank.")
+    if begins:
+        return _BadExpiry(f"A maintenance window has to end after it starts, "
+                          f"{begins} — {source!r} does not.")
+    return _BadExpiry(sentence)
+
+
+def _too_far(source: str, sooner: str, *, silence: bool,
+             starts: bool = False) -> _BadExpiry:
+    """The refusal of an end past its kind's longest (:data:`MAX_MAINTENANCE_SECONDS`,
+    :data:`MAX_SILENCE_SECONDS`), and of a window's start a year away or more."""
+    if starts:
+        return _BadExpiry(
+            f"{source!r} is more than a year away, and a window set here ends within "
+            f"a year of being set. Pick something sooner.")
+    if silence:
+        return _BadExpiry(
+            f"{source!r} is more than thirty days away, which is longer than a "
+            f"silence may stand. Pick something sooner, and extend it then, saying "
+            f"what changed.")
+    return _BadExpiry(
+        f"{source!r} is longer than a year, which is longer than a maintenance "
+        f"window is ever meant to be. Pick something {sooner}.")
+
+
 def _bounded_expiry(candidate: datetime, now: datetime, source: str,
-                    floor: _IntervalFloor | None = None) -> datetime:
+                    floor: _IntervalFloor | None = None, *,
+                    silence: bool = False, starts: bool = False,
+                    begins: str = "") -> datetime:
     seconds = (candidate.astimezone(UTC) - now).total_seconds()
     if seconds < MIN_MAINTENANCE_SECONDS:
-        raise _BadExpiry(
-            f"A maintenance expiry has to be in the future — {source!r} is not.")
-    if seconds > MAX_MAINTENANCE_SECONDS:
-        raise _BadExpiry(
-            f"{source!r} is longer than a year, which is longer than a maintenance "
-            f"window is ever meant to be. Pick something sooner.")
+        raise _not_ahead(source, f"A maintenance expiry has to be in the future — "
+                                 f"{source!r} is not.", silence=silence,
+                         starts=starts, begins=begins)
+    if seconds > (MAX_SILENCE_SECONDS if silence else MAX_MAINTENANCE_SECONDS):
+        raise _too_far(source, "sooner", silence=silence, starts=starts)
     _above_the_floor(seconds, source, floor)
     return candidate.astimezone(UTC)
 
 
 def _duration_expiry(text: str, now: datetime,
-                     floor: _IntervalFloor | None = None) -> datetime:
+                     floor: _IntervalFloor | None = None, *,
+                     silence: bool = False, starts: bool = False,
+                     begins: str = "") -> datetime:
     try:
         seconds = parse_duration(text, _DEFAULT_MAINTENANCE_SECONDS)
     except (CheckError, OverflowError, ValueError) as error:
@@ -4768,20 +5631,23 @@ def _duration_expiry(text: str, now: datetime,
                 f"fixed length. Write 26w, 180d or a date like 2026-07-10.") from error
         raise _expiry_help(text) from error
     if seconds < MIN_MAINTENANCE_SECONDS:
-        raise _BadExpiry(
-            f"A maintenance window has to be in the future — {text!r} is not. "
-            f"Use 2h, 3d, 90m or explicit seconds such as 17s.")
-    if seconds > MAX_MAINTENANCE_SECONDS:
-        raise _BadExpiry(
-            f"{text!r} is longer than a year, which is longer than a maintenance "
-            f"window is ever meant to be. Pick something shorter.")
+        raise _not_ahead(text, f"A maintenance window has to be in the future — "
+                               f"{text!r} is not. Use 2h, 3d, 90m or explicit "
+                               f"seconds such as 17s.", silence=silence,
+                         starts=starts, begins=begins)
+    if seconds > (MAX_SILENCE_SECONDS if silence else MAX_MAINTENANCE_SECONDS):
+        raise _too_far(text, "shorter", silence=silence, starts=starts)
     _above_the_floor(seconds, text, floor)
     return now + timedelta(seconds=seconds)
 
 
 def _maintenance_expiry(raw: str, *, now: datetime | None = None,
-                        floor: _IntervalFloor | None = None) -> datetime:
-    """Resolve the maintenance form's duration-or-expiry field (ADR-0014).
+                        floor: _IntervalFloor | None = None,
+                        silence: bool = False, starts: bool = False,
+                        begins: str = "", tz: ZoneInfo | None = None) -> datetime:
+    """Resolve the maintenance form's duration-or-expiry field (ADR-0014) — or,
+    with ``silence``, a silence's deadline (ADR-0144), by the same grammar and the
+    same floor, its default ``silence_default_expiry`` and its longest thirty days.
 
     ``now`` is captured once by the route and is always compared as an instant.
     Blank uses the configured *duration* default; it is the one value that falls
@@ -4789,21 +5655,20 @@ def _maintenance_expiry(raw: str, *, now: datetime | None = None,
     — and it is held to no ``floor`` for the same reason. Every explicit value is:
     the resolved window has to reach the slowest covered check's next run
     (:func:`_interval_floor`), whichever spelling produced it. All explicit
-    calendar shortcuts are resolved in the configured timezone, and what comes
-    out is an instant in UTC: the tree stores it as it is (ADR-0120).
+    calendar shortcuts are resolved in the configured timezone — or in ``tz``, a
+    maintenance entry's own (ADR-0150) — and what comes out is an instant in UTC: the
+    tree stores it as it is (ADR-0120).
     """
     instant = now or instants.now()
     instant = instant.astimezone(UTC)
     text = raw.strip()
     if not text:
-        try:
-            fallback = parse_duration(config.maintenance_default_expiry,
-                                      _DEFAULT_MAINTENANCE_SECONDS)
-        except (CheckError, OverflowError, ValueError):
-            fallback = _DEFAULT_MAINTENANCE_SECONDS
-        if not MIN_MAINTENANCE_SECONDS <= fallback <= MAX_MAINTENANCE_SECONDS:
-            fallback = _DEFAULT_MAINTENANCE_SECONDS
-        return instant + timedelta(seconds=fallback)
+        longest = MAX_SILENCE_SECONDS if silence else MAX_MAINTENANCE_SECONDS
+        default = (config.silence_default_expiry if silence
+                   else config.maintenance_default_expiry)
+        seconds = _honored_default(default, longest)
+        return instant + timedelta(
+            seconds=_DEFAULT_MAINTENANCE_SECONDS if seconds is None else seconds)
 
     # A bare integer belongs to the calendar, not to the duration grammar. This
     # is the form's only intentional compatibility cut: write ``17s`` for seconds.
@@ -4812,7 +5677,8 @@ def _maintenance_expiry(raw: str, *, now: datetime | None = None,
         if not 1 <= day <= 31:
             raise _expiry_help(text)
         return _bounded_expiry(
-            _next_day_of_month(day, instant, text), instant, text, floor)
+            _next_day_of_month(day, instant, text, tz), instant, text, floor,
+            silence=silence, starts=starts, begins=begins)
 
     # Exactly the unit-suffixed durations the shared parser accepts — its own
     # unit set, so the two cannot drift — and nothing wider: every other spelling
@@ -4820,36 +5686,1337 @@ def _maintenance_expiry(raw: str, *, now: datetime | None = None,
     # capital gets the parser's refusal (`5H`, and `6M` by name) rather than the
     # calendar's.
     if text[-1].lower() in DURATION_UNITS:
-        return _duration_expiry(text, instant, floor)
+        return _duration_expiry(text, instant, floor, silence=silence, starts=starts,
+                                begins=begins)
 
     try:
         if _FULL_DATE.fullmatch(text):
             parsed_date = datetime.fromisoformat(text)
-            candidate = _configured_wall_time(parsed_date, text)
+            candidate = _configured_wall_time(parsed_date, text, tz)
         elif _FULL_TIMESTAMP.fullmatch(text):
             parsed = datetime.fromisoformat(
                 text[:-1] + "+00:00" if text[-1].lower() == "z" else text)
             candidate = (parsed if parsed.tzinfo is not None
-                         else _configured_wall_time(parsed, text))
+                         else _configured_wall_time(parsed, text, tz))
         elif match := _MONTH_DAY.fullmatch(text):
             candidate = _next_month_day(
-                int(match.group(1)), int(match.group(2)), instant, text)
+                int(match.group(1)), int(match.group(2)), instant, text, tz)
         elif match := _CLOCK.fullmatch(text):
             candidate = _clock_candidate(
-                int(match.group(1)), int(match.group(2)), instant, text)
+                int(match.group(1)), int(match.group(2)), instant, text, tz)
         elif match := _WEEKDAY_CLOCK.fullmatch(text):
             candidate = _weekday_candidate(
                 _WEEKDAYS[match.group(1).lower()], int(match.group(2)),
-                int(match.group(3)), instant, text)
+                int(match.group(3)), instant, text, tz=tz)
         elif match := _WEEKDAY.fullmatch(text):
             candidate = _weekday_candidate(
                 _WEEKDAYS[match.group(1).lower()], 12, 0, instant, text,
-                allow_today=False)
+                allow_today=False, tz=tz)
         else:
             raise _expiry_help(text)
     except ValueError as error:
         raise _expiry_help(text) from error
-    return _bounded_expiry(candidate, instant, text, floor)
+    return _bounded_expiry(candidate, instant, text, floor, silence=silence,
+                           starts=starts, begins=begins)
+
+
+def _maintenance_start(raw: str, *, now: datetime,
+                       tz: ZoneInfo | None = None) -> datetime:
+    """Resolve the maintenance form's *Starts* (ADR-0150): blank is now, and anything
+    else is read as the end field is, from now and in the configured zone — or the
+    entry's own, ``tz`` — (ADR-0014 decisions 21 and 22), refused where it has passed,
+    with *leave it blank* in the reason, and where it is a year away or more."""
+    if not raw.strip():
+        return now
+    # to the second, as the schedule's text writes a start, so that an end counted
+    # from it is the end its text says
+    return _maintenance_expiry(raw, now=now, starts=True, tz=tz).replace(
+        microsecond=0)
+
+
+# --- a maintenance entry's editor: its schedule (ADR-0150, landing 4) ----------------
+
+#: What *Repeats* offers beside *Once*, as the form sends it, each with the frequency
+#: of the rule it sets.
+_REPEATS: Mapping[str, str] = {"daily": DAILY, "weekly": WEEKLY, "monthly": MONTHLY}
+
+#: *Weekend* and *working week*, which tick their days with one click each (#35's
+#: note, decision 4).
+_DAY_PICKS: Mapping[str, tuple[int, ...]] = {"weekend": (5, 6),
+                                             "week": (0, 1, 2, 3, 4)}
+
+#: How many windows to come an editor lists beneath its fields.
+_NEXT_WINDOWS = 5
+
+#: The weekdays of a month a monthly rule may pick, as the form sends them: the first
+#: to the fourth, or the last.
+_MONTH_NTH = ("1", "2", "3", "4", "-1")
+
+
+@dataclass(frozen=True)
+class _NextWindow:
+    """One window an editor lists beneath its fields (#35's note, decision 4): when it
+    starts and ends in the page's words, whether it is open now, and — where the clocks
+    change in it — how long it really lasts and which way they go."""
+    start: str
+    end: str
+    open: bool = False
+    clock: str = ""
+
+
+@dataclass(frozen=True)
+class _CalBar:
+    """A part of a day a window covers, as a phone draws it (#35's note, decision 4):
+    from and to, as shares of that day's own length — 23 hours, 24 or 25 — a window
+    that runs past midnight covering the end of its day and the start of the next."""
+    start: float
+    end: float
+
+
+@dataclass(frozen=True)
+class _CalDay:
+    """One day of the editor's month (ADR-0150, landing 5): its date; its hours — each
+    window that starts on it, from and to — and the bars a phone draws of the hours any
+    window covers in it; the time of the rule's window the day leaves out, struck; what
+    marks it, each a class; a short note, how far the clocks move in it; the words a
+    screen reader is given; and what a click does, empty where nothing can be done
+    with it."""
+    day: date
+    hours: tuple[tuple[str, str], ...] = ()
+    bars: tuple[_CalBar, ...] = ()
+    struck: str = ""
+    marks: tuple[str, ...] = ()
+    note: str = ""
+    label: str = ""
+    act: str = ""
+
+
+@dataclass(frozen=True)
+class _Month:
+    """The editor's month (ADR-0150, landing 5): which it is, ``YYYY-MM``, and its name;
+    its six weeks from the Monday on or before its first day; where its paging goes —
+    the year and the month before, the month and the year after, each a direction, the
+    month it goes to and its words, the month empty where the page goes no further; the
+    day that takes the grid's one tab stop with script; and the month the form keeps,
+    ``kept``, empty until somebody pages it or clicks a day of it, so that until then
+    the month follows the first window to come as the fields change."""
+    value: str
+    title: str
+    weeks: tuple[tuple[_CalDay, ...], ...]
+    pages: tuple[tuple[str, str, str], ...]
+    focus: str
+    kept: str = ""
+
+
+@dataclass(frozen=True)
+class _Preview:
+    """What an editor says beneath its fields (#35's note, decision 4): the month, each
+    day's hours (landing 5); the next windows of what it would set, the first being the
+    first day on or after *Starts* that its rule picks; and the entry's sentence — or
+    why it cannot be set as it stands. ``ask_month`` marks a month left out, which the
+    editor asks for when it is wanted (ADR-0150 decision 17)."""
+    windows: tuple[_NextWindow, ...] = ()
+    sentence: str = ""
+    problem: str = ""
+    more: bool = False
+    month: _Month | None = None
+    ask_month: bool = False
+
+
+@dataclass(frozen=True)
+class _Listed:
+    """A window added, a start added or a start left out by hand, as an editor lists
+    it with × (#35's note, decision 4): what its hidden field carries, and its
+    words."""
+    value: str
+    words: str = ""
+
+
+@dataclass(frozen=True)
+class _ScheduleView:
+    """A maintenance editor as it is drawn (ADR-0150, landing 4): each field's text —
+    filled from a standing entry (:func:`_editor_of`), given back from a form as it was
+    typed (:func:`_posted_view`), or empty for a new window — and beneath them the
+    next windows and the sentence (``preview``).
+
+    *Starts*, the end field and *Until* are kept exactly while unchanged, as an end is
+    (ADR-0104 decision 5): each carries what it was filled with (``…_was``) and the
+    instant that says (``…_at``). ``kept`` is the start, in words, of the window an
+    edit keeps open — the one open now, which only *Extend* and *End now* change —
+    from which *Until* is capped. ``open_once`` marks a one-off whose window is open,
+    whose start has passed. ``month`` is the month its month shows, ``YYYY-MM``, kept
+    across its round trips — empty for the month of its first window to come."""
+    note: str = ""
+    starts: str = ""
+    starts_was: str = ""
+    starts_at: str = ""
+    duration: str = ""
+    expiry_was: str = ""
+    repeat: str = "once"
+    interval: str = "1"
+    weekdays: tuple[str, ...] = ()
+    month_by: str = "day"
+    month_day: str = ""
+    month_from: str = "start"
+    month_nth: str = "1"
+    month_weekday: str = ""
+    until: str = ""
+    until_was: str = ""
+    until_at: str = ""
+    not_on: str = ""
+    zone: str = ""
+    added: tuple[_Listed, ...] = ()
+    extra: tuple[_Listed, ...] = ()
+    left_out: tuple[_Listed, ...] = ()
+    add_begins: str = ""
+    add_ends: str = ""
+    kept: str = ""
+    open_once: bool = False
+    month: str = ""
+    preview: _Preview | None = None
+
+    @property
+    def rest_open(self) -> bool:
+        """Whether the rest of the editor stands open as it is drawn: a repeat, a later
+        start, a window added by hand or a month paged or clicked opens it in place
+        (#35's note, decision 4)."""
+        return (self.repeat != "once" or bool(self.starts.strip()) or bool(self.added)
+                or bool(self.extra) or bool(self.left_out) or bool(self.month))
+
+
+@dataclass(frozen=True)
+class _ScheduleRead:
+    """What a maintenance editor's fields set (ADR-0150, landing 4): one window by its
+    end alone, ``expires_at``, as a form without a schedule always set one, or a
+    ``schedule``, with the holiday list its rule leaves out (``not_on``); the one
+    window a *Once* sets, ``window``, which joins an entry that stands; the window an
+    edit keeps open, ``kept``. Or the ``problem`` that refuses them, or ``gone`` where
+    a field left as it was filled names a pin that no longer stands. ``view`` is the
+    editor given back, its lists in words and a window added or dropped by its own
+    button in them."""
+    view: _ScheduleView
+    schedule: Schedule | None = None
+    expires_at: datetime | None = None
+    not_on: str = ""
+    window: tuple[datetime, datetime] | None = None
+    kept: Window | None = None
+    problem: str = ""
+    gone: bool = False
+
+
+def _field_time(moment: datetime, tz: ZoneInfo) -> str:
+    """An instant as an editor's field shows it: the date and the time to the second,
+    in ``tz`` (ADR-0104 decision 5)."""
+    return moment.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _until_field(moment: datetime, tz: ZoneInfo) -> str:
+    """A series' *Until* as its editor shows it: the date alone where it is that day's
+    last second — what a date typed alone is read as (:func:`_until_of`), so that it
+    comes back as it was typed — and else the date and the time to the second
+    (:func:`_field_time`)."""
+    local = moment.astimezone(tz)
+    if (local.hour, local.minute, local.second) == (23, 59, 59):
+        return local.date().isoformat()
+    return _field_time(moment, tz)
+
+
+def _length_text(length: Length) -> str:
+    """A length as an editor's *Length* shows it, in the end field's grammar: *1d*,
+    *8h*, *90m*, *45s*."""
+    if length.days:
+        return f"{length.days}d"
+    seconds = int(length.span.total_seconds())
+    for unit, size in (("h", 3600), ("m", 60)):
+        if seconds % size == 0:
+            return f"{seconds // size}{unit}"
+    return f"{seconds}s"
+
+
+def _period_value(begin: datetime, end: datetime) -> str:
+    """A window added by hand as its hidden field carries it: its two instants."""
+    return f"{instants.stamp(begin)}/{instants.stamp(end)}"
+
+
+def _added_period(value: str) -> tuple[datetime, datetime]:
+    """The two instants a window added by hand carries, or :class:`ValueError`."""
+    begin, sep, end = value.partition("/")
+    if not sep:
+        raise ValueError("a window added by hand without its end")
+    return (instants.instant(begin, "a window added by hand"),
+            instants.instant(end, "a window added by hand"))
+
+
+def _kept_instant(at: str, was: str, tz: ZoneInfo) -> datetime | None:
+    """The instant a field was filled with, where the form carries it and the field's
+    text still says it in ``tz`` — kept exactly, never read again — or ``None``."""
+    if not at:
+        return None
+    try:
+        moment = instants.instant(at, "a field's instant")
+    except ValueError:
+        return None
+    return moment if _field_time(moment, tz) == was else None
+
+
+def _length_of(raw: str, floor: _IntervalFloor | None) -> Length:
+    """*Length*, with a repeat (#35's note, decision 4): a length alone, in the end
+    field's grammar — days and weeks follow the calendar, ``1d``, and hours, minutes
+    and seconds are exact, ``8h`` — and long enough for the slowest check it covers to
+    run again.
+
+    :raises _BadExpiry: blank, no length, too short, or longer than a year."""
+    text = raw.strip()
+    if not text:
+        raise _BadExpiry("With a repeat, Length says how long each window is: 8h for "
+                         "eight hours, 1d for whole days.")
+    if text[-1] not in DURATION_UNITS:
+        raise _BadExpiry(f"{text!r} is no length: with a repeat, Length says how long "
+                         f"each window is, 8h for eight hours, 1d for whole days.")
+    try:
+        seconds = parse_duration(text, 0)
+    except (CheckError, OverflowError, ValueError) as error:
+        raise _BadExpiry(f"{text!r} is no length: write 8h for eight hours, 1d for "
+                         f"whole days.") from error
+    if seconds < MIN_MAINTENANCE_SECONDS or seconds > MAX_MAINTENANCE_SECONDS:
+        raise _BadExpiry(f"{text!r} is no length a window may have: from a second to "
+                         f"a year.")
+    _above_the_floor(seconds, text, floor)
+    if text[-1] in ("d", "w"):
+        return Length(days=seconds // 86400)
+    return Length(span=timedelta(seconds=seconds))
+
+
+def _until_of(raw: str, *, now: datetime, tz: ZoneInfo) -> datetime:
+    """*Until*, a repeat's last date (#35's note, decision 4), in the end field's
+    grammar and read in the entry's zone: a date alone means through that day, its
+    last second, so that *2027-10-30* takes in a window that starts on it.
+
+    :raises _BadExpiry: blank, unreadable, or passed."""
+    text = raw.strip()
+    if not text:
+        raise _BadExpiry("A repeat needs Until, its last date — at most a year from "
+                         "now.")
+    if _FULL_DATE.fullmatch(text):
+        try:
+            day = datetime.fromisoformat(text)
+        except ValueError as error:
+            raise _expiry_help(text) from error
+        until = _configured_wall_time(day.replace(hour=23, minute=59, second=59),
+                                      text, tz).astimezone(UTC)
+        if until <= now:
+            raise _BadExpiry(f"Until {text!r} has passed.")
+        return until
+    return _maintenance_expiry(text, now=now, tz=tz)
+
+
+def _a_year_from(moment: datetime, tz: ZoneInfo) -> datetime:
+    """The last instant something set on the page may reach from ``moment`` (#35's
+    note, decision 4): the end of the same day a year later, in ``tz`` — as the subset
+    bounds a schedule from its first start (``Schedule.check``)."""
+    local = moment.astimezone(tz)
+    try:
+        day = local.date().replace(year=local.year + 1)
+    except ValueError:
+        day = local.date().replace(year=local.year + 1, day=28)
+    wall = _wall(day.year, day.month, day.day, 23, 59, 59)
+    assert wall is not None
+    return _configured_wall_time(wall, "a year on", tz).astimezone(UTC)
+
+
+def _posted_view() -> _ScheduleView:
+    """A maintenance editor's fields as the form sent them, to be read, and given
+    back as they were typed where nothing is written (ADR-0150, landing 4)."""
+    form = request.form
+
+    def listed(name: str) -> tuple[_Listed, ...]:
+        return tuple(_Listed(value) for value in form.getlist(name) if value)
+
+    return _ScheduleView(
+        note=form.get("note", ""), starts=form.get("starts", ""),
+        starts_was=form.get("starts_was", "").strip(),
+        starts_at=form.get("starts_at", ""), duration=form.get("duration", ""),
+        expiry_was=form.get("expiry_was", "").strip(),
+        repeat=form.get("repeat", "once"), interval=form.get("interval", "1"),
+        weekdays=tuple(form.getlist("weekday")),
+        month_by=form.get("month_by", "day"), month_day=form.get("month_day", ""),
+        month_from=form.get("month_from", "start"),
+        month_nth=form.get("month_nth", "1"),
+        month_weekday=form.get("month_weekday", ""), until=form.get("until", ""),
+        until_was=form.get("until_was", "").strip(),
+        until_at=form.get("until_at", ""), not_on=form.get("not_on", ""),
+        zone=form.get("zone", "") or config.timezone, added=listed("added"),
+        extra=listed("extra"), left_out=listed("left_out"),
+        add_begins=form.get("add_begins", ""), add_ends=form.get("add_ends", ""),
+        open_once=form.get("open_once") == "1", month=form.get("month", ""))
+
+
+def _act_of() -> str:
+    """Which of an editor's own buttons sent the form, where one did rather than *Set*
+    or *Save*: *Preview*, *Add an interval*, an ×, *weekend* or *working week*, a day of
+    the month or its paging, each asking for the editor back, nothing written (#35's
+    note, decision 4)."""
+    form = request.form
+    if form.get("preview"):
+        return "preview"
+    if form.get("add"):
+        return "add"
+    if form.get("drop"):
+        return "drop:" + form.get("drop", "")
+    if form.get("pick") in _DAY_PICKS:
+        return "pick:" + form.get("pick", "")
+    if form.get("day"):
+        return "day:" + form.get("day", "")
+    if form.get("page"):
+        return "page:" + form.get("page", "")
+    return ""
+
+
+def _holding_window(path: str, slug: str, stored: Pin | None) -> Window | None:
+    """The window of ``stored`` open now, where it is the entry that holds on the part
+    — what an edit keeps open (ADR-0150, landing 4)."""
+    if stored is None:
+        return None
+    held = (status_tree.entry_maintenance(path, slug) if slug
+            else status_tree.maintenance_entry(path))
+    if held is None or held.id != stored.id:
+        return None
+    opened = status_tree.open_series(held)
+    return opened.window if opened is not None else None
+
+
+def _read_schedule(view: _ScheduleView, *, now: datetime, path: str, slug: str,
+                   stored: Pin | None, token: str, act: str = "") -> _ScheduleRead:
+    """What a maintenance editor's fields set (ADR-0150, landing 4).
+
+    *Once* sets one window, read as a pin's end always was (ADR-0014 decisions 21 and
+    22, ADR-0104 decision 5): from *Starts*, blank meaning now, to the end field's
+    duration or end — by its end alone where it opens now and was not set ahead, as
+    the tree has always set one. A repeat sets a series: its windows each *Length*
+    long, ``8h`` exact and ``1d`` calendar days, starting at *Starts*' time of day on
+    the days its rule picks, every N days, weeks on chosen weekdays, or months on a day
+    or a weekday, until *Until*; its text's ``DTSTART`` is the first day on or after
+    *Starts* that the rule picks (#35's note, decision 4's correction). *Times in …*
+    is the zone every field is read in and the text keeps; *Not on* names the holiday
+    list whose days the rule leaves out, refused where the list cannot be had; and a
+    window added by hand joins it, as do the starts added and left out that a file
+    wrote, carried through.
+
+    **An edit keeps the window open now** (#35's note, decision 5, as 3a's answers
+    reconcile it): where the entry that holds is a series, or becomes one, its window
+    open is copied in as an added interval to its current end, a start of the rule
+    within it left out, so that the edit shapes the windows to come and the open one
+    keeps its end; and *Until* is capped a year from that window's start rather than
+    from now — the subset counting its year from the earliest start in the text.
+    Elsewhere nothing set here reaches more than a year from now.
+
+    ``act`` is the editor's own button that sent the form, if one did
+    (:func:`_act_of`): the view given back carries what it did — a window added from
+    *Add an interval*'s two fields, one dropped by its ×, the days of *weekend* or
+    *working week* ticked."""
+    zone = view.zone.strip() or config.timezone
+    try:
+        tz = ZoneInfo(zone)
+    except (ZoneInfoNotFoundError, ValueError):
+        return _ScheduleRead(view, problem=(
+            f"Times in {zone!r}: that is no time zone. Choose one of the IANA names, "
+            f"such as {config.timezone}."))
+    if view.repeat != "once" and view.repeat not in _REPEATS:
+        return _ScheduleRead(view, problem="Repeats says once, or every N days, weeks "
+                                           "or months.")
+    repeating = view.repeat in _REPEATS
+    if act.startswith("page:"):
+        view = replace(view, month=act[5:])
+    try:
+        added = [_added_period(each.value) for each in view.added]
+        extra = [instants.instant(each.value, "a start added") for each in view.extra]
+        left_out = [instants.instant(each.value, "a start left out")
+                    for each in view.left_out]
+    except ValueError:
+        return _ScheduleRead(view, problem="A window added or left out by hand cannot "
+                                           "be read: open the editor again.")
+    if act.startswith("drop:"):
+        what, _, index = act[5:].partition(":")
+        lists: dict[str, list[Any]] = {"added": added, "extra": extra,
+                                       "left_out": left_out}
+        if what in lists and index.isdigit() and int(index) < len(lists[what]):
+            del lists[what][int(index)]
+    weekdays = [WEEKDAYS.index(day) for day in view.weekdays if day in WEEKDAYS]
+    if act.startswith("pick:"):
+        weekdays = list(_DAY_PICKS[act[5:]])
+    floor = _interval_floor(path)
+    holding = _holding_window(path, slug, stored)
+    series_before = (stored is not None and stored.schedule is not None
+                     and not stored.schedule.is_one_off)
+    problem = ""
+    add_begins, add_ends = view.add_begins, view.add_ends
+    if act == "add":
+        try:
+            begin = _maintenance_start(add_begins, now=now, tz=tz)
+            if not add_begins.strip():
+                raise _BadExpiry("Add an interval needs its start: a time, such as "
+                                 "Sat 09:00, or a date.")
+            end = _maintenance_expiry(add_ends, now=begin, floor=floor,
+                                      begins=_format_local(begin), tz=tz)
+            if end <= begin:
+                raise _BadExpiry(f"An interval has to end after it starts, "
+                                 f"{_format_local(begin)}.")
+            added.append((begin, end))
+            add_begins = add_ends = ""
+        except _BadExpiry as bad:
+            problem = str(bad)
+    view = _relisted(replace(
+        view, zone=zone, add_begins=add_begins, add_ends=add_ends,
+        weekdays=tuple(WEEKDAYS[day] for day in sorted(set(weekdays)))),
+        added, extra, left_out)
+    if problem:
+        return _ScheduleRead(view, problem=problem)
+    kept = holding if holding is not None and (
+        series_before or repeating or added or extra) else None
+    if kept is not None:
+        view = replace(view, kept=_format_local(kept.start))
+    # *Starts*: kept exactly while unchanged, an open one-off's its own, else read
+    start: datetime | None = None
+    if token and view.starts_was and view.starts.strip() == view.starts_was:
+        start = _kept_instant(view.starts_at, view.starts_was, tz)
+        if start is None:
+            if stored is None or stored.schedule is None:
+                return _ScheduleRead(view, gone=True)
+            start = stored.schedule.starts_at
+    elif view.open_once and not repeating:
+        if view.starts.strip():
+            return _ScheduleRead(view, problem=(
+                "This window is open, and its start has passed: leave Starts blank, "
+                "or choose a repeat for the windows to come."))
+    else:
+        try:
+            start = _maintenance_start(view.starts, now=now, tz=tz).replace(
+                microsecond=0)
+        except _BadExpiry as bad:
+            return _ScheduleRead(view, problem=str(bad))
+    later = start is not None and start > now
+    if not repeating:
+        return _read_once(view, now=now, start=start, later=later, stored=stored,
+                          token=token, floor=floor, tz=tz, added=added,
+                          extra=extra, left_out=left_out, kept=kept, act=act)
+    assert start is not None
+    try:
+        length = _length_of(view.duration, floor)
+        if not view.interval.strip().isdigit() or int(view.interval) < 1:
+            raise _BadExpiry(f"Every {view.interval.strip()!r}: write a whole number, "
+                             f"1 for every one.")
+        interval = int(view.interval)
+        until: datetime | None = None
+        if token and view.until_was and view.until.strip() == view.until_was:
+            until = _kept_instant(view.until_at, view.until_was, tz)
+        if until is None:
+            until = _until_of(view.until, now=now, tz=tz)
+        cap = _a_year_from(kept.start if kept is not None else now, tz)
+        if until > cap:
+            raise _BadExpiry(
+                f"Until {view.until.strip()!r} is more than a year from "
+                + (f"this window's start, {_format_local(kept.start)}"
+                   if kept is not None else "now")
+                + f": {_format_local(cap)} at the latest.")
+        rule = _rule_of(view, interval=interval, until=until, weekdays=weekdays,
+                        start=start.astimezone(tz))
+    except _BadExpiry as bad:
+        return _ScheduleRead(view, problem=str(bad))
+    first = first_start(rule, start.astimezone(tz).replace(tzinfo=None), zone)
+    if first is None:
+        return _ScheduleRead(view, problem=(
+            "No day the rule picks lies between Starts and Until: pick a later Until, "
+            "or other days."))
+    not_on = view.not_on.strip()
+    if not_on and holiday_lists.get(not_on) is None:
+        return _ScheduleRead(view, problem=(
+            f"Not on: {holiday_lists.why_not(not_on) or f'no list {not_on}'} — a "
+            f"window that leaves out a list that cannot be read would never be told "
+            f"apart from one that applies. Set it without Not on."))
+    if act.startswith("day:"):
+        view = _clicked(view, act[4:], Schedule(
+            zone=zone, start=first, length=length, rule=rule,
+            extra=tuple(each.astimezone(tz).replace(tzinfo=None) for each in extra),
+            intervals=tuple(sorted(added)),
+            left_out=tuple(each.astimezone(tz).replace(tzinfo=None)
+                           for each in left_out)),
+            now=now, days_off=holiday_lists.get(not_on) if not_on else None,
+            added=added, extra=extra, left_out=left_out)
+    intervals = list(added)
+    if kept is not None and (kept.start, kept.end) not in intervals:
+        intervals.append((kept.start, kept.end))
+    for begin, end in intervals:
+        if end > _a_year_from(kept.start if kept is not None else now, tz):
+            return _ScheduleRead(view, problem=(
+                f"The window from {_format_local(begin)} ends more than a year from "
+                f"now."))
+    # to the second, as the text writes an interval
+    intervals = sorted({(begin.replace(microsecond=0), end.replace(microsecond=0))
+                        for begin, end in intervals})
+    walls_left_out = {each.astimezone(tz).replace(tzinfo=None) for each in left_out}
+    if kept is not None:
+        # the window open now is the kept interval alone: a start of the rule within
+        # it is left out, so that the edit shapes the windows to come and the open one
+        # keeps its end, which only Extend and End now change
+        ruled = Schedule(zone=zone, start=first, length=length, rule=rule)
+        walls_left_out |= {begin.astimezone(tz).replace(tzinfo=None)
+                           for begin, _ in ruled.spans()
+                           if kept.start <= begin < kept.end}
+    try:
+        made = Schedule(zone=zone, start=first, length=length, rule=rule,
+                        extra=tuple(each.astimezone(tz).replace(tzinfo=None)
+                                    for each in extra),
+                        intervals=tuple(sorted(intervals)),
+                        left_out=tuple(sorted(walls_left_out)))
+        made.check()
+    except ValueError as error:
+        return _ScheduleRead(view, problem=f"What this sets cannot be kept: {error}.")
+    return _ScheduleRead(view, schedule=made, not_on=not_on, kept=kept)
+
+
+def _rule_of(view: _ScheduleView, *, interval: int, until: datetime,
+             weekdays: Sequence[int], start: datetime) -> Rule:
+    """The rule a repeat's fields say (#35's note, decision 4): every N days; every N
+    weeks on the weekdays ticked, *Starts*' own where none is; or every N months on a
+    day counted from the start or the end of the month — *Starts*' own day where none
+    is written — or on the first to the fourth or the last of a weekday.
+
+    :raises _BadExpiry: a day of the month or a weekday the rule cannot pick."""
+    frequency = _REPEATS[view.repeat]
+    if frequency == DAILY:
+        return Rule(DAILY, interval, until)
+    if frequency == WEEKLY:
+        return Rule(WEEKLY, interval, until,
+                    weekdays=tuple(sorted(set(weekdays))) or (start.weekday(),))
+    if view.month_by == "weekday":
+        if view.month_nth not in _MONTH_NTH or view.month_weekday not in WEEKDAYS:
+            raise _BadExpiry("A month's weekday is the first to the fourth or the "
+                             "last of one: choose both.")
+        return Rule(MONTHLY, interval, until, nth=int(view.month_nth),
+                    weekday=WEEKDAYS.index(view.month_weekday))
+    day = view.month_day.strip()
+    if not day:
+        return Rule(MONTHLY, interval, until, month_day=start.day)
+    if not day.isdigit() or not 1 <= int(day) <= 31:
+        raise _BadExpiry(f"The day of the month {day!r}: write 1 to 31.")
+    return Rule(MONTHLY, interval, until,
+                month_day=-int(day) if view.month_from == "end" else int(day))
+
+
+def _read_once(view: _ScheduleView, *, now: datetime, start: datetime | None,
+               later: bool, stored: Pin | None, token: str,
+               floor: _IntervalFloor | None, tz: ZoneInfo,
+               added: list[tuple[datetime, datetime]],
+               extra: list[datetime], left_out: list[datetime],
+               kept: Window | None, act: str = "") -> _ScheduleRead:
+    """*Once* (ADR-0150, landing 4): one window, read as a pin's end always was — its
+    end field kept exactly while it still reads what it was filled with (ADR-0104
+    decision 5), else a duration from *Starts* where that lies ahead, or from now, or
+    an end — set by its end alone where it opens now and was not set ahead, as the
+    tree has always set one (ADR-0150 decision 1). With windows added by hand, or a
+    window an edit keeps open, it is written with a length, so that its text can carry
+    them; and so it is where a click on a day of the month adds a window of its length
+    (:func:`_clicked`). An open one-off's start is its own (``open_once``), and so its
+    window is written where windows are added beside it: from that start to the end
+    typed, as a one-off a window joins is (:func:`_joined_to`)."""
+    end: datetime | None
+    if token and view.expiry_was and view.duration.strip() == view.expiry_was:
+        held = stored if stored is not None and stored.schedule is not None \
+            and stored.schedule.is_one_off else None
+        if held is None or held.expires_at is None:
+            return _ScheduleRead(view, gone=True)
+        end = held.expires_at
+    else:
+        begins = start if later and start is not None else now
+        try:
+            end = _maintenance_expiry(view.duration, now=begins, floor=floor,
+                                      begins=_format_local(begins) if later else "",
+                                      tz=tz)
+            if later and (end - now).total_seconds() > MAX_MAINTENANCE_SECONDS:
+                # nothing set on the page stands longer than a year from when it was
+                # set (ADR-0014 decision 13), a window set ahead too
+                raise _BadExpiry(
+                    f"{view.duration.strip()!r} ends more than a year from now, and "
+                    f"nothing set here stands longer than a year from when it is set. "
+                    f"Pick something sooner.")
+        except _BadExpiry as bad:
+            return _ScheduleRead(view, problem=str(bad))
+    own = start is None
+    if start is None:
+        # an open one-off by its end alone, its start its own — kept where windows
+        # are added beside it, by hand or by a click on a day of the month; its end is
+        # the end field's, so no other window is kept open
+        if stored is None or stored.schedule is None or not (
+                added or extra or act.startswith("day:")):
+            return _ScheduleRead(view, expires_at=end)
+        start, kept = stored.schedule.starts_at, None
+    if end <= start:
+        return _ScheduleRead(view, problem=(
+            f"A maintenance window has to end after it starts, "
+            f"{_format_local(start)} — {(view.duration.strip() or 'its end')!r} does "
+            f"not."))
+    if act.startswith("day:"):
+        view = _clicked(view, act[4:], Schedule(
+            zone=view.zone, start=start.astimezone(tz).replace(tzinfo=None,
+                                                               microsecond=0),
+            length=Length(span=end - start.replace(microsecond=0)),
+            extra=tuple(each.astimezone(tz).replace(tzinfo=None) for each in extra),
+            intervals=tuple(sorted(added)),
+            left_out=tuple(each.astimezone(tz).replace(tzinfo=None)
+                           for each in left_out)),
+            now=now, days_off=None, added=added, extra=extra, left_out=left_out)
+    if own and not added and not extra:
+        # a click that added nothing: the open one-off by its end alone, as it was
+        return _ScheduleRead(view, expires_at=end)
+    intervals = list(added)
+    if kept is not None and (kept.start, kept.end) not in intervals and not (
+            start <= kept.start and kept.end <= end):
+        # the window kept open, where the one this sets does not hold it already
+        intervals.append((kept.start, kept.end))
+    # to the second, as the text writes an interval
+    intervals = sorted({(begin.replace(microsecond=0), finish.replace(microsecond=0))
+                        for begin, finish in intervals})
+    if not intervals and not extra:
+        if not later and not view.starts_was:
+            # set now: one window from the write's moment, as the tree makes one
+            return _ScheduleRead(view, expires_at=end, window=(start, end))
+        return _ScheduleRead(view, schedule=Schedule.one_off(start, end, view.zone),
+                             window=(start, end))
+    try:
+        made = Schedule(zone=view.zone, start=start.astimezone(tz).replace(
+                            tzinfo=None, microsecond=0),
+                        length=Length(span=end - start.replace(microsecond=0)),
+                        extra=tuple(each.astimezone(tz).replace(tzinfo=None)
+                                    for each in extra),
+                        intervals=tuple(sorted(intervals)),
+                        left_out=tuple(each.astimezone(tz).replace(tzinfo=None)
+                                       for each in left_out))
+        made.check()
+    except ValueError as error:
+        return _ScheduleRead(view, problem=f"What this sets cannot be kept: {error}.")
+    return _ScheduleRead(view, schedule=made, kept=kept, window=(start, end))
+
+
+def _joined_to(schedule: Schedule, begin: datetime, end: datetime) -> Schedule:
+    """``schedule`` with the window from ``begin`` to ``end`` joined to it, as an added
+    interval (#35's note, decision 2: a window set on a place with an entry joins it).
+    A one-off, whose text carries no added interval, is first written as its own
+    window with a length — ``DURATION`` exact to the second, so that its end stays
+    where it was (ADR-0150, landing 4).
+
+    :raises ValueError: what the subset refuses of the result."""
+    # to the second, as the text writes an interval
+    begin, end = begin.replace(microsecond=0), end.replace(microsecond=0)
+    if schedule.end is not None:
+        made = Schedule(zone=schedule.zone, start=schedule.start,
+                        length=Length(span=schedule.end - schedule.starts_at),
+                        intervals=((begin, end),))
+    else:
+        made = replace(schedule, intervals=tuple(sorted({*schedule.intervals,
+                                                         (begin, end)})))
+    made.check()
+    return made
+
+
+def _preview_of(schedule: Schedule, not_on: str, *, now: datetime,
+                windows: Sequence[Window] | None = None,
+                until: datetime | None = None, shown: str = "",
+                month: bool = True) -> _Preview:
+    """The month of ``schedule`` (landing 5), the next windows, its holiday list
+    ``not_on`` leaving out the rule's on the days it names, and its sentence, as an
+    editor draws them beneath its fields (#35's note, decision 4): the month ``shown``
+    or else its first window's, and five windows, from the one open now or the first to
+    come, a clock-change night's marked with how long it really lasts. ``windows`` and
+    ``until`` are a standing entry's own, its windows changed alone among them. Without
+    ``month`` the month is left out, for the editor to ask for (ADR-0150 decision
+    17)."""
+    if windows is None:
+        days_off = holiday_lists.get(not_on) if not_on else None
+        windows = (() if not_on and days_off is None
+                   else schedule.windows(days_off=days_off))
+    tz = ZoneInfo(schedule.zone)
+    ahead = [window for window in windows if window.end > now]
+    listed = []
+    for window in ahead[:_NEXT_WINDOWS]:
+        clock = ""
+        before = window.start.astimezone(tz).utcoffset()
+        after = window.end.astimezone(tz).utcoffset()
+        if before is not None and after is not None and before != after:
+            clock = (f"{Length(span=window.end - window.start).words()}: the clocks "
+                     f"go {'back' if after < before else 'forward'}")
+        listed.append(_NextWindow(_format_local(window.start),
+                                  _format_local(window.end),
+                                  open=window.start <= now, clock=clock))
+    ends = until or last_end(schedule.windows())
+    said = Markup("") if ends is None else _whole_instants(
+        lambda at: schedule_sentence(
+            schedule, until=ends, at=at, zone=config.timezone,
+            not_on=status_tree.list_name(not_on) if not_on else "", after=now))
+    return _Preview(tuple(listed), said, more=len(ahead) > _NEXT_WINDOWS,
+                    month=(_month_of(schedule, not_on, now=now, shown=shown,
+                                     windows=windows) if month else None),
+                    ask_month=not month)
+
+
+# --- an editor's month (ADR-0150, landing 5; #35's note, decision 4) ---------------
+
+#: The months and the weekdays as the month names them.
+_MONTH_NAMES = ("January", "February", "March", "April", "May", "June", "July",
+                "August", "September", "October", "November", "December")
+_WEEKDAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+                  "Sunday")
+
+#: What a click on a day does, as the words that end its accessible name say it.
+_DAY_ACTS: Mapping[str, str] = {
+    "leave out": "A click leaves its window out.",
+    "put back": "A click puts its window back.",
+    "add back": "A click adds its window back.",
+    "add": "A click adds a window.",
+    "take out": "A click takes the window added out."}
+
+#: How far the editor's month pages from this month: a year, as far as anything set on
+#: the page reaches.
+_MONTHS_AHEAD = 12
+
+
+def _months_on(month: tuple[int, int], count: int) -> tuple[int, int]:
+    """The month ``count`` months after ``month``, a year and a month."""
+    index = month[0] * 12 + month[1] - 1 + count
+    return index // 12, index % 12 + 1
+
+
+def _month_text(month: tuple[int, int]) -> str:
+    """A month as the form carries it, ``YYYY-MM``."""
+    return f"{month[0]:04d}-{month[1]:02d}"
+
+
+def _month_read(text: str) -> tuple[int, int] | None:
+    """The month the form carries, or ``None`` where it carries none."""
+    match = re.fullmatch(r"(\d{4})-(\d{2})", text.strip())
+    if match is None or not 1 <= int(match.group(2)) <= 12:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _moved(minutes: int) -> str:
+    """How far the clocks move, in words: *an hour*, *30 minutes*."""
+    if minutes == 60:
+        return "an hour"
+    if minutes % 60 == 0:
+        return f"{minutes // 60} hours"
+    return f"{minutes} minutes"
+
+
+def _relisted(view: _ScheduleView, added: Sequence[tuple[datetime, datetime]],
+              extra: Sequence[datetime],
+              left_out: Sequence[datetime]) -> _ScheduleView:
+    """The editor with the windows added and the starts added and left out by hand, in
+    words, each with what its hidden field carries (#35's note, decision 4)."""
+    return replace(
+        view,
+        added=tuple(_Listed(_period_value(a, b), f"from {_format_local(a)} until "
+                                                 f"{_format_local(b)}")
+                    for a, b in sorted(added)),
+        extra=tuple(_Listed(instants.stamp(each), _format_local(each))
+                    for each in sorted(extra)),
+        left_out=tuple(_Listed(instants.stamp(each), _format_local(each))
+                       for each in sorted(left_out)))
+
+
+def _day_act(each: ScheduleDay, *, schedule: Schedule, days_off: Any,
+             now: datetime) -> str:
+    """What a click on a day of the month does (#35's note, decision 4), or nothing
+    where the window it would change has begun: a start left out by hand is put back,
+    and one added by hand taken out; the rule's own window is left out, or, on a day its
+    holiday list leaves out, added back as a start of its own, which stands whatever
+    the list says (decision 6); an interval added by hand is taken out; and a day
+    without a window is given one, at the rule's time of day and of its length. A
+    schedule without a rule keeps its own window, which *Starts* and the end field set,
+    and a window open now is changed by *Extend* and *End now* alone (decision 5)."""
+    tz = ZoneInfo(schedule.zone)
+
+    def ahead(walls: Iterable[datetime]) -> bool:
+        return all(wall_instant(wall, schedule.zone) > now for wall in walls)
+
+    if each.left_out:
+        return "put back" if ahead(wall for wall in schedule.left_out
+                                   if wall.date() == each.day) else ""
+    if each.extra:
+        return "take out" if ahead(wall for wall in schedule.extra
+                                   if wall.date() == each.day) else ""
+    if each.ruled is not None:
+        if schedule.rule is None or not ahead((each.ruled,)):
+            return ""
+        if days_off is not None and day_off(days_off, each.day):
+            return "add back"
+        return "leave out"
+    if each.added:
+        return "take out" if all(begin > now for begin, _ in schedule.intervals
+                                 if begin.astimezone(tz).date() == each.day) else ""
+    return "add" if ahead((datetime.combine(each.day, schedule.start.time()),)) else ""
+
+
+def _clicked(view: _ScheduleView, value: str, trial: Schedule, *, now: datetime,
+             days_off: Any, added: list[tuple[datetime, datetime]],
+             extra: list[datetime], left_out: list[datetime]) -> _ScheduleView:
+    """A click on a day of the month, ``value`` (#35's note, decision 4): what
+    :func:`_day_act` says it does, done to the windows added and the starts added and
+    left out by hand — the lists changed in place — read against ``trial``, what the
+    editor's fields set before it; the editor given back with them in words, its month
+    the day's. A day nothing can be done with changes nothing but the month."""
+    try:
+        day = date.fromisoformat(value)
+    except ValueError:
+        return view
+    (each,) = schedule_days(trial, day, day, days_off=days_off)
+    what = _day_act(each, schedule=trial, days_off=days_off, now=now)
+    tz = ZoneInfo(trial.zone)
+
+    def on_it(moment: datetime) -> bool:
+        return moment.astimezone(tz).date() == day
+
+    if what == "put back":
+        left_out[:] = [moment for moment in left_out if not on_it(moment)]
+    elif what == "take out" and each.extra:
+        extra[:] = [moment for moment in extra if not on_it(moment)]
+    elif what == "take out":
+        added[:] = [period for period in added if not on_it(period[0])]
+    elif what in ("leave out", "add back") and each.ruled is not None:
+        (left_out if what == "leave out" else extra).append(
+            wall_instant(each.ruled, trial.zone))
+    elif what == "add":
+        extra.append(wall_instant(datetime.combine(day, trial.start.time()),
+                                  trial.zone))
+    view = replace(view, month=_month_text((day.year, day.month)))
+    return _relisted(view, added, extra, left_out) if what else view
+
+
+def _day_said(each: ScheduleDay, *, tz: ZoneInfo, list_name: str, act: str,
+              today: date) -> str:
+    """A day of the month as a screen reader is given it (#35's note, decision 4): its
+    date, its hours — each window that starts on it, from and to, a clock-change
+    night's with how long it really lasts — what the text and the holiday list say of
+    it, the rule's window it leaves out or adds back among them, and what a click
+    does."""
+    name = (f"{_WEEKDAY_NAMES[each.day.weekday()]}, {each.day.day} "
+            f"{_MONTH_NAMES[each.day.month - 1]}") + (", today" if each.day == today
+                                                       else "")
+    said = []
+    for window in each.windows:
+        begin, end = window.start.astimezone(tz), window.end.astimezone(tz)
+        words = f"a window from {begin:%H:%M} to {end:%H:%M}"
+        if end.date() == each.day + timedelta(days=1):
+            words += " the next day"
+        elif end.date() > each.day:
+            words += f" on {end.day} {_MONTH_NAMES[end.month - 1]}"
+        before, after = begin.utcoffset(), end.utcoffset()
+        if before is not None and after is not None and before != after:
+            words += (f", {Length(span=window.end - window.start).words()}: the clocks "
+                      f"go {'back' if after < before else 'forward'}")
+        said.append(words)
+    if each.listed:
+        said.append(f"{each.listed} on {list_name}" if list_name else each.listed)
+    if each.uncovered and each.ruled is not None:
+        said.append(f"{list_name or 'the holiday list'} is not complete for "
+                    f"{each.day.year}")
+    if each.ruled is not None and each.left_out:
+        said.append(f"its window from {each.ruled:%H:%M} left out")
+    elif each.ruled is not None and (each.listed or each.uncovered):
+        said.append(f"its window from {each.ruled:%H:%M} "
+                    f"{'added back' if each.extra else 'left out'}")
+    elif not each.windows:
+        said.insert(0, "no window")
+    if each.clock:
+        said.append(f"the clocks go {'forward' if each.clock > 0 else 'back'} "
+                    f"{_moved(abs(each.clock))}" + (
+                        f" at {each.clock_at:%H:%M}" if each.clock_at is not None
+                        else ""))
+    return f"{name}: {'; '.join(said)}." + (f" {_DAY_ACTS[act]}" if act else "")
+
+
+def _cal_day(each: ScheduleDay, *, month: int, today: date, now: datetime,
+             schedule: Schedule, days_off: Any, list_name: str,
+             windows: Sequence[Window]) -> _CalDay:
+    """One day of the editor's month, as it is drawn (#35's note, decision 4): its
+    hours those of the windows that start on it, and its bars the hours of it that any
+    of ``windows`` covers, so that a night's window shows on a phone as the evening of
+    one day and the morning of the next. A day of the month before or after it stands
+    for where it is, and nothing is done with it."""
+    tz = ZoneInfo(schedule.zone)
+    inside = each.day.month == month
+    act = (_day_act(each, schedule=schedule, days_off=days_off, now=now) if inside
+           else "")
+    begins = wall_instant(datetime.combine(each.day, datetime.min.time()),
+                          schedule.zone)
+    ends = wall_instant(datetime.combine(each.day + timedelta(days=1),
+                                         datetime.min.time()), schedule.zone)
+    length = (ends - begins).total_seconds()
+    shut = each.ruled is not None and not each.windows and (
+        each.left_out or (days_off is not None and day_off(days_off, each.day)))
+    marks = ["in-month" if inside else "other-month"]
+    marks += [mark for mark, holds in (
+        ("today", each.day == today), ("past", each.day < today),
+        ("window", bool(each.windows)), ("left-out", each.left_out),
+        ("listed", bool(each.listed)),
+        ("uncovered", each.uncovered and each.ruled is not None),
+        ("added", each.extra or each.added), ("clock", bool(each.clock))) if holds]
+    return _CalDay(
+        each.day,
+        hours=tuple((window.start.astimezone(tz).strftime("%H:%M"),
+                     window.end.astimezone(tz).strftime("%H:%M"))
+                    for window in each.windows),
+        bars=tuple(_CalBar(max(0.0, (window.start - begins).total_seconds() / length),
+                           min(1.0, (window.end - begins).total_seconds() / length))
+                   for window in windows
+                   if window.start < ends and window.end > begins),
+        struck=each.ruled.strftime("%H:%M") if shut and each.ruled is not None else "",
+        marks=tuple(marks),
+        note=(f"{'+' if each.clock > 0 else '−'}{abs(each.clock) // 60}h"
+              if each.clock and each.clock % 60 == 0
+              else f"{'+' if each.clock > 0 else '−'}{abs(each.clock)}m"
+              if each.clock else ""),
+        label=_day_said(each, tz=tz, list_name=list_name, act=act, today=today),
+        act=act)
+
+
+def _month_of(schedule: Schedule, not_on: str, *, now: datetime, shown: str,
+              windows: Sequence[Window]) -> _Month:
+    """The editor's month (ADR-0150, landing 5; #35's note, decision 4): the month
+    ``shown``, or else the one its first window to come opens in, or this one — paged
+    from this month to a year on, as far as anything set on the page reaches — in the
+    schedule's zone, which its name says where it is not the page's; six weeks from the
+    Monday on or before its first day, each day's hours, what the text and the holiday
+    list ``not_on`` say of it and what a click does; and the day its one tab stop
+    starts on, the first window's where it opens in this month, or else today, or else
+    the month's first."""
+    tz = ZoneInfo(schedule.zone)
+    today = now.astimezone(tz).date()
+    first = (today.year, today.month)
+    last = _months_on(first, _MONTHS_AHEAD)
+    ahead = next((window for window in windows if window.end > now), None)
+    opening = ahead.start.astimezone(tz).date() if ahead is not None else today
+    asked = _month_read(shown) or (opening.year, opening.month)
+    asked = min(max(asked, first), last)
+    begins = date(asked[0], asked[1], 1)
+    grid = begins - timedelta(days=begins.weekday())
+    days_off = holiday_lists.get(not_on) if not_on else None
+    list_name = status_tree.list_name(not_on) if not_on else ""
+    cells = [_cal_day(each, month=asked[1], today=today, now=now, schedule=schedule,
+                      days_off=days_off, list_name=list_name, windows=windows)
+             for each in schedule_days(schedule, grid, grid + timedelta(days=41),
+                                       days_off=days_off, windows=windows)]
+
+    def page(direction: str, count: int, words: str) -> tuple[str, str, str]:
+        target = min(max(_months_on(asked, count), first), last)
+        if target == asked:
+            return direction, "", words
+        return (direction, _month_text(target),
+                f"{words}, {_MONTH_NAMES[target[1] - 1]} {target[0]}")
+
+    focus = (opening if (opening.year, opening.month) == asked
+             else today if first == asked else begins)
+    title = f"{_MONTH_NAMES[asked[1] - 1]} {asked[0]}" + (
+        f" ({schedule.zone})" if schedule.zone != config.timezone else "")
+    return _Month(
+        _month_text(asked), title,
+        tuple(tuple(cells[index:index + 7]) for index in range(0, 42, 7)),
+        (page("year-before", -12, "the year before"),
+         page("month-before", -1, "the month before"),
+         page("month-after", 1, "the month after"),
+         page("year-after", 12, "the year after")),
+        focus.isoformat(), kept=_month_text(asked) if _month_read(shown) else "")
+
+
+def _editor_of(entry: Pin, *, month: bool = False) -> _ScheduleView:
+    """A standing maintenance entry's editor, its fields filled (ADR-0150, landing 4):
+    a one-off's *Starts* — where its window is still ahead — and its end, each kept
+    exactly while unchanged, as 3b built them; a series' *Starts* at its rule's start in
+    the window open now, or else its next — never a window added by hand, whose time of
+    day is not the rule's — so that an edit shapes the windows to come, what has passed
+    leaving the text, with its *Length*, its rule's fields, *Until*, *Not on* and its
+    zone, and what it adds or leaves out by hand that is still to come; a schedule
+    without a rule — a one-off a window joined — *Once*, its window open or next by its
+    start and its end, read as typed and so exact to the second, the others listed; and
+    beneath them its next windows and its sentence.
+
+    **Its month only where** ``month`` **asks for it** — the refusal's page, which is
+    this one editor (ADR-0150 decision 17). In its block, which is how the templates
+    call it, the month is left out: a page lists an editor for every entry that
+    stands, *Handled* one for each, and the month is most of each one's weight and of
+    its render. *Preview* draws it without script, and with script the editor asks
+    for it as its *Edit* opens (`maintenance-edit.js`), through the rendering a preview
+    draws (:func:`_previewed`)."""
+    assert entry.schedule is not None and entry.expires_at is not None
+    schedule = entry.schedule
+    tz = ZoneInfo(schedule.zone)
+    now = _now()
+    note = entry.note if entry.note != NO_NOTE else ""
+    opened = status_tree.open_series(entry)
+    preview = _preview_of(schedule, entry.not_on, now=now,
+                          windows=status_tree.windows(entry), until=entry.expires_at,
+                          month=month)
+    if schedule.is_one_off:
+        ends = _field_time(entry.expires_at, tz)
+        if opened is not None:
+            return _ScheduleView(note=note, duration=ends, expiry_was=ends,
+                                 zone=schedule.zone, open_once=True,
+                                 preview=preview)
+        starts = _field_time(schedule.starts_at, tz)
+        return _ScheduleView(note=note, starts=starts, starts_was=starts,
+                             starts_at=instants.stamp(schedule.starts_at),
+                             duration=ends, expiry_was=ends, zone=schedule.zone,
+                             preview=preview)
+    assert schedule.length is not None
+    rule = schedule.rule
+    window = (opened.window if opened is not None
+              else next((each for each in status_tree.windows(entry)
+                         if each.start > now), None))
+    if rule is None:
+        first = window.start if window is not None else schedule.starts_at
+        duration = _field_time(window.end if window is not None else entry.expires_at,
+                               tz)
+        # the window the editor is filled from is not listed again
+        held = window
+    else:
+        ruled = [begin for begin, _ in Schedule(
+            zone=schedule.zone, start=schedule.start, length=schedule.length,
+            rule=rule).spans()]
+        first = next((begin for begin in ruled if opened is not None
+                      and opened.window.start <= begin < opened.window.end),
+                     next((begin for begin in ruled if begin > now),
+                          schedule.starts_at))
+        duration = _length_text(schedule.length)
+        # the window an edit keeps open is copied in again (`_read_schedule`)
+        held = opened.window if opened is not None else None
+    starts = _field_time(first, tz)
+    view = _ScheduleView(
+        note=note, starts=starts, starts_was=starts, starts_at=instants.stamp(first),
+        duration=duration, zone=schedule.zone, not_on=entry.not_on,
+        kept=_format_local(opened.window.start) if opened is not None else "",
+        added=tuple(_Listed(_period_value(a, b), f"from {_format_local(a)} until "
+                                                 f"{_format_local(b)}")
+                    for a, b in schedule.intervals if b > now and not (
+                        held is not None and held.start <= a and b <= held.end)),
+        extra=tuple(_Listed(instants.stamp(moment), _format_local(moment))
+                    for moment in (wall.replace(tzinfo=tz).astimezone(UTC)
+                                   for wall in schedule.extra)
+                    if moment > now and moment != first),
+        left_out=tuple(_Listed(instants.stamp(moment), _format_local(moment))
+                       for moment in (wall.replace(tzinfo=tz).astimezone(UTC)
+                                      for wall in schedule.left_out) if moment > now),
+        preview=preview)
+    if rule is None:
+        return view
+    until = _until_field(rule.until, tz)
+    view = replace(view, repeat={DAILY: "daily", WEEKLY: "weekly",
+                                 MONTHLY: "monthly"}[rule.frequency],
+                   interval=str(rule.interval), until=until, until_was=until,
+                   until_at=instants.stamp(rule.until))
+    if rule.frequency == WEEKLY:
+        return replace(view, weekdays=tuple(WEEKDAYS[day] for day in (
+            rule.weekdays or (schedule.start.weekday(),))))
+    if rule.frequency == MONTHLY:
+        if rule.nth:
+            return replace(view, month_by="weekday", month_nth=str(rule.nth),
+                           month_weekday=WEEKDAYS[rule.weekday])
+        day = rule.month_day or schedule.start.day
+        return replace(view, month_day=str(abs(day)),
+                       month_from="end" if day < 0 else "start")
+    return view
+
+
+app.jinja_env.globals["editor_of"] = _editor_of
+
+
+def _new_editor(note: str = "") -> _ScheduleView:
+    """The editor of a new window: empty but for the words written in another kind's
+    form, its zone the configured one (ADR-0150, landing 4)."""
+    return _ScheduleView(note=note, zone=config.timezone)
+
+
+app.jinja_env.globals["new_editor"] = _new_editor
+
+
+@dataclass(frozen=True)
+class _NotOn:
+    """What an editor's *Not on* offers (ADR-0149 decision 2, #35's note, decision 6):
+    each list that can be read, ``(key, name)``, the file's default first; each that
+    cannot, ``(key, why)``; and why none can, where the file itself cannot be read."""
+    lists: tuple[tuple[str, str], ...] = ()
+    unreadable: tuple[tuple[str, str], ...] = ()
+    broken: str = ""
+
+
+def _not_on_choices() -> _NotOn:
+    """The deployment's holiday lists as an editor's *Not on* offers them: by name, a
+    select only where more than one can be read, the default first, and disabled with
+    the reason where the list cannot be read — the server refusing it — so that nobody
+    sets an entry that would never apply without being told (#35's note, decision
+    6)."""
+    held = holiday_lists
+    if held.broken:
+        return _NotOn(broken=held.broken)
+    lists = sorted(held.lists.values(), key=lambda each: each.key != held.default)
+    return _NotOn(lists=tuple((each.key, each.name) for each in lists),
+                  unreadable=tuple(held.unreadable.items()))
+
+
+app.jinja_env.globals["not_on_choices"] = _not_on_choices
+
+
+@cache
+def _zone_names() -> tuple[str, ...]:
+    """The IANA names *Times in …* offers, sorted."""
+    return tuple(sorted(name for name in available_timezones()
+                        if "/" in name or name == "UTC"))
+
+
+def _zone_list() -> Markup:
+    """The IANA names *Times in …* offers, as one ``datalist`` a page draws once, with
+    the first editor that asks for it (ADR-0150, landing 4)."""
+    if g.get("zone_list"):
+        return Markup("")
+    g.zone_list = True
+    return (Markup('<datalist id="ls-zones">')
+            + Markup("").join(Markup('<option value="{}">').format(name)
+                              for name in _zone_names())
+            + Markup("</datalist>"))
+
+
+app.jinja_env.globals["zone_list"] = _zone_list
+
+
+app.jinja_env.filters["stamp"] = instants.stamp
+
+
+@app.template_filter("shut_said")
+def _shut_said(shut: Shut) -> str:
+    """What of an entry's windows its holiday list stops, in the page's words
+    (ADR-0150 decision 10)."""
+    return shut.said(_format_local)
+
+
+#: The instance's child that says what the holiday lists stop of what reads them —
+#: the maintenance entries that stand, their first reader (ADR-0149 decision 3;
+#: ADR-0150, landing 4).
+_LIST_STOPS = "holidays"
+
+
+def _list_stop_slug(key: str, year: int = 0) -> str:
+    """The slug of the instance's line on what the holiday list ``key`` stops: every
+    window of the entries that name it, where it cannot be read, or those of ``year``,
+    which it is not complete for."""
+    return line_slug("not-on", key, str(year)) if year else line_slug("not-on", key)
+
+
+@app.template_filter("shut_line")
+def _shut_line(shut: Shut) -> str:
+    """Where the instance says that an entry's holiday list cannot be read, and how
+    many entries it stops — the line an entry's *applies not at all* leads to (#35's
+    note, decision 6)."""
+    return url_for('status', branch=f"{HEARTBEAT_PATH.lstrip('/')}/{_LIST_STOPS}",
+                   reason=_list_stop_slug(shut.list_key)) + "#pinned-reason"
+
+
+def _list_stop_lines() -> list[LineEntry]:
+    """What the holiday lists stop of the maintenance entries that stand, as lines of
+    the instance's own node (ADR-0149 decision 3; #35's note, decision 6 and 3b's
+    fifth question): one for each list an entry names that cannot be read, saying how
+    many entries it stops — none of their windows applies — from the start; and one
+    for each list not complete for a year in which a standing entry's windows start,
+    saying how many entries it stops — from 1 December for the coming year, and from 1
+    January on for the year begun, until the list states the year and the instance
+    restarts, the file being read at the start. Read from what the tree holds, never a
+    probe."""
+    now = instants.now()
+    local = now.astimezone(config.tzinfo)
+    years = [local.year] + ([local.year + 1] if local.month == 12 else [])
+    lines: list[LineEntry] = []
+    for stop in status_tree.list_stops(years, now):
+        many = stop.entries != 1
+        entries = f"{stop.entries} maintenance {'entries' if many else 'entry'}"
+        if stop.why_not:
+            lines.append(LineEntry(
+                _list_stop_slug(stop.list_key),
+                plain(f"{entries} that {'leave' if many else 'leaves'} out the holiday "
+                      f"list {stop.list_key} {'apply' if many else 'applies'} not at "
+                      f"all: {stop.why_not}"),
+                code=StatusCode.WARN))
+            continue
+        held = holiday_lists.get(stop.list_key)
+        begins = datetime(stop.year, 1, 1, tzinfo=config.tzinfo)
+        lines.append(LineEntry(
+            _list_stop_slug(stop.list_key, stop.year),
+            plain(f"{status_tree.list_name(stop.list_key)} ({stop.list_key}) is not "
+                  f"complete for {stop.year}: from {_format_local(begins)} the windows "
+                  f"of {entries} do not apply. State {stop.year} in "
+                  f"{held.file if held is not None else 'its file'}, its days with it, "
+                  f"and restart the instance."),
+            code=StatusCode.WARN))
+    return lines
+
+
+self_report.register_contributor(
+    _LIST_STOPS, _list_stop_lines, title="Holidays",
+    about="What the deployment's holiday lists stop of what reads them — the "
+          "maintenance entries that leave out a list's days: a list that cannot be "
+          "read, without which none of their windows applies, and from 1 December a "
+          "list not complete for the coming year in which their windows start "
+          "(ADR-0149, ADR-0150).")
+
+
+@app.template_filter("series_open")
+def _series_open(entry: Pin) -> OpenWindow | None:
+    """The window of a series open now and what follows it, as its block's two rows
+    say them (ADR-0150, landing 4); ``None`` for a one-off, whose block is one row, and
+    where no window is open."""
+    if entry.schedule is None or entry.schedule.is_one_off:
+        return None
+    return status_tree.open_series(entry)
+
+
+@app.route('/pins/maintenance/preview', methods=['POST'])
+def maintenance_preview() -> ResponseReturnValue:
+    """What an editor's fields would set, as the part beneath them that follows the
+    fields where script runs (#35's note, decision 4): the month, the windows added and
+    left out by hand, the next windows and the sentence — or why it cannot be set —
+    drawn by the same macro a preview without script draws, nothing written; a day of
+    the month or its paging done as the editor's own button does it. Asks the
+    permission a set asks."""
+    user = identity.signed_in()
+    if not user.may(MAINTENANCE):
+        abort(403)
+    path = request.form.get('path', '')
+    slug = request.form.get('slug', '')
+    token = (request.form.get(f'set_at:{slug}') if f'set_at:{slug}' in request.form
+             else request.form.get('set_at', ''))
+    stored = (status_tree.standing_line_entry(path, slug) if slug
+              else status_tree.standing_entry(path)) if token else None
+    view = _previewed(_posted_view(), now=instants.now(), path=path, slug=slug,
+                      stored=stored, token=token or "", act=_act_of())
+    return render_template('_schedule_preview.html', view=view, standalone=True,
+                           prefix=request.form.get('prefix', 'form'))
+
+
+def _previewed(view: _ScheduleView, *, now: datetime, path: str, slug: str,
+               stored: Pin | None, token: str, act: str = "") -> _ScheduleView:
+    """The editor given back with what its fields would set beneath them — the next
+    windows and the sentence, or why it cannot be set (#35's note, decision 4)."""
+    read = _read_schedule(view, now=now, path=path, slug=slug, stored=stored,
+                          token=token, act=act)
+    if read.problem or read.gone:
+        return replace(read.view, preview=_Preview(problem=read.problem or (
+            "The pin this editor was filled from is gone.")))
+    schedule = read.schedule
+    if schedule is None:
+        assert read.expires_at is not None
+        began = (stored.schedule.starts_at if stored is not None
+                 and stored.schedule is not None and stored.schedule.is_one_off
+                 and read.window is None else now)
+        schedule = Schedule.one_off(min(began, read.expires_at - timedelta(seconds=1)),
+                                    read.expires_at, read.view.zone)
+    return replace(read.view, preview=_preview_of(schedule, read.not_on, now=now,
+                                                  shown=read.view.month))
 
 
 @app.route('/little-sister/<contributor>/act/<slug>', methods=['POST'])
@@ -4923,13 +7090,29 @@ def maintenance() -> ResponseReturnValue:
     one of its lines at the line, by the address that names one
     (``?reason=<slug>#pinned-reason``, ADR-0036 decision 12), since on a node of
     150 lines the top of the page is a long way from the line that was just pinned.
+    A node's Notes tab's form says so (``from``), and a write it refuses comes back
+    to the tab, with why above the form and the words in it (ADR-0145 decision 2).
+
+    **A schedule** (ADR-0150, landing 4) is read from the editor's fields
+    (:func:`_read_schedule`): one window, or a series. The editor's own buttons —
+    *Preview*, *Add an interval*, an ×, *weekend* and *working week* — write nothing:
+    the answer is the editor given back as a refusal gives it, in full, with what it
+    would set beneath it, and never at the form's ``next``, which the drawer takes for
+    a write gone through. **A window set on a part an entry stands on joins it**
+    (``with=join``, #35's note, decision 2): it is added to that entry's schedule,
+    the entry keeping its note, which a note of the window's own words beside it
+    keeps company in the Notes history; and the entry is replaced only where the
+    person chose to (``with=replace``). A part the Notes tab offers carries the token
+    of the entry that stands on it (``set_at:<slug>``). *Extend* and *End now*
+    (``action`` ``extend`` and ``end``) change the window open now alone
+    (:func:`_change_window`).
     """
     user = identity.signed_in()
     if not user.may(MAINTENANCE):
         abort(403)
     path = request.form['path']
-    token = request.form.get('set_at')
-    clearing = request.form.get('action') == 'clear'
+    act = request.form.get('action', 'set')
+    clearing = act == 'clear'
     typed = request.form.get('note', '').strip()
     duration = request.form.get('duration', '')
     # A `slug` names **one reason** of the node instead of the node itself
@@ -4938,6 +7121,10 @@ def maintenance() -> ResponseReturnValue:
     # the query parameter (`?reason=<slug>`), which is a different namespace from
     # the form's; the explanation is the `note` (ADR-0047 decision 1).
     slug = request.form.get('slug', '')
+    # The Notes tab's form offers maintenance on a part an entry stands on, and
+    # carries that entry's token for the part (ADR-0150, landing 4)
+    token = (request.form.get(f'set_at:{slug}') if f'set_at:{slug}' in request.form
+             else request.form.get('set_at'))
     # A card's editor says where it was opened (`next`), so pinning from the
     # wall returns to the wall, and a branch's head to its page as it was asked
     # for; validated like the preferences form's field. Without it — a leaf's
@@ -4952,69 +7139,253 @@ def maintenance() -> ResponseReturnValue:
                         reason=slug) + '#pinned-reason'
     else:
         where = url_for('status', branch=path.lstrip('/'))
+    view = _posted_view()
     refused = partial(_maintenance_refused, path=path, slug=slug, back=where,
-                      clearing=clearing, mine=typed, duration=duration,
-                      token=token or '')
+                      clearing=clearing, mine=typed, view=view, token=token or '')
+    if request.form.get('from') == 'notes':
+        # the Notes tab's form, whose refusal comes back to the tab (ADR-0145
+        # decision 2)
+        refused = partial(_refused_on_tab, kind=MAINTENANCE, path=path, slug=slug,
+                          mine=typed, fields={'duration': duration,
+                                              'starts': request.form.get('starts',
+                                                                         ''),
+                                              'with': request.form.get('with', '')},
+                          view=view)
+    if act in ('extend', 'end'):
+        return _change_window(user, path=path, slug=slug, act=act, token=token,
+                              words=typed, where=where, refused=refused)
     kept = False
     if clearing and slug:
         write = status_tree.clear_entry_maintenance(path, slug,
-                                                    expected_set_at=token)
+                                                    expected_set_at=token,
+                                                    by=user.name)
     elif clearing:
-        write = status_tree.clear_maintenance(path, expected_set_at=token)
+        write = status_tree.clear_maintenance(path, expected_set_at=token,
+                                              by=user.name)
     else:
         now = instants.now()
+        stored = ((status_tree.standing_line_entry(path, slug) if slug
+                   else status_tree.standing_entry(path)) if token else None)
+        pressed = _act_of()
+        if pressed:
+            # the editor's own button: nothing is written, and the editor comes back
+            # in full with what it would set beneath it (#35's note, decision 4)
+            return refused(problem=None, stored=None, preview=_previewed(
+                view, now=now, path=path, slug=slug, stored=stored,
+                token=token or '', act=pressed))
+        read = _read_schedule(view, now=now, path=path, slug=slug, stored=stored,
+                              token=token or '')
         # An edit's expiry field is filled with the stored expiry, and the form
-        # says what it was filled with (`expiry_was`). A field that still reads
-        # that **keeps the stored instant exactly** (ADR-0104 decision 5): it is
-        # not read again, so neither the floor a typed expiry is held to nor the
-        # hour a clock change repeats can refuse an edit that left the window
-        # alone. The kept value is the pin's the token names — a form that claims
-        # nothing is pinned has none, and its field is read like any other.
-        was = request.form.get('expiry_was', '').strip()
-        kept = bool(token) and bool(was) and duration.strip() == was
-        if kept:
-            pin = (status_tree.entry_maintenance(path, slug) if slug
-                   else status_tree.maintenance_entry(path))
-            if pin is None:
-                # The pin the field was filled from is gone.
-                return refused(problem=None, stored=None, kept=True)
-            # Whether this is still the pin the token names is the write's own
-            # compare-and-set to say, under the tree's lock; it refuses below.
-            expires_at = pin.expires_at
-        else:
-            try:
-                expires_at = _maintenance_expiry(duration, now=now,
-                                                 floor=_interval_floor(path))
-            except _BadExpiry as bad:
-                # Nothing is written and the admin's words come back — the same
-                # posture as a refused compare-and-set, for the same reason: a
-                # write that silently did something other than what was asked is
-                # the thing this route is not allowed to do (ADR-0014). Nothing
-                # about the stored pin moved, so what the field was filled with
-                # comes back too.
-                return refused(problem=str(bad), stored=None, expiry_was=was)
-        # A blank note on an **edit** means "I did not touch this field", so the
-        # stored text stays; on a new pin there is nothing to keep and the literal
-        # `maintenance` is the honest placeholder (`NO_NOTE`).
-        held = _held_note(path, slug, token)
-        note = typed or held or NO_NOTE
+        # says what it was filled with (`expiry_was`): a field that still reads
+        # that keeps the stored instant exactly (ADR-0104 decision 5).
+        kept = (bool(token) and bool(view.expiry_was)
+                and view.duration.strip() == view.expiry_was)
+        if read.gone:
+            # The pin the field was filled from is gone.
+            return refused(problem=None, stored=None, kept=True)
+        if read.problem:
+            # Nothing is written and the admin's words come back — the same
+            # posture as a refused compare-and-set, for the same reason: a write
+            # that silently did something other than what was asked is the thing
+            # this route is not allowed to do (ADR-0014).
+            return refused(problem=read.problem, stored=None)
         setter = (partial(status_tree.set_entry_maintenance, path, slug) if slug
                   else partial(status_tree.set_maintenance, path))
         # What the node shows as the pin is set, which its note keeps beside its
-        # words (ADR-0047 decision 6) — read before the pin changes it, and only
-        # where there are words for the node's notes to take.
-        context = (context_of(status_tree.snapshot(path), slug) if note != NO_NOTE
-                   else None)
-        write = setter(note, expires_at=expires_at,
-                       set_by=user.name,
-                       expected_set_at=token)
-        if context is not None and write.applied and write.current is not None:
-            # A pin's note enters its node's notes as the pin is set, and follows an
-            # edit of it while the pin stands (ADR-0047 decisions 4 and 5).
-            notes_book.pinned(path, slug, write.current, context)
+        # words (ADR-0047 decision 6) — read before the pin changes it.
+        context = context_of(status_tree.snapshot(path), slug)
+        if (request.form.get('with') == 'join' and stored is not None
+                and stored.schedule is not None):
+            if view.repeat != "once" or view.added or view.extra or read.window is None:
+                return refused(problem=(
+                    "A schedule stands on this part, and a window set here joins it; "
+                    "a repeat, or windows added by hand, would replace it: choose "
+                    "'this replaces it', or change the schedule with its Edit."),
+                    stored=None)
+            begin, end = read.window
+            try:
+                joined = _joined_to(stored.schedule, begin, end)
+            except ValueError as error:
+                return refused(problem=f"This window cannot join the schedule that "
+                                       f"stands: {error}.", stored=None)
+            write = setter(stored.note, schedule=joined, not_on=stored.not_on,
+                           changed=stored.changed, set_by=user.name,
+                           expected_set_at=token)
+            if write.applied and write.current is not None:
+                notes_book.pinned(path, slug, write.current, context)
+                if typed:
+                    # the window's own words, beside the entry's (#35's note,
+                    # decision 2): one note for two reasons loses nothing
+                    notes_book.add(path, slug,
+                                   f"A window joins the schedule, from "
+                                   f"{_format_local(begin)} until "
+                                   f"{_format_local(end)}. {typed}",
+                                   by=user.name, context=context)
+        else:
+            # A blank note on an **edit** means "I did not touch this field", so
+            # the stored text stays; on a new pin there is nothing to keep and the
+            # literal `maintenance` is the honest placeholder (`NO_NOTE`).
+            note = typed or _held_note(path, slug, token) or NO_NOTE
+            write = setter(note, expires_at=read.expires_at, schedule=read.schedule,
+                           not_on=read.not_on, set_by=user.name,
+                           expected_set_at=token)
+            if write.applied and write.current is not None:
+                # A pin's note enters its node's notes as the pin is set, with
+                # words or without, and follows an edit of it while the pin stands
+                # (ADR-0047 decisions 4 and 5, ADR-0145 decision 4).
+                notes_book.pinned(path, slug, write.current, context)
     if write.refused:
         return refused(problem=None, stored=write.current, kept=kept)
+    if not clearing and write.current is not None and (
+            status_tree.entry_maintenance(path, slug) if slug
+            else status_tree.maintenance_entry(path)) is None:
+        # A set that plans a window, rather than opening one, is answered at the
+        # tab, at its block (ADR-0150): the wall shows nothing of a planned window,
+        # so the drawer stays open on it — an answer other than the form's `next`
+        # is one it shows — and without script the tab is the page.
+        tab = _planned_at(path, slug)
+        if tab:
+            return redirect(tab)
     return redirect(where)
+
+
+def _change_window(user: identity.Identity, *, path: str, slug: str, act: str,
+                   token: str | None, words: str, where: str,
+                   refused: Callable[..., ResponseReturnValue]
+                   ) -> ResponseReturnValue:
+    """*Extend* and *End now*, on the first row of a series' block (#35's note,
+    decision 5): the window open now changed alone (:meth:`StatusTree.change_window`).
+
+    *Extend* takes a preset — 30 minutes, 1, 2 or 4 hours, counted from the window's
+    end — or *Until*, read in the end field's grammar from now, in the entry's zone,
+    and **never shortens**: an *Until* not after the window's end is refused, naming
+    *End now*. *End now* closes the window, or, on the schedule's last, ends the entry.
+    Each takes the words why, which the Notes history keeps as a note of their own
+    beside the entry's. An *Extend* or *End now* that arrives after its window closed
+    is refused as a stale edit is, saying that it closed and offering *Set
+    maintenance* filled with the end asked for, which joins the entry: nothing reopens
+    a window by itself (:func:`_window_closed`)."""
+    stored = (status_tree.standing_line_entry(path, slug) if slug
+              else status_tree.standing_entry(path))
+    try:
+        opened = instants.instant(request.form.get('window', ''), "the window's start")
+    except ValueError:
+        abort(400)
+    if stored is None or stored.schedule is None:
+        # its entry is gone with it — its last window closed, or it was cleared
+        return _window_closed(path=path, slug=slug, back=where, stored=None,
+                              opened=opened, until=None, words=words)
+    until: datetime | None = None
+    if act == 'extend':
+        tz = ZoneInfo(stored.schedule.zone)
+        now = instants.now()
+        current = status_tree.open_series(stored)
+        if current is None or current.window.start != opened:
+            return _window_closed(path=path, slug=slug, back=where, stored=stored,
+                                  opened=opened, words=words,
+                                  until=_asked_late(stored, opened, now=now, tz=tz))
+        preset = request.form.get('preset', '')
+        if preset:
+            if not preset.isdigit():
+                abort(400)
+            until = current.window.end + timedelta(seconds=int(preset))
+        else:
+            asked = request.form.get('until', '')
+            if not asked.strip():
+                return refused(problem="Extend it by one of its lengths, or write "
+                                       "Until.", stored=None, window_act=act)
+            try:
+                until = _maintenance_expiry(asked, now=now, tz=tz)
+            except _BadExpiry as bad:
+                return refused(problem=str(bad), stored=None, window_act=act)
+            if until <= current.window.end:
+                return refused(problem=(
+                    f"{asked.strip()!r} is not after this window's end, "
+                    f"{_format_local(current.window.end)}: Extend never shortens a "
+                    f"window — to end it sooner, use End now."), stored=None,
+                    window_act=act)
+    write = status_tree.change_window(path, slug, opened=opened, until=until,
+                                      note=words, by=user.name,
+                                      expected_set_at=token)
+    if write.problem == WINDOW_CLOSED:
+        return _window_closed(path=path, slug=slug, back=where, stored=stored,
+                              opened=opened, until=until, words=words)
+    if write.problem == NOT_LATER:
+        return refused(problem="That is not after this window's end: Extend never "
+                               "shortens a window — to end it sooner, use End now.",
+                       stored=None, window_act=act)
+    if write.refused:
+        return refused(problem=None, stored=write.current)
+    context = context_of(status_tree.snapshot(path), slug)
+    if write.applied and write.current is not None:
+        notes_book.pinned(path, slug, write.current, context)
+    if words and write.applied:
+        said = (f"Window extended until {_format_local(until)}." if until is not None
+                else "Window ended early." if write.current is not None
+                else "Maintenance ended early.")
+        notes_book.add(path, slug, f"{said} {words}", by=user.name, context=context)
+    return redirect(where)
+
+
+def _asked_late(stored: Pin, opened: datetime, *, now: datetime,
+                tz: ZoneInfo) -> datetime | None:
+    """The end a late *Extend* asked for, which *Set maintenance* is filled with where
+    its window closed (#35's note, decision 5): its *Until* as typed, read from now, or
+    its preset counted from the closed window's end — ``None`` where neither lies
+    ahead."""
+    asked = request.form.get('until', '').strip()
+    preset = request.form.get('preset', '')
+    late: datetime | None = None
+    if asked:
+        try:
+            late = _maintenance_expiry(asked, now=now, tz=tz)
+        except _BadExpiry:
+            return None
+    elif preset.isdigit():
+        closed = next((window for window in status_tree.windows(stored)
+                       if window.start == opened), None)
+        if closed is not None:
+            late = closed.end + timedelta(seconds=int(preset))
+    return late if late is not None and late > now else None
+
+
+def _window_closed(*, path: str, slug: str, back: str, stored: Pin | None,
+                   opened: datetime, until: datetime | None,
+                   words: str) -> ResponseReturnValue:
+    """An *Extend* or *End now* that arrived after its window closed (#35's note,
+    decision 5): refused as a stale edit is, nothing written, saying when the window
+    closed, and offering *Set maintenance* filled with the end asked for and the
+    words — a window from now, which joins the entry where one still stands. Nothing
+    reopens a window by itself."""
+    user = identity.signed_in()
+    closed_at: datetime | None = None
+    tz = config.tzinfo
+    if stored is not None and stored.schedule is not None:
+        tz = ZoneInfo(stored.schedule.zone)
+        closed_at = next((window.end for window in status_tree.windows(stored)
+                          if window.start == opened), None)
+    offer = _ScheduleView(note=words, zone=getattr(tz, "key", config.timezone),
+                          duration=_field_time(until, tz) if until is not None
+                          else "")
+    return render_template(
+        'maintenance_conflict.html', username=user.name, firstname=user.firstname,
+        path=path, node_path=join_path(path), back=back, clearing=False,
+        stored=stored, slug=slug, problem=None, mine=words, view=offer,
+        token=stored.token if stored is not None else '', kept=False,
+        preview=False, closed=True, closed_at=closed_at, window_act='',
+        maintenance_default=config.maintenance_default_expiry,
+        maintenance_timezone=config.timezone)
+
+
+def _planned_at(path: str, slug: str) -> str:
+    """Where a set that planned a window is answered (ADR-0150): its node's *Notes*
+    tab at the new block, in the drawer's panel where the form was — empty for the
+    root, which has no such tab."""
+    branch = _url_branch(join_path(path))
+    if not branch:
+        return ""
+    return url_for('notes', path=branch, at=MAINTENANCE, reason=slug or None,
+                   panel="1" if _in_panel() else None) + "#at"
 
 
 def _held_note(path: str, slug: str, token: str | None) -> str:
@@ -5024,17 +7395,18 @@ def _held_note(path: str, slug: str, token: str | None) -> str:
     stranger than the placeholder."""
     if not token:
         return ""
-    entry = (status_tree.entry_maintenance(path, slug) if slug
-             else status_tree.maintenance_entry(path))
+    entry = (status_tree.standing_line_entry(path, slug) if slug
+             else status_tree.standing_entry(path))
     return entry.note if entry is not None else ""
 
 
 def _maintenance_refused(*, path: str, slug: str, back: str, clearing: bool,
-                         mine: str, duration: str, token: str,
+                         mine: str, view: _ScheduleView, token: str,
                          problem: str | None,
                          stored: Pin | None,
-                         expiry_was: str = "",
-                         kept: bool = False) -> ResponseReturnValue:
+                         kept: bool = False,
+                         preview: _ScheduleView | None = None,
+                         window_act: str = "") -> ResponseReturnValue:
     """The page a refused write lands on: nothing was saved, here is why, and here
     are your own words back. One page for both refusals — a stale token and a
     duration or expiry we will not accept — because the admin's situation is the same.
@@ -5056,18 +7428,33 @@ def _maintenance_refused(*, path: str, slug: str, back: str, clearing: bool,
     whichever way the form spelled it: a node's own page posts the route's
     ``branch``, *Handled* and the wall the absolute path. Its forms
     post ``path`` back as it came.
+
+    Every field of the editor comes back the same way (``view``, ADR-0150, landing
+    4): *Starts* with what it was filled with, a repeat's fields as they were chosen,
+    the windows added by hand — so that a refused series carries the series' editor
+    with the words typed. A ``preview`` is the editor's own button answered as a
+    refusal is, in full, with what it would set beneath it, nothing written and no
+    word of a refusal; and ``window_act`` an *Extend* or *End now* refused, whose own
+    form comes back with the words and the end typed.
     """
     user = identity.signed_in()
     if kept:
-        duration = expiry_was = (_expiry_input(stored.expires_at)
-                                 if stored is not None else "")
+        view = (replace(_editor_of(stored, month=True), note=mine)
+                if stored is not None and stored.schedule is not None
+                else replace(view, duration="", expiry_was="", starts_was="",
+                             starts_at=""))
+    if preview is not None:
+        view = preview
     return render_template(
         'maintenance_conflict.html', username=user.name,
         firstname=user.firstname, path=path, node_path=join_path(path),
         back=back,
         clearing=clearing, stored=stored, slug=slug, problem=problem,
-        mine=mine, duration=duration, token=token,
-        expiry_was=expiry_was, kept=kept,
+        mine=mine, view=view, token=token, kept=kept,
+        preview=preview is not None, previewing=preview is not None,
+        closed=False, closed_at=None,
+        window_act=window_act,
+        window=request.form.get('window', ''), until=request.form.get('until', ''),
         maintenance_default=config.maintenance_default_expiry,
         maintenance_timezone=config.timezone)
 
@@ -5082,6 +7469,20 @@ def _acknowledgment_end(raw: str, *, now: datetime,
     if not raw.strip():
         return None
     return _maintenance_expiry(raw, now=now, floor=floor)
+
+
+def _silence_deadline(raw: str, *, now: datetime, path: str) -> datetime:
+    """Resolve a silence's *Deadline* field (ADR-0144): blank is the configured
+    default, ``silence_default_expiry``, and anything else a deadline read as
+    maintenance's expiry is, by its grammar — at most thirty days away, and long enough
+    for the slowest check the silence covers to run again — refused rather than bent
+    (:func:`_maintenance_expiry`). A check slower than the thirty days sets no floor,
+    as one slower than a year sets none for a window: no deadline could cover a run of
+    it."""
+    floor = _interval_floor(path)
+    if floor is not None and floor.seconds > MAX_SILENCE_SECONDS:
+        floor = None
+    return _maintenance_expiry(raw, now=now, floor=floor, silence=True)
 
 
 @app.route('/pins/seen', methods=['POST'])
@@ -5105,17 +7506,23 @@ def seen() -> ResponseReturnValue:
     them as they stand, to be marked from there.
 
     A note enters its node's notes as it is set, and follows an edit while the seen
-    stands (ADR-0140). A write comes back where its block stands, as a pin's does."""
+    stands (ADR-0140). A write comes back where its block stands, as a pin's does, and
+    one the Notes tab's form refused to the tab (ADR-0145 decision 2), whose form may
+    carry the head's digest beside a line it chose: the line is the act."""
     user = identity.signed_in()
     if not user.may(SEEN):
         abort(403)
     path = request.form['path']
     slug = request.form.get('slug', '')
+    if not _may_end(user, path, slug, SEEN):
+        abort(403)
     token = request.form.get('set_at')
     clearing = request.form.get('action') == 'clear'
     typed = request.form.get('note', '').strip()
     duration = request.form.get('duration', '')
-    digest = request.form.get('parts', '')
+    # a line chosen is the act, where a form carries a head's digest beside its
+    # choice of a line (the Notes tab's, ADR-0145 decision 2)
+    digest = '' if slug else request.form.get('parts', '')
     next_raw = request.form.get('next', '')
     if next_raw:
         where = _safe_next(next_raw)
@@ -5126,9 +7533,13 @@ def seen() -> ResponseReturnValue:
         where = url_for('status', branch=path.lstrip('/'))
     refused = partial(_seen_refused, path=path, slug=slug, back=where,
                       clearing=clearing, mine=typed, duration=duration,
-                      token=token or '')
+                      token=token or '', carried=digest)
+    if request.form.get('from') == 'notes':
+        refused = partial(_refused_on_tab, kind=SEEN, path=path, slug=slug,
+                          mine=typed, fields={'duration': duration})
     if clearing:
-        write = status_tree.clear_acknowledgment(path, slug, expected_set_at=token)
+        write = status_tree.clear_acknowledgment(path, slug, expected_set_at=token,
+                                                 by=user.name)
         if write.refused:
             return refused(stored=write.current)
         return redirect(where)
@@ -5147,24 +7558,19 @@ def seen() -> ResponseReturnValue:
             return refused(problem=str(bad), stored=None, expiry_was=was)
     note = typed or (stored.note if stored is not None else "")
     if digest:
-        node = status_tree.snapshot(path)
-        covered = bool(_pins_above(path.lstrip('/'))) if node is not None else False
-        parts = acknowledgeable_parts(node, covered=covered) if node else ()
+        parts = _failing_parts(path)
         if not parts or parts_digest(parts) != digest:
             return refused(problem=(
                 "What fails here changed since this was opened." if parts else
                 "Nothing fails here now that a ringed check could mark."),
                 stored=None, parts=parts)
-        contexts = {part.path: context_of(status_tree.snapshot(part.path), part.slug)
-                    for part in parts} if note else {}
+        contexts = _part_contexts(parts)
         answers = status_tree.set_acknowledgments(
             [(part.path, part.slug) for part in parts], SEEN, note,
             expires_at=expires_at, set_by=user.name)
-        for at, line, pin, _problem in answers:
-            if pin is not None and note:
-                notes_book.pinned(at, line, pin, contexts.get(at, context_of(None)))
+        _pinned_parts(answers, contexts, made=path)
         return redirect(where)
-    context = context_of(status_tree.snapshot(path), slug) if note else None
+    context = context_of(status_tree.snapshot(path), slug)
     write = status_tree.set_acknowledgment(path, slug, SEEN, note,
                                            expires_at=expires_at, set_by=user.name,
                                            expected_set_at=token)
@@ -5173,20 +7579,336 @@ def seen() -> ResponseReturnValue:
     if write.problem:
         return refused(problem=f"{write.problem[:1].upper()}{write.problem[1:]}.",
                        stored=None)
-    if context is not None and write.applied and write.current is not None:
+    if write.applied and write.current is not None:
         notes_book.pinned(path, slug, write.current, context)
     return redirect(where)
+
+
+def _part_contexts(parts: Sequence[Acceptable]) -> dict[tuple[str, str], Context]:
+    """What each part a head's act sets a pin on shows as it is set — its node, or
+    its line — which the part's note keeps (ADR-0047 decision 6), read before the act
+    changes it, by its path and its line."""
+    return {(part.path, part.slug): context_of(status_tree.snapshot(part.path),
+                                               part.slug) for part in parts}
+
+
+def _pinned_parts(answers: Sequence[tuple[str, str, Pin | None, str]],
+                  contexts: Mapping[tuple[str, str], Context], *, made: str) -> None:
+    """Every pin a head's act on the node at ``made`` set enters its part's notes,
+    with words or without, each saying where the act was made (ADR-0145 decisions 4
+    and 5), so that the act is one entry on every tab it touched and on that node's."""
+    for at, line, pin, _problem in answers:
+        if pin is not None:
+            notes_book.pinned(at, line, pin,
+                              contexts.get((at, line)) or context_of(None), at=made)
+
+
+#: The levels a silence's form offers (ADR-0144), by the value its radio sends: its
+#: part counting as ``OK`` above, or at most as ``WARN``.
+SILENCE_LEVELS: Mapping[str, StatusCode] = {"ok": StatusCode.OK,
+                                            "warn": StatusCode.WARN}
+
+
+@app.route('/pins/silenced', methods=['POST'])
+def silenced() -> ResponseReturnValue:
+    """Silence a part, edit a silence, or end one by hand (ADR-0144) — on the route of
+    its own act, which asks the permission of its own name (ADR-0141 decision 4).
+
+    **One part**, a node's own part or one of its lines (``slug``), is a
+    compare-and-set write as a pin's is (ADR-0014): the form carries the token of the
+    acknowledgment it believes it replaces, empty for none, and a refusal shows both
+    texts. A new silence is taken on any part that could fail, whether it fails now or
+    not — a line of a node whose lines are members, or a node's own part where it
+    reads by itself — bound to its deadline and its level and to no failure: one on a
+    part that reads ok changes nothing until the part fails, and then counts at its
+    level until its deadline. It is refused on a part in maintenance, on one its own
+    check reads as in maintenance, and on one a person holds already, which its
+    block's editor changes. Where the token names a *seen*, the seen ends and the
+    silence is set in its place, in one write. The Notes tab sends the node's own part
+    as ``own part`` (:data:`~little_sister.notes_tab.OWN_PART`) where its choice stands
+    beside a head's act, which sends the empty slug. An edit changes its note, its
+    level and its deadline: a blank note keeps the stored one, a *Deadline* that still
+    reads what it was filled with keeps the stored one, and an emptied one takes the
+    default from now. A deadline is at most thirty days away and long enough for the
+    slowest check the silence covers to run again (:func:`_silence_deadline`).
+
+    **An extension** — an edit that moves the deadline later — says what changed: it
+    is refused without the sentence, which enters the node's notes as a note of its own
+    naming the deadline it moved the silence to, beside the silence's own note, which
+    keeps saying what is being done (ADR-0140). Any other edit that says what changed
+    keeps the sentence the same way, naming what the silence holds now: words a
+    person wrote are never dropped (:func:`_changed`).
+
+    **A head's ringed check** names its node and carries ``parts``, the digest of the
+    failing parts at and beneath it that its editor listed, as a *seen*'s does: each is
+    silenced, its own pin sharing the note, the level and the deadline — where the parts
+    failing there now are still the ones listed. Where they are not, nothing is
+    written, and the refusal lists them as they stand.
+
+    A note enters its node's notes as it is set, and follows an edit while the silence
+    stands (ADR-0140). A write comes back where its block stands, as a pin's does, and
+    one the Notes tab's form refused to the tab, as a *seen*'s does."""
+    user = identity.signed_in()
+    if not user.may(SILENCED):
+        abort(403)
+    path = request.form['path']
+    chosen = request.form.get('slug', '')
+    # the node's own part beside a head's act, whose choice sends the empty slug and
+    # the digest: the part alone, which no digest goes with
+    alone = chosen == notes_tab.OWN_PART
+    slug = '' if alone else chosen
+    if not _may_end(user, path, slug, SILENCED):
+        abort(403)
+    token = request.form.get('set_at')
+    clearing = request.form.get('action') == 'clear'
+    typed = request.form.get('note', '').strip()
+    changed = request.form.get('changed', '').strip()
+    deadline_typed = request.form.get('deadline', '')
+    said_level = request.form.get('level', '')
+    digest = '' if slug or alone else request.form.get('parts', '')
+    next_raw = request.form.get('next', '')
+    if next_raw:
+        where = _safe_next(next_raw)
+    elif slug:
+        where = url_for('status', branch=path.lstrip('/'),
+                        reason=slug) + '#pinned-reason'
+    else:
+        where = url_for('status', branch=path.lstrip('/'))
+    was = request.form.get('deadline_was', '').strip()
+    refused = partial(_silenced_refused, path=path, slug=slug, back=where,
+                      clearing=clearing, mine=typed, deadline=deadline_typed,
+                      level=said_level, changed=changed, token=token or '',
+                      deadline_was=was, carried=digest)
+    if request.form.get('from') == 'notes':
+        # the part as it was chosen, so that the form comes back with it
+        refused = partial(_refused_on_tab, kind=SILENCED, path=path, slug=chosen,
+                          mine=typed, fields={'deadline': deadline_typed,
+                                              'level': said_level})
+    if clearing:
+        write = status_tree.clear_acknowledgment(path, slug, expected_set_at=token,
+                                                 by=user.name)
+        if write.refused:
+            return refused(stored=write.current)
+        return redirect(where)
+    level = SILENCE_LEVELS.get(said_level)
+    if level is None:
+        return refused(problem="A silence counts above as ok or at most as a warning: "
+                               "choose one.", stored=None)
+    now = instants.now()
+    stored = status_tree.acknowledgment(path, slug) if token else None
+    # the silence the form was drawn for: one another write replaced since is the
+    # compare-and-set's to refuse, with both texts, and no extension of the form's
+    standing = (stored if stored is not None and stored.kind == SILENCED
+                and stored.expires_at is not None and stored.token == token
+                else None)
+    if bool(token) and bool(was) and deadline_typed.strip() == was:
+        if standing is None:
+            return refused(stored=stored, kept=True)
+        assert standing.expires_at is not None
+        deadline = standing.expires_at
+    else:
+        try:
+            deadline = _silence_deadline(deadline_typed, now=now, path=path)
+        except _BadExpiry as bad:
+            return refused(problem=str(bad), stored=None)
+    note = typed or (stored.note if stored is not None else "")
+    extending = (standing is not None and standing.expires_at is not None
+                 and deadline > standing.expires_at)
+    if extending and not changed:
+        return refused(problem="It moves the deadline later, and an extension says "
+                               "what changed: write it under What changed.",
+                       stored=None)
+    if digest:
+        parts = _failing_parts(path)
+        if not parts or parts_digest(parts) != digest:
+            return refused(problem=(
+                "What fails here changed since this was opened." if parts else
+                "Nothing fails here now that a ringed check could silence."),
+                stored=None, parts=parts)
+        contexts = _part_contexts(parts)
+        answers = status_tree.set_acknowledgments(
+            [(part.path, part.slug) for part in parts], SILENCED, note,
+            expires_at=deadline, set_by=user.name, level=level)
+        _pinned_parts(answers, contexts, made=path)
+        return redirect(where)
+    # what changed, said on an edit of the silence that stands: an extension's is
+    # required, and any other edit's is kept the same way — never dropped
+    keeping = standing is not None and bool(changed)
+    context = context_of(status_tree.snapshot(path), slug)
+    write = status_tree.set_acknowledgment(path, slug, SILENCED, note,
+                                           expires_at=deadline, set_by=user.name,
+                                           expected_set_at=token, level=level)
+    if write.refused:
+        return refused(stored=write.current)
+    if write.problem:
+        return refused(problem=f"{write.problem[:1].upper()}{write.problem[1:]}.",
+                       stored=None)
+    if write.current is not None:
+        if write.applied:
+            notes_book.pinned(path, slug, write.current, context)
+        if keeping:
+            notes_book.add(path, slug, _changed(write.current, extending, changed),
+                           by=user.name, context=context)
+    return redirect(where)
+
+
+@app.route('/pins/done', methods=['POST'])
+def done() -> ResponseReturnValue:
+    """Close an event as done, edit a done, or end one by hand (ADR-0146) — on the
+    route of its own act, which asks the permission of its own name (ADR-0141
+    decision 4).
+
+    **One line** (``slug``) whose failure has an occurrence of its own is a
+    compare-and-set write as a pin's is (ADR-0014): the form carries the token of the
+    acknowledgment it believes it replaces, empty for none, and a refusal shows both
+    texts. A new done is taken only where its line fails now and its failure is an
+    event, and **closes the event that was looked at**: the form carries the
+    occurrence it was drawn on — ``occurrence``, or ``occurrence:<slug>`` beside the
+    Notes tab's choice of lines — and a line that reads another since closes nothing.
+    Where the token names a *seen* or a silence, that one ends and the done is set in
+    its place, in one write, the route asking that kind's permission as well
+    (ADR-0144 decisions 7 and 8). An edit changes its note, a blank one keeping the
+    stored note. A done has no end and no head's act: a node's own failure is no
+    event.
+
+    A note enters its node's notes as it is set, and follows an edit while the done
+    stands (ADR-0140). A write comes back where its block stands, as a pin's does,
+    and one the Notes tab's form refused to the tab (ADR-0145 decision 2)."""
+    user = identity.signed_in()
+    if not user.may(DONE):
+        abort(403)
+    path = request.form['path']
+    slug = request.form.get('slug', '')
+    if not _may_end(user, path, slug, DONE):
+        abort(403)
+    token = request.form.get('set_at')
+    clearing = request.form.get('action') == 'clear'
+    typed = request.form.get('note', '').strip()
+    drawn = (request.form.get(f'occurrence:{slug}')
+             or request.form.get('occurrence') or None)
+    next_raw = request.form.get('next', '')
+    if next_raw:
+        where = _safe_next(next_raw)
+    elif slug:
+        where = url_for('status', branch=path.lstrip('/'),
+                        reason=slug) + '#pinned-reason'
+    else:
+        where = url_for('status', branch=path.lstrip('/'))
+    refused = partial(_done_refused, path=path, slug=slug, back=where,
+                      clearing=clearing, mine=typed, token=token or '',
+                      occurrence=drawn or '')
+    if request.form.get('from') == 'notes':
+        refused = partial(_refused_on_tab, kind=DONE, path=path, slug=slug,
+                          mine=typed, fields={})
+    if clearing:
+        write = status_tree.clear_acknowledgment(path, slug, expected_set_at=token,
+                                                 by=user.name)
+        if write.refused:
+            return refused(stored=write.current)
+        return redirect(where)
+    stored = status_tree.acknowledgment(path, slug) if token else None
+    note = typed or (stored.note if stored is not None else "")
+    context = context_of(status_tree.snapshot(path), slug)
+    write = status_tree.set_acknowledgment(path, slug, DONE, note, expires_at=None,
+                                           set_by=user.name, expected_set_at=token,
+                                           occurrence=drawn)
+    if write.refused:
+        return refused(stored=write.current)
+    if write.problem:
+        return refused(problem=f"{write.problem[:1].upper()}{write.problem[1:]}.",
+                       stored=None)
+    if write.applied and write.current is not None:
+        notes_book.pinned(path, slug, write.current, context)
+    return redirect(where)
+
+
+def _done_refused(*, path: str, slug: str, back: str, clearing: bool, mine: str,
+                  token: str, occurrence: str, stored: Pin | None,
+                  problem: str | None = None) -> ResponseReturnValue:
+    """The page a refused write of a *done* lands on (ADR-0146): nothing was saved,
+    here is why, and here are your own words back — as a *seen*'s refusal is
+    (:func:`_seen_refused`). A problem — the line closed nothing, as it fails no more,
+    names no event, reads another since the form was drawn, or is held in
+    maintenance — offers no form to send again, since what was looked at is not what
+    stands: the words come back to be copied, and the way back leads to the line as
+    it reads now. A compare-and-set that found somebody else's write first shows the
+    stored one beside the words, with a form that saves them over it."""
+    user = identity.signed_in()
+    return render_template(
+        'done_refused.html', username=user.name, firstname=user.firstname,
+        path=path, node_path=join_path(path), back=back, clearing=clearing,
+        stored=stored, slug=slug, problem=problem, mine=mine, token=token,
+        occurrence=occurrence)
+
+
+def _may_end(user: identity.Identity, path: str, slug: str, kind: str) -> bool:
+    """Whether ``user`` may end what a person acknowledged of the part — what the
+    route of ``kind`` clears, or makes its own kind from a block's editor (ADR-0144).
+    Ending an acknowledgment is an act on it, so it asks the permission of its own
+    kind's name as well (ADR-0141 decision 4): the *seen* permission alone ends no
+    silence, nor the silence permission a *seen*, nor either a *done* (ADR-0146).
+    Every permission is an admin's until roles map onto them, so today this answers
+    what the route's own does."""
+    stored = status_tree.acknowledgment(path, slug)
+    return stored is None or stored.kind == kind or user.may(stored.kind)
+
+
+def _changed(silence: Pin, extending: bool, changed: str) -> str:
+    """The note an edit of a silence leaves of its own where it says what changed
+    (ADR-0144), in the deployment's zone: an extension's, which is required, names
+    the deadline it moved the silence to; any other's names what the silence holds
+    now, its deadline and its level. Each ends with what changed, as it was
+    written."""
+    assert silence.expires_at is not None
+    until = local_time(silence.expires_at)
+    if extending:
+        return f"Silence extended until {until}. {changed}"
+    counts = "a warning at most" if silence.level is StatusCode.WARN else "ok"
+    return f"Silence changed: until {until}, counting as {counts}. {changed}"
+
+
+def _silenced_refused(*, path: str, slug: str, back: str, clearing: bool, mine: str,
+                      deadline: str, level: str, changed: str, token: str,
+                      stored: Pin | None, deadline_was: str = "",
+                      problem: str | None = None, kept: bool = False,
+                      parts: Sequence[Acceptable] = (),
+                      carried: str = "") -> ResponseReturnValue:
+    """The page a refused write of a silence lands on (ADR-0144): nothing was saved,
+    here is why, and here are your own words back — the note, the level, the deadline
+    and what changed — as a *seen*'s refusal is (:func:`_seen_refused`). A head's set
+    whose parts changed lists them as they stand, with a form that silences those, its
+    digest refreshed; one refused for its words carries the digest it came with, and
+    lists its parts where they still fail as listed."""
+    user = identity.signed_in()
+    if kept:
+        deadline = deadline_was = (_expiry_input(stored.expires_at)
+                                   if stored is not None
+                                   and stored.kind == SILENCED else "")
+    return render_template(
+        'silenced_refused.html', username=user.name, firstname=user.firstname,
+        path=path, node_path=join_path(path), back=back, clearing=clearing,
+        stored=stored, slug=slug, problem=problem, mine=mine, deadline=deadline,
+        level=level if level in SILENCE_LEVELS else "ok", changed=changed,
+        token=token, deadline_was=deadline_was, kept=kept, parts=parts,
+        digest=parts_digest(parts) if parts else "", carried=carried,
+        listed=_carried_parts(path, carried) if carried and not parts else (),
+        silence_default=_silence_default(),
+        maintenance_default=config.maintenance_default_expiry,
+        maintenance_timezone=config.timezone)
 
 
 def _seen_refused(*, path: str, slug: str, back: str, clearing: bool, mine: str,
                   duration: str, token: str, stored: Pin | None,
                   problem: str | None = None, expiry_was: str = "",
-                  kept: bool = False,
-                  parts: Sequence[Acceptable] = ()) -> ResponseReturnValue:
+                  kept: bool = False, parts: Sequence[Acceptable] = (),
+                  carried: str = "") -> ResponseReturnValue:
     """The page a refused write of a *seen* lands on (ADR-0142): nothing was saved,
     here is why, and here are your own words back — as a pin's refusal is
     (:func:`_maintenance_refused`). A head's set whose parts changed lists them as
-    they stand, with a form that marks those, its digest refreshed."""
+    they stand, with a form that marks those, its digest refreshed; one refused for
+    its words carries the digest it came with (``carried``), so that what is sent
+    again marks the parts its editor listed, and lists them where they still fail
+    as listed (:func:`_carried_parts`)."""
     user = identity.signed_in()
     if kept:
         duration = expiry_was = (_expiry_input(stored.expires_at)
@@ -5196,9 +7918,29 @@ def _seen_refused(*, path: str, slug: str, back: str, clearing: bool, mine: str,
         path=path, node_path=join_path(path), back=back, clearing=clearing,
         stored=stored, slug=slug, problem=problem, mine=mine, duration=duration,
         token=token, expiry_was=expiry_was, kept=kept, parts=parts,
-        digest=parts_digest(parts) if parts else "",
+        digest=parts_digest(parts) if parts else "", carried=carried,
+        listed=_carried_parts(path, carried) if carried and not parts else (),
         maintenance_default=config.maintenance_default_expiry,
         maintenance_timezone=config.timezone)
+
+
+def _failing_parts(path: str) -> tuple[Acceptable, ...]:
+    """What a head's ringed check at ``path`` acts on now (ADR-0142 decision 5): every
+    part failing at and beneath the node that nobody acknowledged and nothing holds
+    in maintenance — a pin above it among what does — or none, where there is no
+    such node."""
+    node = status_tree.snapshot(path)
+    if node is None:
+        return ()
+    return acknowledgeable_parts(node, covered=bool(_pins_above(path.lstrip('/'))))
+
+
+def _carried_parts(path: str, digest: str) -> tuple[Acceptable, ...]:
+    """The parts a refused head's set carried the digest of, where what fails at
+    ``path`` is still those (:func:`_failing_parts`): what its form, sent again,
+    acts on — and none where it is not, which that send refuses with them listed."""
+    parts = _failing_parts(path)
+    return parts if parts and parts_digest(parts) == digest else ()
 
 
 @dataclass(frozen=True)
@@ -5276,12 +8018,18 @@ def _by_rule(whole: StatusSnapshot | None) -> tuple[_ByRule, ...]:
 
 @dataclass(frozen=True)
 class _AcceptedPin:
-    """One acknowledgment as *Handled* lists it under *Accepted* (ADR-0142): the node
-    it stands on and its title, the stored pin, and for a line's its slug, its text
-    and where it stands among its node's lines. ``suspended`` says the part is not
-    reported now — its node is not in the tree, or its lines are no members, a
-    check's error standing in for them — so that the acknowledgment holds nothing
-    until it is, and ends where a reading says it is gone."""
+    """One acknowledgment as *Handled* lists it under its job — *Accepted* for a
+    *seen* (ADR-0142), *Silenced* for a silence (ADR-0144): the node it stands on and
+    its title, the stored pin, and for a line's its slug, its text and where it stands
+    among its node's lines. ``suspended`` says the part is not reported now — its node
+    is not in the tree, its line is not among those its run reports, or its lines are
+    no members, a check's error standing in for them — so that the acknowledgment
+    holds nothing until it is: a *seen* ends where a
+    reading says its part is gone, a silence at its deadline. ``fails`` says the part
+    fails now, which the other kind needs to be offered from its editor (ADR-0144):
+    a silence that held through a recovery takes no *seen*. ``event`` is the line's
+    occurrence where its failure has one of its own and it fails now — what a *done*
+    offered from its editor closes (ADR-0146) — and empty everywhere else."""
     path: str
     title: str
     entry: Pin
@@ -5289,6 +8037,8 @@ class _AcceptedPin:
     line: str = ""
     slot: int = -1
     suspended: bool = False
+    fails: bool = False
+    event: str = ""
 
     @property
     def name(self) -> str:
@@ -5297,31 +8047,51 @@ class _AcceptedPin:
         return self.path.rsplit("/", 1)[-1]
 
 
-def _accepted_groups(whole: StatusSnapshot | None
+def _accepted_groups(whole: StatusSnapshot | None, kinds: Collection[str]
                      ) -> list[tuple[str, list[_AcceptedPin]]]:
-    """Every acknowledgment that stands, by node, for *Handled* (ADR-0142, ADR-0135
-    decision 8): each node's own first and then its lines' in the check's order, and
-    the nodes by the oldest each holds, the longest standing first — read from the
-    tree's tables against ``whole``, so that one whose part is not reported now is
-    listed too, as suspended."""
-    nodes, lines = status_tree.acknowledgments()
-    index: dict[str, StatusSnapshot] = {}
+    """Every acknowledgment of ``kinds`` that stands, by node, for *Handled*
+    (ADR-0142, ADR-0144, ADR-0146, ADR-0135 decision 8) — *Accepted* takes a *done* and
+    a *seen*, the one job: each node's own first and then its lines' — those its run
+    reports in the check's order, then each on a line it does not report now in the
+    order it was set, as suspended — and the nodes by the oldest each holds, the
+    longest standing first. Read from ``whole``, which joins each onto its part once
+    for every surface (``StatusSnapshot.not_reported``, ADR-0080 decision 1) — and
+    one where no node stands at a path beside the nearest node above it that stands
+    (``StatusSnapshot.nodes_not_reported``), listed under its own path, as
+    suspended."""
+    rows: list[_AcceptedPin] = []
     stack = [whole] if whole is not None else []
     while stack:
-        current = stack.pop()
-        index[current.path] = current
-        stack.extend(current.children)
-    rows = [_AcceptedPin(path, index[path].title if path in index else "", pin,
-                         suspended=path not in index)
-            for path, pin in nodes.items()]
-    for (path, slug), pin in lines.items():
-        node = index.get(path)
-        reasons = node.reasons if node is not None and node.members else ()
-        slot = next((at for at, line in enumerate(reasons) if line.slug == slug), -1)
-        rows.append(_AcceptedPin(
-            path, node.title if node is not None else "", pin, slug=slug,
-            line=reasons[slot].text if slot >= 0 else "",
-            slot=slot if slot >= 0 else len(reasons), suspended=slot < 0))
+        node = stack.pop()
+        stack.extend(node.children)
+        own = node.acknowledgment
+        if own is not None and own.kind in kinds:
+            rows.append(_AcceptedPin(node.path, node.title, own,
+                                     fails=node.own_code in _FAILING))
+        for slot, line in enumerate(node.reasons):
+            pin = line.acknowledgment
+            if pin is None or pin.kind not in kinds:
+                continue
+            reads = line.code if line.code is not None else node.reported_code
+            rows.append(_AcceptedPin(
+                node.path, node.title, pin, slug=line.slug, line=line.text,
+                slot=slot, fails=reads in _FAILING,
+                event=line.occurrence if reads in _FAILING else ""))
+        for away, line in enumerate(node.not_reported):
+            pin = line.acknowledgment
+            if pin is not None and pin.kind in kinds:
+                rows.append(_AcceptedPin(node.path, node.title, pin, slug=line.slug,
+                                         slot=len(node.reasons) + away,
+                                         suspended=True))
+        for gone in node.nodes_not_reported:
+            own = gone.acknowledgment
+            if own is not None and own.kind in kinds:
+                rows.append(_AcceptedPin(gone.path, "", own, suspended=True))
+            for slot, line in enumerate(gone.not_reported):
+                pin = line.acknowledgment
+                if pin is not None and pin.kind in kinds:
+                    rows.append(_AcceptedPin(gone.path, "", pin, slug=line.slug,
+                                             slot=slot, suspended=True))
     groups: dict[str, list[_AcceptedPin]] = {}
     for row in sorted(rows, key=lambda row: (row.path, row.slot, row.slug)):
         groups.setdefault(row.path, []).append(row)
@@ -5334,8 +8104,9 @@ def handled() -> ResponseReturnValue:
     """*Handled*, the index of every rule that stands (ADR-0135 decision 8), grouped
     by job, oldest first — *In maintenance*: every pin, node and entry alike
     (ADR-0014, ADR-0036), with what it holds, how long is left, why, and who is
-    behind it; and *Accepted*: every *seen* (ADR-0142), its node's own and its
-    lines', with what it accepted and what ends it. Read from the whole snapshot, so
+    behind it; *Accepted*: every *seen* (ADR-0142), its node's own and its lines',
+    with what it accepted and what ends it; and *Silenced*: every silence (ADR-0144),
+    with its level and its deadline. Read from the whole snapshot, so
     it is depth- and filter-independent. Viewer-visible and bookmarkable; the band's
     pill and its popover's "+N more" link here, and the rail's entry.
 
@@ -5351,25 +8122,38 @@ def handled() -> ResponseReturnValue:
     addressing shape ``?reason=<slug>`` has on a node's own page.
 
     **A pin whose node is not reported is listed too** (ADR-0109 decision 4), under
-    its path and marked as suspended: nothing else shows it, and its block is where
-    an admin edits or clears it.
+    its path and marked as suspended, read from the snapshot, which carries it beside
+    the nearest node above it that stands (``StatusSnapshot.nodes_not_reported``):
+    that node's door and *Notes* tab count and list it, the band's pill counts it,
+    and its block here, as on the page of its path, is where an admin edits or clears
+    it.
 
     **Every configured rule is listed too** (ADR-0137), in a section of its own, *By
     a rule*, the longest standing first: each with what it changes the count of now,
     or *changes nothing now* and what it missed (:func:`_by_rule`). Read-only: a
-    configured rule is changed in the configuration, and its block says where."""
+    configured rule is changed in the configuration, and its block says where.
+
+    **What is planned follows in maintenance's section** (ADR-0150, decision 5 of
+    #35's note): *Planned*, every entry that stands and holds nothing now, the soonest
+    next window first, with its own count — *2 windows on 2 nodes* — each its block,
+    untinted: an entry is listed in one place at a time (:func:`_planned_everywhere`).
+    """
     user = identity.signed_in()
     now = _now()
     whole = status_tree.snapshot("")
-    node_pins, entry_pins, _ = _maintenance_view(whole, now)
-    pins = _maintenance_pins(node_pins, entry_pins, _suspended_pins(whole, now))
+    node_pins, entry_pins = _maintenance_view(whole, now)
+    pins = _maintenance_pins(node_pins, entry_pins)
     return render_template('maintenance.html', username=user.name,
                            firstname=user.firstname, by_rule=_by_rule(whole),
                            pins=pins, groups=_oldest_first(pins),
-                           accepted=_accepted_groups(whole),
+                           planned=_planned_everywhere(whole),
+                           accepted=_accepted_groups(whole, (DONE, SEEN)),
+                           silenced=_accepted_groups(whole, (SILENCED,)),
                            focus=request.args.get('node', ''),
                            is_admin=user.admin,
                            may_seen=user.may(SEEN),
+                           may_silence=user.may(SILENCED),
+                           may_done=user.may(DONE),
                            maintenance_default=config.maintenance_default_expiry,
                            maintenance_timezone=config.timezone)
 
@@ -5394,8 +8178,13 @@ _CAUSE_CHIPS: Mapping[str, str] = {
     CAUSE_PIN_SET: "set",
     CAUSE_PIN_EDITED: "edited",
     CAUSE_PIN_ENDED: "maintenance ended",
+    CAUSE_PIN_OPENED: "window opened",
+    CAUSE_PIN_CLOSED: "window closed",
     CAUSE_LINE_PIN_SET: "line's pin set",
+    CAUSE_LINE_PIN_EDITED: "line's pin edited",
     CAUSE_LINE_PIN_ENDED: "line's maintenance ended",
+    CAUSE_LINE_PIN_OPENED: "line's window opened",
+    CAUSE_LINE_PIN_CLOSED: "line's window closed",
     CAUSE_REMOVED: "removed",
     CAUSE_REACHED: "reached",
     CAUSE_SEEN_SET: "seen",
@@ -5404,18 +8193,21 @@ _CAUSE_CHIPS: Mapping[str, str] = {
     CAUSE_LINE_SEEN_SET: "line seen",
     CAUSE_LINE_SEEN_EDITED: "line's seen changed",
     CAUSE_LINE_SEEN_ENDED: "line's seen ended",
+    CAUSE_SILENCED_SET: "silenced",
+    CAUSE_SILENCED_EDITED: "silence changed",
+    CAUSE_SILENCED_ENDED: "silence ended",
+    CAUSE_LINE_SILENCED_SET: "line silenced",
+    CAUSE_LINE_SILENCED_EDITED: "line's silence changed",
+    CAUSE_LINE_SILENCED_ENDED: "line's silence ended",
+    CAUSE_LINE_DONE_SET: "line done",
+    CAUSE_LINE_DONE_EDITED: "line's done changed",
+    CAUSE_LINE_DONE_ENDED: "line's done ended",
 }
 
-#: Why an acknowledgment ended (ADR-0142), as its row's chip says it after the act:
-#: *seen ended · worse*.
-_ENDED_WORDS: Mapping[str, str] = {
-    ENDED_HAND: "by hand",
-    ENDED_CLOCK: "at its end",
-    ENDED_RECOVERY: "recovered",
-    ENDED_WORSENING: "worse",
-    ENDED_OCCURRENCE: "a new occurrence",
-    ENDED_GONE: "no longer reported",
-}
+#: Why a pin ended, as its row's chip says it after the act: *seen ended · worse*,
+#: *maintenance ended · at its end* — and an acknowledgment a person's edit made the
+#: other kind, *seen ended · made a silence* (ADR-0144, ADR-0145 decision 9).
+_ENDED_WORDS = ENDED_WORDS
 
 
 def _cause_chip(event: Event) -> str:
@@ -5427,8 +8219,43 @@ def _cause_chip(event: Event) -> str:
     return f"{chip} · {why}" if chip and why else chip
 
 
+#: The rows a node's own pin or window writes (ADR-0107 decision 3, ADR-0150): its set,
+#: its edit and its end, and a window of it opened or closed.
+_NODE_PIN_CAUSES = frozenset({CAUSE_PIN_SET, CAUSE_PIN_EDITED, CAUSE_PIN_ENDED,
+                              CAUSE_PIN_OPENED, CAUSE_PIN_CLOSED})
+
+#: What a row says in place of its status where a node's pin or window wrote it on a
+#: node that reports nothing of its own (:func:`_status_word`).
+NOTHING_OF_ITS_OWN = "nothing of its own"
+
+#: What a status switch of the Events page says beside its word where its word is
+#: not all it selects (:func:`_status_word`): the rows that say *nothing of its own*
+#: are *undefined*'s, so that the two words never read as two statuses.
+_STATUS_TITLES: Mapping[str, str] = {
+    "undefined": f"Also the rows that say {NOTHING_OF_ITS_OWN}: a pin's or a "
+                 f"window's, on a node that reports nothing"}
+
+
+def _status_word(event: Event) -> str:
+    """The word a row of the Events page says its status in (ADR-0101): the status it
+    moved to — and *nothing of its own* where a node's own pin or window wrote it and
+    its node neither shows nor reports anything of its own, both ``UNDEFINED``, the
+    Copy document's own test for a node that reports nothing of its own (ADR-0150): a
+    host's window closing, a pin's end on a branch. Read off the row, so that an old
+    row keeps its word as the tree changes; the row's tint and the filter read its
+    code, and its node's History says what it showed. A gap where the instance was not
+    running, which no pin wrote, keeps *undefined*, and so does a pin's end on a node
+    not read yet since a start, whose check reported something the log kept."""
+    if (event.cause in _NODE_PIN_CAUSES and event.new is StatusCode.UNDEFINED
+            and event.reported is StatusCode.UNDEFINED):
+        return NOTHING_OF_ITS_OWN
+    return event.new.name.lower()
+
+
 app.jinja_env.globals["cause_chip"] = _cause_chip
+app.jinja_env.globals["status_word"] = _status_word
 app.jinja_env.globals["ended_words"] = _ENDED_WORDS
+app.jinja_env.globals["ended_word"] = notes_tab.ended_word
 
 
 def _counted(count: int) -> str:
@@ -5525,6 +8352,7 @@ def events() -> ResponseReturnValue:
                            empty=shown.empty, bar=shown.bar,
                            anything_set=shown.anything_set, wanted=wanted,
                            status_words=STATUS_WORDS, held_words=HELD_WORDS,
+                           status_titles=_STATUS_TITLES,
                            cause_words=CAUSE_WORDS, cause_chips=_CAUSE_CHIPS,
                            window_args=dict(window.written),
                            tag_options=[(offered, status_tree.tag_vocabulary.line(
@@ -5977,8 +8805,8 @@ def _node_markdown(branch: str, node: StatusSnapshot, style: TimeStyle) -> str:
     bounds it. It names the node's own page as where it is from, and what it lists
     beneath a branch is dated by the tree's periods (ADR-0115 decisions 1 and 2); it
     carries the node's details as its *About* card shows them (ADR-0133 decision
-    6), and its newest note whole, with how many more its Notes view lists
-    (ADR-0140)."""
+    6), and its newest note with words whole, with how many entries more its Notes
+    tab lists (ADR-0140, ADR-0145 decision 8)."""
     origin = _copy_origin(branch)
     since = _since_of(branch, node)
     # the node's About card's table, its details given down among them (ADR-0133
@@ -5987,10 +8815,7 @@ def _node_markdown(branch: str, node: StatusSnapshot, style: TimeStyle) -> str:
     # and the tags it carries, each with what it means (ADR-0139 decision 4)
     vocabulary = status_tree.tag_vocabulary
     tags = tuple((tag, vocabulary.line(tag)) for tag in node.tags)
-    written = notes_book.of(node.path)
-    notes = (NotesSaid(written[0], len(written) - 1,
-                       url_for('notes', path=branch, _external=True))
-             if written else None)
+    notes = _notes_said(branch, node)
     if since is None:
         return format_node_markdown(node, style, origin=origin, periods=_period_of,
                                     details=details, tags=tags, notes=notes)
@@ -5998,6 +8823,37 @@ def _node_markdown(branch: str, node: StatusSnapshot, style: TimeStyle) -> str:
                                 began=since.began, origin=origin,
                                 periods=_period_of, details=details, tags=tags,
                                 notes=notes)
+
+
+def _notes_said(branch: str, node: StatusSnapshot) -> NotesSaid | None:
+    """What a node's Copy document says of its notes (ADR-0145 decision 8): the newest
+    entry with words — a record without them adds only who handled the part and when,
+    which the document's own lines say while its pin stands and History once it has
+    ended — whole, its pin said as the Notes tab's entry says it, and how many entries
+    more the tab lists. ``None`` where no entry has words."""
+    entries = notes_book.entries(node.path)
+    newest = next((entry for entry in entries if entry.text), None)
+    if newest is None:
+        return None
+    pin = None
+    if newest.pin:
+        (said,) = notes_tab.shown(
+            (newest,), here=node.path, line_now=lambda _at, _slug: "",
+            stands=_pin_stands, editable=lambda _note: False,
+            act_size=lambda pin: len(notes_book.act(pin)))
+        alone = said.alone is not None
+        tally = said.first.tally
+        pin = PinSaid(kind=said.kind, status=said.status if alone else None,
+                      level=said.level if alone else None, parts=said.in_all,
+                      here=len(said.parts), made_at=said.made_at,
+                      standing=said.standing, ended_at=said.ended_at,
+                      ended=said.ended, ended_by=said.ended_by,
+                      planned=said.planned,
+                      ran=(notes_tab.ran_said(said.planned, tally,
+                                              standing=said.standing)
+                           if said.planned and tally is not None else ""))
+    return NotesSaid(newest.first, len(entries) - 1,
+                     url_for('notes', path=branch, _external=True), pin=pin)
 
 
 @dataclass(frozen=True)
@@ -6031,24 +8887,42 @@ def _began(period: StatusPeriod) -> str:
 
     A period of maintenance says nothing more, however it began. One that follows
     maintenance began where that ended — the node's pin cleared or expired, its
-    lines' pins where every line was pinned, or its check's own report. And one a
-    line's pin began, set or ended, says which: a pinned line turns a node green,
+    window closed (ADR-0150), its lines' pins where every line was pinned, or its
+    check's own report. And one a line's pin began, set or ended, its window opened
+    or closed, says which: a pinned line turns a node green,
     and that is no recovery — nor is a line a person has seen, set or ended
-    (ADR-0142). A period stated by a bound says nothing of how it began: the tree
-    did not see it begin, and such a period carries neither what the node showed
-    before nor a cause."""
+    (ADR-0142), nor one a person silenced, set, changed or ended (ADR-0144), nor one
+    a person marked done, set or ended (ADR-0146). A period stated by a bound says
+    nothing of how it began: the tree did not see it begin, and such a period carries
+    neither what the node showed before nor a cause."""
     if period.code is StatusCode.MAINTENANCE:
         return ""
+    if period.cause == CAUSE_PIN_CLOSED:
+        return "when its window closed"
     if period.previous is StatusCode.MAINTENANCE:
         return "when its maintenance ended"
     if period.cause == CAUSE_LINE_PIN_SET:
         return "when a line's pin was set"
     if period.cause == CAUSE_LINE_PIN_ENDED:
         return "when a line's maintenance ended"
+    if period.cause == CAUSE_LINE_PIN_OPENED:
+        return "when a line's window opened"
+    if period.cause == CAUSE_LINE_PIN_CLOSED:
+        return "when a line's window closed"
     if period.cause == CAUSE_LINE_SEEN_SET:
         return "when a line was marked seen"
     if period.cause == CAUSE_LINE_SEEN_ENDED:
         return "when a line was no longer seen"
+    if period.cause == CAUSE_LINE_SILENCED_SET:
+        return "when a line was silenced"
+    if period.cause == CAUSE_LINE_SILENCED_EDITED:
+        return "when a line's silence changed"
+    if period.cause == CAUSE_LINE_SILENCED_ENDED:
+        return "when a line was no longer silenced"
+    if period.cause == CAUSE_LINE_DONE_SET:
+        return "when a line was marked done"
+    if period.cause == CAUSE_LINE_DONE_ENDED:
+        return "when a line's done ended"
     return ""
 
 
@@ -6226,13 +9100,12 @@ class _Why:
     @property
     def by_job(self) -> tuple[tuple[str, tuple[HandledRule, ...]], ...]:
         """What is handled beneath, by job, as the card lists it under each job's
-        mark: in maintenance, then by a rule (ADR-0137) — each job where it holds
-        something, its rows in the tree's order."""
+        mark: in maintenance, accepted (ADR-0142), then by a rule (ADR-0137) — each
+        job where it holds something, its rows in the tree's order."""
         jobs: dict[str, list[HandledRule]] = {}
         for row in self.handled:
             jobs.setdefault(row.job, []).append(row)
-        return tuple((job, tuple(jobs[job])) for job in ("maintenance", "aggregation")
-                     if job in jobs)
+        return tuple((job, tuple(jobs[job])) for job in HANDLED_JOBS if job in jobs)
 
 
 def _failing(code: StatusCode | None) -> StatusCode | None:

@@ -1,7 +1,7 @@
 # ADR-0142 — A failure marked seen counts as OK above until it changes
 
 - **Status:** Accepted
-- **Date:** 2026-10-25
+- **Date:** 2026-11-01 (accepted 2026-10-25)
 - **Related:**
   [ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
   (the pin, of which *seen* is a kind, its file, its permission and the envelope's
@@ -24,7 +24,16 @@
   configured rule, which counts after it),
   [ADR-0140](0140-a-nodes-notes-stand-on-a-tab-of-their-own.md) (its note, which enters
   the notes), [ADR-0077](0077-authority-follows-the-lease.md) (a takeover, which adopts
-  it)
+  it), [ADR-0143](0143-a-handled-part-carries-its-jobs-mark-and-a-rail-in-the-color-it-counts-as.md)
+  (how a handled part looks — decisions 5 and 6 amended),
+  [ADR-0144](0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md)
+  (*silenced*, which shares ✓'s editor — decisions 2, 4 and 5 amended),
+  [ADR-0145](0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)
+  (*seen* offered on the *Notes* tab —
+  amended),
+  [ADR-0146](0146-an-event-marked-done-shows-ok-until-its-line-reads-anything-else.md)
+  (*done*, which a seen's pencil makes it — amended),
+  [ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md) (the door, ◇, which takes the ringed check's place as the control — decision 5 amended)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -45,16 +54,15 @@ maintenance — each a pin with a kind
 by itself at a recovery, at a worsening, at an optional time and when what it is on is
 no longer reported, and holds through an improvement and a restart. What tells one
 occurrence from the next is the library's failing stretch, the identity a reading
-carries, or a field the type names. ✓ is set only where a failure is, and a branch's is
-expanded as it is set — one acknowledgment per failing part, sharing a note, each ending
-by itself — so that a failure that arrives later is new and alarms. Every set, edit and
-end is a row of its node, an end saying why. At the round's design pass, on 2026-10-25,
-he settled that ✓ stands beside ‖ as a control of its own.
+carries, or a field the type names. A seen is set only where a failure is, and a
+branch's is expanded as it is set — one acknowledgment per failing part, sharing a note,
+each ending by itself — so that a failure that arrives later is new and alarms. Every
+set, edit and end is a row of its node, an end saying why.
 
 This record is *seen*, end to end; *silenced* and *done* come as kinds of the same pin
-in records of their own. Whether a branch's ✓ came in the first build was left to the
-split; it comes here, because most failures stand on lines — without it ✓ would stand
-only on the few nodes that fail for themselves.
+in records of their own. Whether a branch's seen came in the first build was left to the
+split; it comes here, because most failures stand on lines — without it a head could
+mark seen only a node that fails for itself.
 
 ## Decision
 
@@ -77,13 +85,14 @@ only on the few nodes that fail for themselves.
    children counted as ever: the node's `contribution` says `seen`, its `rule` the seen.
    A seen counts over damping's held status, and never over maintenance, a shield or a
    node not yet reported; a configured rule at the node's top counts after it, from what
-   it passes. Staleness is not accepted: a node marked seen whose reading goes stale
-   counts as a warning above, as staleness escalates under every rule. It hides no
-   reading, so History counts the true color its node showed, and a reading's row it
-   kept from climbing names it, as damping's rows name theirs. It spends no failure
-   budget unless its reading went stale, the healthy fold folds no node it stands on or
-   beneath, and a chip counts its part by its true color, ◇ counting it besides as
-   *2 seen*.
+   it passes, and one that counts how many of a node's children fail counts a seen child
+   toward that count as it reads, the child itself still counting as OK. Staleness is
+   not accepted: a node marked seen whose reading goes stale counts as a warning above,
+   as staleness escalates under every rule. It hides no reading, so History counts the
+   true color its node showed, and a reading's row it kept from climbing names it, as
+   damping's rows name theirs. It spends no failure budget unless its reading went
+   stale, the healthy fold folds no node it stands on or beneath, and a chip counts its
+   part by its true color, ◇ counting it besides as *2 seen*.
 
 3. **It is bound to the failure it accepted: the status it was set at and the
    occurrence.** A line's occurrence is what tells its failure from the next: the record
@@ -96,7 +105,7 @@ only on the few nodes that fail for themselves.
    node's own failure is bound to its failing stretch.
 
 4. **It ends by itself as what it accepted changes, and every end says why.** It holds
-   through an improvement and through a restart. It ends at a **recovery**, its part
+   through an improvement and through every restart. It ends at a **recovery**, its part
    reading OK or its check saying it is in maintenance; at a **worsening**, a failure
    worse than the one it was set at; at a **new occurrence** of a line's failure; when
    its part is **no longer reported** — a line gone from a reading of member lines, a
@@ -105,35 +114,50 @@ only on the few nodes that fail for themselves.
    (ADR-0014 decisions 13 and 14); and **by hand**. A reading whose lines are no members
    — a check's error, prose — says nothing of its lines and leaves their seens
    suspended, as it leaves their pins (ADR-0036 decision 6). One whose end passed while
-   the instance was down ends at that time.
+   the instance was down ends at that time. Where a line's next run passes, a seen on it
+   ends *recovered*, where a done ends at *a new occurrence*
+   ([ADR-0146](0146-an-event-marked-done-shows-ok-until-its-line-reads-anything-else.md)).
 
-5. **✓ stands where something fails now, and a head's marks each failure at and beneath
-   it.** The ringed check is offered on a part that fails now and nowhere else: not on a
-   green part, nor one in maintenance — its own, a pin above, its check's word — nor one
-   failing only because its reading went stale, nor one marked seen already. A line's
-   stands in its rail just before its ‖, which keeps the line's end (ADR-0104 decision
-   3); a node's after ‖ among its head's icons, the last of them — so that ‖ never moves
-   as its part starts failing. On a head it marks every part that fails at and beneath
-   the node as it stands — each failing line of a node whose lines are members, and each
-   node failing for itself that has none — one seen each, sharing the note and the end,
-   each bound to its own failure and ending by itself. Its editor carries the digest of
-   the parts it named: a set that finds others failing there writes nothing and lists
-   them as they stand, to be marked from there. On the wall ✓ is a link to the node's
-   page carrying that digest and how many, which the script turns into the page's one
-   editor cloned into the box, as ‖'s is (ADR-0104 decision 3); on a node's page the
-   head keeps an editor of its own that lists the parts, which ✓ opens and which stands
-   without script.
+5. ***Seen* is offered where something fails now, and a head's act marks each failure
+   at and beneath it.** A new seen is set on the node's *Notes* tab, in the drawer the
+   door, ◇, opens over the wall
+   ([ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)
+   decision 1), *Seen* a kind of the tab's form
+   ([ADR-0145](0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)
+   decision 2). It is offered on a part that fails now and nowhere else: not on a green
+   part, nor one in maintenance — its own, a pin above, its check's word — nor one
+   failing only because its reading went stale, nor one marked seen already. Its *On*
+   offers a failing line, or the head's act, which marks every part that fails at and
+   beneath the node as it stands — each failing line of a node whose lines are members,
+   and each node failing for itself that has none — one seen each, sharing the note and
+   the end, each bound to its own failure and ending by itself. The form lists those
+   parts and carries their digest: a set that finds others failing there writes nothing
+   and lists them as they stand, to be marked from there, and a set refused for its
+   words carries the digest back, so that what is sent again marks what was shown.
 
 6. **Its block says who accepted what, and what ends it.** The block is ADR-0104's, in
    its kind's words: *This node is marked seen by ada at* {error} *· until it changes*,
    or *This line …*, with *or* its end *· 2 d left* where it was given one, and on the
    wall *Seen by ada at …*; its record *Marked seen by ada* and when, its note, *Edit*
-   and *Clear*. A line marked seen carries the ringed check before its words. The
-   editor's first sentence says what it marks — *Mark seen this line.*, *this node's own
-   failure*, *the 3 failures here, each its own* — and then what the mark does.
-   *Handled* lists them under *Accepted* — *2 seen on 2 nodes, the longest standing
-   first* — each with the failure it accepted; the Copy document writes *☑️ Seen — by
-   ada at error ⛔, until it changes*, and its list of what is handled *☑️ Accepted*.
+   and *Clear*. A standing seen is changed in its block's editor — on a node's page, on
+   *Handled*, and from the wall in the drawer, opened at it — which offers the other
+   kinds its part takes: *Silence*, and *Done* where its part takes one, a line whose
+   failure has an occurrence of its own and fails now. Saving one ends the seen, *made
+   a silence* or *made done*, as the other is set in its place, in one write
+   ([ADR-0144](0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md)
+   decision 7,
+   [ADR-0146](0146-an-event-marked-done-shows-ok-until-its-line-reads-anything-else.md)
+   decision 3), and a done's editor makes it seen. Its mark is the ringed check
+   ([ADR-0143](0143-a-handled-part-carries-its-jobs-mark-and-a-rail-in-the-color-it-counts-as.md)
+   decisions 2, 3, 4 and 7). A line marked seen carries it at its top right — on a
+   node's page in its line's seat at its end, for the reader who has one — in OK's
+   green, beside a green rail down its right edge. A node marked seen carries it beside
+   its head's state, on its own tint, and its box the rail where the node counts as OK
+   — none where a failure beneath it still climbs. Wherever it stands the mark opens the
+   drawer at the seen (ADR-0147 decision 7). *Handled* lists them under *Accepted* —
+   *2 seen on 2 nodes, the longest standing first* — each with the failure it accepted;
+   the Copy document writes *☑️ Seen — by ada at error ⛔, until it changes*, and its
+   list of what is handled *☑️ Accepted*.
 
 7. **Every set, edit and end is a row of its node, and an end's row says why.** The
    causes are `seen-set`, `seen-edited` and `seen-ended`, and for a line
@@ -147,46 +171,46 @@ only on the few nodes that fail for themselves.
    says *marked seen*, *a seen changed*, *no longer seen* and their lines' forms, and
    the Time card *when a line was marked seen*. The Events page's *pins* switch takes
    them, a seen being a pin. A seen's note enters its node's notes as it is set
-   (ADR-0140).
+   (ADR-0140), and records the status it was set at, and when, why and by whom it ended
+   ([ADR-0145](0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)
+   decision 4).
 
 8. **The envelope lists it.** A seen is an item of its part's `handled` (ADR-0141
    decision 3): kind `seen`, source `person`, `counts_as`
    `{"WARN": "OK", "ERROR": "OK"}`, `expires_at` null where it has no end, and besides
    `status`, the status it was set at, and `occurrence`, null where it is bound to the
    failing stretch. A node's `contribution` and an entry's say `seen`, with the OK
-   counted and the seen's id as `rule`. It is part of 3.0.0, which has not shipped, so
-   nothing moves its version.
+   counted and the seen's id as `rule`. It is part of 3.0.0, so nothing moves its
+   version.
 
 ## Consequences
 
 - **ADR-0135** draws its second job's mark, the ringed check; **ADR-0104**'s block
-  states a second kind, its control standing after ‖; **ADR-0107** has six causes more
-  and a row's `ended`; **ADR-0082**'s line carries its occurrence; **ADR-0080**'s
-  `handled` has a second kind of pin. Each says so.
-- An admin's wall carries ✓ on every head where something fails: some 320 bytes and
-  three elements a head on the recorded trees, whose paths are long — 1 % of an admin's
-  fragment on the recorded wall, 14 % in a blackout — and on a phone a failing card's
-  name has one square less beside it (`tests/test_wall_cost.py` says each).
-- `little-sister-aws` names `occurrence="error.at"` on its function lines in a release
-  of its own; until then their seens end at their next run. GitHub's run lines are told
-  apart by their readings' identity, which they carry already.
+  states a second kind; **ADR-0107** has six causes more and a row's `ended`;
+  **ADR-0082**'s line carries its occurrence; **ADR-0080**'s `handled` has a second
+  kind of pin. Each says so.
+- The wall carries no control of a seen's own: a seen is set through the door every
+  head carries for every reader, whose cost `tests/test_wall_cost.py` says
+  ([ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)).
+- `little-sister-aws` writes its function line from the function's own reading, which
+  carries no identity, so a seen there is bound to its failing stretch — holding through
+  a new error inside it and ending at a recovery or a worsening. The package names
+  `occurrence="error.at"` in a release of its own, and a seen there then ends when a
+  newer error takes the line. GitHub's run lines are told apart by their readings'
+  identity, which they carry already.
 - A branch whose failures are all seen reads OK, and the macOS client, which alarms off
   what its polled node shows, is quiet about it; a ✓ it does not draw is what ◇ and
   *Handled* say on the page.
-- A head's ✓ on a wide outage marks many parts at once, each its own: they end one by
-  one as their failures change, and *Handled* lists every one.
+- The head's act on a wide outage marks many parts at once, each its own: they end one
+  by one as their failures change, and *Handled* lists every one.
 
 ## Alternatives considered
 
-- **A head's ✓ in a later build**, as the split had left it: ✓ would have stood on the
-  few nodes that fail for themselves, most failures being lines.
+- **The head's act in a later build**, as the split had left it: a head could have
+  marked seen only a node that fails for itself, most failures being lines.
 - **One seen on a node whose lines fail, covering them**: one acknowledgment for several
   failures, ending only when every one changed, or at the first — the walk-through took
   each part its own.
-- **Marking what still fails where the parts changed** since the editor listed them:
+- **Marking what still fails where the parts changed** since the form listed them:
   something nobody was shown would be accepted, or something they were shown left out; a
   refusal that lists the parts as they stand costs one click more.
-- **✓ before ‖**: ‖ would move each time its node started or stopped failing.
-- **The parts listed in the wall's editor**: a list per failing head in every fragment
-  the wall refreshes, where a digest and a count are a few bytes; the node's page lists
-  them.

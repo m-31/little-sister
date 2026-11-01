@@ -44,7 +44,7 @@ os.environ.setdefault(
                      str(_REPO_ROOT / "config"))))
 os.environ.setdefault("SECRET_KEY", "ui-harness")
 
-from flask import render_template, session  # noqa: E402
+from flask import g, render_template, session  # noqa: E402
 
 from little_sister import app as app_module  # noqa: E402
 from little_sister.app import (  # noqa: E402
@@ -68,6 +68,7 @@ from little_sister.copy_status import format_tree_markdown  # noqa: E402
 from little_sister.first_look import FirstLooks  # noqa: E402
 from little_sister.nodes import NodeMeta  # noqa: E402
 from little_sister.render import render_markdown  # noqa: E402
+from little_sister.tree import door_counts  # noqa: E402
 from tests.ui_fixtures import FIXTURES, FIXTURES_BY_NAME, Fixture  # noqa: E402
 
 _DEFAULT_OUT = _REPO_ROOT / "var" / "ui-harness"
@@ -96,8 +97,7 @@ def render_page(fixture: Fixture) -> str:
     # Mirror the view: lift the engine heartbeat into the status strip (ADR-0056) so
     # the harness renders the strip exactly as a live request does.
     node, heartbeat = _split_heartbeat(node)
-    node_pins, entry_pins, maintenance_ancestors = _maintenance_view(
-        node, datetime.now(UTC))
+    node_pins, entry_pins = _maintenance_view(node, datetime.now(UTC))
     maintenance_rows = _maintenance_rows(node_pins, entry_pins)
     path = f"/status/{fixture.branch}" if fixture.branch else "/status"
     # The first look as the route draws it (ADR-0128), from the fixture's own
@@ -122,6 +122,9 @@ def render_page(fixture: Fixture) -> str:
             session["username"] = "harness"
             session["firstname"] = "Harness"
             session["admin"] = True
+            # what each head's door says, from the unfiltered snapshot, as the
+            # route counts it (ADR-0147 decision 2)
+            g.doors = door_counts(node)
             template = "check.html" if fixture.detail else "status.html"
             return render_template(
                 template,
@@ -139,6 +142,9 @@ def render_page(fixture: Fixture) -> str:
                 priced=_priced(node, drawn, _leaves_map(node)),
                 hide_ok=False,
                 hide_idle=False,
+                # the wall's blocks drawn, as *◇ details* draws them on (ADR-0147
+                # decision 6), so that the sheet shows where each stands
+                handled_details=True,
                 chip_counts=_chip_counts_map(node),
                 chip_leaves=_leaves_map(node),
                 rendered_s=_RENDERED_S,
@@ -155,7 +161,6 @@ def render_page(fixture: Fixture) -> str:
                 reason_cap=reason_cap,
                 maintenance_cap=app_module.config.maintenance_cap,
                 maintenance_rows=maintenance_rows,
-                maintenance_ancestors=maintenance_ancestors,
                 # Bounds the current status period in the node-facts block's Time
                 # card (ADR-0044) — the branch page's now as well as the leaf
                 # page's. A fixture is a hand-built snapshot with no transition log

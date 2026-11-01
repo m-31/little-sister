@@ -20,7 +20,11 @@ from little_sister.checks.base import (
     config_markdown,
     register,
 )
-from little_sister.checks.ssh.base import SshCheckBase, parse_output_config
+from little_sister.checks.ssh.base import (
+    OUTPUT_KEYS,
+    SshCheckBase,
+    parse_output_config,
+)
 
 
 @register("ssh-command")
@@ -29,7 +33,7 @@ class RemoteCommandCheck(SshCheckBase):
 
     def __init__(self, *, command: str, capture: str, max_chars: int,
                  keep: str, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+        super().__init__(config_keys=("command", *OUTPUT_KEYS), **kwargs)
         self.command = command
         self.capture = capture
         self.max_chars = max_chars

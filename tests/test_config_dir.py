@@ -315,7 +315,7 @@ class LayerTests(TestCase):
             self.assertEqual(winner, Path(d1) / "users.yaml")
             self.assertTrue(any(str(Path(d2) / "users.yaml") in line
                                 for line in logs.output))
-            # and the node says so, for the life of the process (backlog #70)
+            # and the node says so, for the life of the process
             noted = [line for line in self_report.startup.lines()
                      if line.slug == slug("aspect", "users", "roots")]
             self.assertEqual(len(noted), 1)

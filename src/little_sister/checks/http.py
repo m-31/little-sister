@@ -55,6 +55,9 @@ GRADINGS: dict[str, object] = {
     },
 }
 
+#: The keys this type's file takes beside every check's and its gradings' (ADR-0151).
+CONFIG_KEYS = ("url", "follow_redirects")
+
 
 def _flag(value: object, field: str) -> bool:
     """A configuration boolean that must actually be one.
@@ -85,7 +88,7 @@ class HttpCheck(Check):
         # about — not the node's path, which is the deployment's label for where
         # the node hangs and may be renamed without the endpoint moving.
         super().__init__(subject=url, measure_defaults=MEASURES, gradings=GRADINGS,
-                         **kwargs)
+                         config_keys=CONFIG_KEYS, **kwargs)
         self.url = url
         self.follow_redirects = follow_redirects
 
@@ -155,11 +158,11 @@ class HttpCheck(Check):
             # help with that either. Closing it means owning the header parse or
             # running the request on a thread that is abandoned at a deadline.
             #
-            # **The timer wraps the call and nothing else** (backlog #76). What is
-            # measured is the subject — the time until this endpoint answered — and
-            # not our run, which the engine already times as `run.wall_seconds`
-            # (ADR-0044). Keeping the two apart is the whole distinction: one says
-            # how the world is, the other how we are.
+            # **The timer wraps the call and nothing else** (ADR-0085 decision 3).
+            # What is measured is the subject — the time until this endpoint
+            # answered — and not our run, which the engine already times as
+            # `run.wall_seconds` (ADR-0044). Keeping the two apart is the whole
+            # distinction: one says how the world is, the other how we are.
             started = perf_counter()
             status = fetch(self.url, timeout=self.timeout_seconds,
                            follow_redirects=self.follow_redirects,

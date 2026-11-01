@@ -227,10 +227,11 @@ Everything a deployment authors lives in one place — **`config/`**, whose entr
 selects it and is a **path-list**: `base:sites/alpha` composes a shared base with a
 site's own additions, and each aspect combines its layers in the way that suits it —
 checks union, settings merge per key, the user list is taken whole from the first root
-that declares it. Startup is strict about the tree and tolerant about its contents: no
-configuration directory, a named root that does not exist, or no `checks/` anywhere and
-the process **refuses to start**, naming the path it looked at; a `config/checks/` that
-exists but is still empty runs, warns, and shows **WARN** on the heartbeat.
+that declares it. Startup is strict about the tree: no configuration directory, a named
+root that does not exist, or no `checks/` anywhere and the process **refuses to start**,
+naming the path it looked at, as it does for a key a check's file writes that nothing
+takes; a `config/checks/` that exists but is still empty runs, warns, and shows **WARN**
+on the heartbeat.
 
 `.env` stays outside it — that is secrets, not authored configuration — and so does
 `var/`, which is what the process writes rather than what you give it.
@@ -290,7 +291,10 @@ chip and the wall keeps its size — keep `open`, on a kiosk too), how the wall 
 draws what no check's file, check type or
 `nodes.yaml` entry speaks for (`chips` and `fold_ok`, unset by default: every node open,
 its healthy shown, but a level that, opened, would draw more than thirty boxes as
-chips), the
+chips), whether the wall draws the blocks of what handles a part until a browser says
+otherwise with the band's *◇ details* (`handled_details`, `false` by default: a handled
+part says its color and its mark, its blocks standing on its node's page and in the
+drawer ◇ opens; the kiosk follows it), the
 failure-retry budget (`retry_interval`, `retry_attempts`), how often
 the kept state files are written (`state_interval`), how many consecutive worse
 readings a node needs before the level above counts it (`escalate_after`), how long
@@ -385,6 +389,37 @@ running still counts at least a warning, the instance's own branch is out of eve
 rule's reach, and a rule that cannot apply is named on `/little-sister` at the start and
 applies nothing. The shipped copy is an example with every rule commented out, each key
 explained.
+
+#### Holidays (`config/holidays.yaml`)
+
+The days nobody works, as named lists — a region's public holidays, a company's own days
+off — each meaning that to whatever reads it
+([ADR-0149](docs/adr/0149-a-deployments-holidays-are-named-lists-of-the-days-nobody-works.md)).
+Maintenance that leaves a list's days out reads them, *Not on* on its form.
+A list is keyed by a name the deployment chooses, an ISO 3166-2 code by convention for a
+region's public holidays, which its reader keeps — a list renamed is one whatever named
+it names no more — and writes its `name`, which reads after *not on*, the years it is
+`complete` for, stated rather than inferred, and its `dates`, each day with its name;
+`default` names the list an editor offers first:
+
+```yaml
+lists:
+  DE-BY:
+    name: holidays in Bavaria
+    complete: [2026, 2027]
+    dates:
+      2026-11-01: All Saints' Day
+      2026-12-25: Christmas Day
+default: DE-BY
+```
+
+Add the next year's days, and the year, once a year: a reader that needs a year the list
+does not state has it missing, and fails toward alarming. Every root's file is read, a
+list named in two of them the later root's, whole. Any mistake in a list — a day written
+twice, a day that is no date, no year stated complete — leaves that list unreadable
+whole, and one outside the lists the file and every list in it; each is named on
+`/little-sister` at the start, and nothing stops the monitor. The shipped copy is an
+example with every line commented out, each key explained.
 
 ### Installation
 

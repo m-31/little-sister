@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -42,6 +42,12 @@ GRADINGS: dict[str, object] = {
     },
 }
 
+#: The key this type's file takes beside every check's and its gradings' (ADR-0151):
+#: an age's old spelling, ``max_age`` with a level and ``stale_code``, needs no code
+#: of its own — the pair's bare key refuses a level, and ``stale_code`` is a key this
+#: type does not take.
+CONFIG_KEYS = ("file",)
+
 
 @register("file")
 class FileFreshnessCheck(Check):
@@ -58,7 +64,8 @@ class FileFreshnessCheck(Check):
         # The file **is** the object this check reads — the local twin of the
         # `http` check's URL. Not the node's path, which is where the deployment
         # chose to hang the node and says nothing about which file went stale.
-        super().__init__(subject=file_path, gradings=GRADINGS, **kwargs)
+        super().__init__(subject=file_path, gradings=GRADINGS,
+                         config_keys=CONFIG_KEYS, **kwargs)
         self.file_path = file_path
 
     @classmethod
@@ -67,7 +74,6 @@ class FileFreshnessCheck(Check):
         raw = config.get("file")
         if not raw:
             raise CheckError("file check requires a 'file' path")
-        _refuse_the_retired_age(config)
         # File paths are relative to the executing user's $HOME ('~' expands too).
         path = Path(str(raw)).expanduser()
         if not path.is_absolute():
@@ -144,18 +150,3 @@ class FileFreshnessCheck(Check):
         """A timestamp and, on a bad read, a short reason (ADR-0075)."""
         return RECORD_BYTES
 
-
-def _refuse_the_retired_age(config: Mapping[str, Any]) -> None:
-    """Refuse the spelling the age had before it was a pair (ADR-0131 decision 2):
-    ``max_age`` with a level, and ``stale_code``, the code it took — naming what
-    replaces them, since a level passes at itself now."""
-    if "stale_code" not in config and config.get("max_age") is None:
-        return
-    level = config.get("max_age") or "20m"
-    code = str(config.get("stale_code") or "ERROR").strip().upper()
-    write = ("max_age: null, which switches the judgment off" if code == "OK"
-             else f"max_age_{'warn' if code == 'WARN' else 'error'}: {level}")
-    raise CheckError(
-        f"'max_age' with a level, and 'stale_code', are retired: the file check's "
-        f"age is a pair now, whose level is the last age that passes — write "
-        f"{write}, and drop 'stale_code' (ADR-0131)")

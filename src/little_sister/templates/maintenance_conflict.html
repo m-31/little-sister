@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html>
 <head>
-    {% from '_maintenance_fields.html' import maintenance_fields with context %}
-    {% set page_title = 'Maintenance conflict' %}
+    {% from '_maintenance_fields.html' import schedule_fields with context %}
+    {% set page_title = 'Maintenance preview' if preview else 'Maintenance conflict' %}
     {% include '_header.html' %}
 
     {#- The refused write (ADR-0014). Two refusals land here, because the
@@ -24,41 +24,111 @@
         to make impossible. Here the token is unchanged, because nothing about the
         stored pin moved — and so is what the expiry field had been filled with.
 
-        The expiry field (ADR-0104 decision 5): `duration` is what it shows and
-        `expiry_was` what the form says it was filled with. Where the admin left
-        the field as filled (`kept`) the route fills both again from the pin as it
-        stands now, so saving their words keeps that expiry, and the button that
-        would carry *their* expiry over the stored note has nothing to carry;
-        where the pin is gone the field is a new pin's. -#}
+        The expiry field (ADR-0104 decision 5): what it shows and what the form says
+        it was filled with come back in the editor's fields (`view`). Where the admin
+        left the field as filled (`kept`) the route fills the editor again from the
+        pin as it stands now, so saving their words keeps that expiry, and the button
+        that would carry *their* expiry over the stored note has nothing to carry;
+        where the pin is gone the field is a new pin's.
+
+        In the panel the drawer frames (ADR-0147 decision 3) its forms and its ways
+        back stay in the frame, each form sending `panel` with it, and the way back
+        leads to the tab the write was sent from.
+
+        **The editor comes back whole** (`view`, ADR-0150, landing 4): *Starts*, a
+        repeat's fields, *Until*, *Not on*, the zone and the windows added by hand,
+        as they were typed — so that a refused series carries the series' editor. A
+        window set on a part a schedule stands on joins it, so no refusal's form
+        turns a schedule into one window. Three more answers land here. A
+        **preview** (`preview`): the editor's own button — *Preview*, *Add an
+        interval*, an ×, *weekend*, *working week*, a day of the month or its paging
+        (landing 5) — answered as a refusal is, in full, with what it would set
+        beneath it and no word of a refusal, never at the form's `next`, which the
+        drawer takes for a write gone through, the page saying it holds words so that
+        the drawer asks before it drops them. An
+        **Extend or End now refused** (`window_act`), whose own form comes back with
+        the words and the end typed. And one that **arrived after its window closed**
+        (`closed`): it says when the window closed, and offers *Set maintenance*
+        filled with the end asked for, a window from now that joins the schedule
+        where one still stands — nothing reopens a window by itself. -#}
+    {% macro editor_form(view, token, button, joins=false) -%}
+    <form method="post" action="{{ url_for('maintenance') }}" class="ls-schedule-form"{{ in_frame() }}>
+        {{- panel_field() }}
+        <input type="hidden" name="path" value="{{ path }}">
+        {%- if slug %}<input type="hidden" name="slug" value="{{ slug }}">{% endif %}
+        <input type="hidden" name="action" value="set">
+        <input type="hidden" name="set_at" value="{{ token }}">
+        <input type="hidden" name="next" value="{{ back }}">
+        {%- if joins %}<input type="hidden" name="with" value="join">{% endif %}
+        {{ schedule_fields(view, 'conflict', maintenance_default, maintenance_timezone) }}
+        <button class="btn btn-primary" type="submit">{{ button }}</button>
+    </form>
+    {%- endmacro %}
     <div class="container-fluid mt-3 px-4" style="max-width: 820px">
         {#- The node's path as every page writes one; `path` is what the form
             posted, which a node's own page spells without its leading slash, and
             is what these forms post back. -#}
         <h1 class="h4 mb-3">Maintenance — {{ node_path }}{% if slug %} <span class="text-muted">· one reason</span>{% endif %}</h1>
 
-        {% if problem %}
+        {% if preview %}
+            <div class="alert alert-info">
+                <p class="mb-0">A preview: nothing is saved until you choose {{ 'Save changes' if token else 'Set maintenance' }}.</p>
+            </div>
+            <div class="card mb-3">
+                <div class="card-body">
+                    {{ editor_form(view, token, 'Save changes' if token else 'Set maintenance') }}
+                </div>
+            </div>
+            <a class="btn btn-link" href="{{ back }}"{{ in_frame() }}>Change nothing</a>
+        {% elif closed %}
+            <div class="alert alert-warning">
+                <p class="mb-0">Nothing was saved. This window {% if closed_at %}closed {{ closed_at | localtime }}{% else %}has closed{% endif %}, before what you sent arrived, and a window that closed is not opened again by itself.</p>
+            </div>
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h2 class="h6 text-muted text-uppercase">Set maintenance{% if stored %}, joining its schedule{% endif %}</h2>
+                    {{ editor_form(view, token, 'Set maintenance', joins=stored is not none) }}
+                </div>
+            </div>
+            <a class="btn btn-link" href="{{ back }}"{{ in_frame() }}>Change nothing</a>
+        {% elif problem %}
             <div class="alert alert-warning">
                 <p class="mb-0">Nothing was saved. {{ problem }}</p>
             </div>
 
             <div class="card mb-3">
                 <div class="card-body">
-                    <h2 class="h6 text-muted text-uppercase">Your note</h2>
-                    <form method="post" action="{{ url_for('maintenance') }}">
+                    {%- if window_act %}
+                    <h2 class="h6 text-muted text-uppercase">{{ 'Extend this window' if window_act == 'extend' else 'End this window now' }}</h2>
+                    <form method="post" action="{{ url_for('maintenance') }}"{{ in_frame() }}>
+                        {{- panel_field() }}
                         <input type="hidden" name="path" value="{{ path }}">
                         {%- if slug %}<input type="hidden" name="slug" value="{{ slug }}">{% endif %}
-                        <input type="hidden" name="action" value="set">
+                        <input type="hidden" name="action" value="{{ window_act }}">
                         <input type="hidden" name="set_at" value="{{ token }}">
+                        <input type="hidden" name="window" value="{{ window }}">
                         <input type="hidden" name="next" value="{{ back }}">
-                        {{ maintenance_fields(mine, duration, 'conflict',
-                                              maintenance_default,
-                                              maintenance_timezone, false,
-                                              expiry_was) }}
-                        <button class="btn btn-primary" type="submit">Save</button>
+                        {%- if window_act == 'extend' %}
+                        <div class="mb-2">
+                            <label class="form-label" for="conflict-until">Until</label>
+                            <input class="form-control" id="conflict-until" name="until" value="{{ until }}"
+                                   aria-describedby="conflict-until-said">
+                            <div class="form-text" id="conflict-until-said">Read as the end field is, from now, and later than this window's end. To end it sooner, use End now.</div>
+                        </div>
+                        {%- endif %}
+                        <div class="mb-2">
+                            <label class="form-label" for="conflict-window-note">Note</label>
+                            <textarea class="form-control" id="conflict-window-note" name="note" rows="2">{{ mine }}</textarea>
+                        </div>
+                        <button class="btn btn-primary" type="submit">{{ 'Extend until then' if window_act == 'extend' else 'End this window' }}</button>
                     </form>
+                    {%- else %}
+                    <h2 class="h6 text-muted text-uppercase">Your note</h2>
+                    {{ editor_form(view, token, 'Save') }}
+                    {%- endif %}
                 </div>
             </div>
-            <a class="btn btn-link" href="{{ back }}">Change nothing</a>
+            <a class="btn btn-link" href="{{ back }}"{{ in_frame() }}>Change nothing</a>
         {% elif stored %}
             <div class="alert alert-warning">
                 <p class="mb-1">Nothing was saved. <strong>{{ stored.set_by or 'Someone else' }}</strong>
@@ -66,7 +136,7 @@
                     submitted was drawn.</p>
                 <p class="mb-0 small">Pinned by
                     <strong>{{ stored.created_by or 'unknown' }}</strong> {{ stored.created_at | localtime }};
-                    expires {{ stored.expires_at | localtime }}.</p>
+                    {% if stored.schedule %}{{ stored | sentence }}{% else %}expires {{ stored.expires_at | localtime }}{% endif %}.</p>
             </div>
 
             <div class="card mb-3">
@@ -83,7 +153,8 @@
             {% if clearing %}
                 <p>You asked to clear a pin that is no longer the one above. Clear it
                     anyway, or leave it as it stands.</p>
-                <form method="post" action="{{ url_for('maintenance') }}" class="d-inline">
+                <form method="post" action="{{ url_for('maintenance') }}" class="d-inline"{{ in_frame() }}>
+                    {{- panel_field() }}
                     <input type="hidden" name="path" value="{{ path }}">
                     {%- if slug %}<input type="hidden" name="slug" value="{{ slug }}">{% endif %}
                     <input type="hidden" name="action" value="clear">
@@ -91,39 +162,33 @@
                     <input type="hidden" name="next" value="{{ back }}">
                     <button class="btn btn-outline-secondary" type="submit">Clear this pin</button>
                 </form>
-                <a class="btn btn-link" href="{{ back }}">Leave it pinned</a>
+                <a class="btn btn-link" href="{{ back }}"{{ in_frame() }}>Leave it pinned</a>
             {% else %}
                 <div class="card mb-3">
                     <div class="card-body">
                         <h2 class="h6 text-muted text-uppercase">Your note</h2>
-                        <form method="post" action="{{ url_for('maintenance') }}">
-                            <input type="hidden" name="path" value="{{ path }}">
-                    {%- if slug %}<input type="hidden" name="slug" value="{{ slug }}">{% endif %}
-                            <input type="hidden" name="action" value="set">
-                            <input type="hidden" name="set_at" value="{{ stored.token }}">
-                            <input type="hidden" name="next" value="{{ back }}">
-                            {{ maintenance_fields(mine, duration, 'conflict',
-                                                  maintenance_default,
-                                                  maintenance_timezone, false,
-                                                  expiry_was) }}
-                            <button class="btn btn-primary" type="submit">Save mine, replacing the stored note</button>
-                        </form>
+                        {{ editor_form(view, stored.token, 'Save mine, replacing the stored note') }}
                     </div>
                 </div>
 
-                {%- if not kept %}
-                <form method="post" action="{{ url_for('maintenance') }}" class="d-inline">
+                {%- if not kept and view.repeat == 'once' and not view.added %}
+                <form method="post" action="{{ url_for('maintenance') }}" class="d-inline"{{ in_frame() }}>
+                    {{- panel_field() }}
                     <input type="hidden" name="path" value="{{ path }}">
                     {%- if slug %}<input type="hidden" name="slug" value="{{ slug }}">{% endif %}
                     <input type="hidden" name="action" value="set">
                     <input type="hidden" name="set_at" value="{{ stored.token }}">
                     <input type="hidden" name="note" value="{{ stored.note }}">
-                    <input type="hidden" name="duration" value="{{ duration }}">
+                    <input type="hidden" name="duration" value="{{ view.duration }}">
+                    <input type="hidden" name="zone" value="{{ view.zone }}">
+                    {%- if view.starts %}
+                    <input type="hidden" name="starts" value="{{ view.starts }}">
+                    {%- endif %}
                     <input type="hidden" name="next" value="{{ back }}">
                     <button class="btn btn-outline-secondary" type="submit">Keep the stored note, use my expiry</button>
                 </form>
                 {%- endif %}
-                <a class="btn btn-link" href="{{ back }}">Change nothing</a>
+                <a class="btn btn-link" href="{{ back }}"{{ in_frame() }}>Change nothing</a>
             {% endif %}
         {% else %}
             <div class="alert alert-warning">
@@ -134,25 +199,15 @@
 
             {% if clearing %}
                 <p>There is nothing left to clear.</p>
-                <a class="btn btn-primary" href="{{ back }}">Back</a>
+                <a class="btn btn-primary" href="{{ back }}"{{ in_frame() }}>Back</a>
             {% else %}
                 <div class="card mb-3">
                     <div class="card-body">
                         <h2 class="h6 text-muted text-uppercase">Pin it again</h2>
-                        <form method="post" action="{{ url_for('maintenance') }}">
-                            <input type="hidden" name="path" value="{{ path }}">
-                    {%- if slug %}<input type="hidden" name="slug" value="{{ slug }}">{% endif %}
-                            <input type="hidden" name="action" value="set">
-                            <input type="hidden" name="set_at" value="">
-                            <input type="hidden" name="next" value="{{ back }}">
-                            {{ maintenance_fields(mine, duration, 'conflict',
-                                                  maintenance_default,
-                                                  maintenance_timezone) }}
-                            <button class="btn btn-primary" type="submit">Set maintenance</button>
-                        </form>
+                        {{ editor_form(view, '', 'Set maintenance') }}
                     </div>
                 </div>
-                <a class="btn btn-link" href="{{ back }}">Leave it unpinned</a>
+                <a class="btn btn-link" href="{{ back }}"{{ in_frame() }}>Leave it unpinned</a>
             {% endif %}
         {% endif %}
     </div>
@@ -161,5 +216,6 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='js/rail.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/maintenance-edit.js') }}"></script>
 </body>
 </html>

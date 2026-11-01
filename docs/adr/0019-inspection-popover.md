@@ -1,7 +1,7 @@
 # ADR-0019 — Inspection popover (hover card)
 
 - **Status:** Accepted
-- **Date:** 2026-10-25 (accepted 2026-06-27)
+- **Date:** 2026-11-01 (accepted 2026-06-27)
 - **Related:** [ADR-0017](0017-node-title.md) (`title`) and
   [ADR-0012](0012-node-metadata.md) (`about` and `description`) — the fields the card
   shows;
@@ -12,14 +12,15 @@
   click opens or closes a node, decision 11, and a node's page, decision 8);
   [ADR-0029](0029-per-user-presentation-preferences.md) (`inspection_card`,
   the look that says whether the card opens);
-  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md) (decision 3, the note of a
-  rule's block, opened in a card of this one's look on this one's machinery);
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md) (decision 3, a rule's
+  block on the wall, whose note is read in the drawer and on no card of this one's);
   [ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md) (the
   `description` where a node has no `about`, the handbook, and the *About* card where
   the whole text stands);
   [ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md) (decision 4,
   the tags a node carries); [ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md)
-  (decision 3, the block's control, which raises no card of this one's).
+  (decision 3, the block's control, which raises no card of this one's),
+  [ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md) (the block as a link to its drawer, which takes the note's card away — decision 6 amended).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -109,14 +110,12 @@ new endpoint.
    *On a pause* is a viewer's choice in the settings menu, or a deployment's, and opens
    the card as above.
 
-6. **A rule's note rides on the same machinery.** A second card opens in this one's
-   look and its place: the note of a rule's block on the wall (ADR-0135 decision 3),
-   opened by the block's note mark on a click, a tap, Enter or Space for every viewer,
-   and on a pause where `inspection_card` opens this card on one (decision 5). It names
-   the node, says the block's sentence and its note whole, who set it and when, and
-   links to the node's page; it carries no buttons, and it holds through the refresh as
-   this card does. The mark is the block's control, which raises no card of this one's
-   (ADR-0104 decision 3).
+6. **A rule's note is read in the drawer, and rides on none of this card's
+   machinery.** A rule's block on the wall (ADR-0135 decision 3) is one link that opens
+   its node's *Notes* tab in a drawer over the wall, at that pin, where the note is read
+   whole beside the block's editor and *Clear* for whoever may change it
+   ([ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)
+   decision 7). No second card opens in this one's look or on its machinery.
 
 ## Consequences
 - One CDN dependency (Floating UI) + one small static JS file and CSS. **No server route

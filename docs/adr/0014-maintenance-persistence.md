@@ -1,7 +1,7 @@
 # ADR-0014 — Persist maintenance to a file, with auto-expiry
 
 - **Status:** Accepted
-- **Date:** 2026-10-25 (accepted 2026-06-27)
+- **Date:** 2026-11-01 (accepted 2026-06-27)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (one process, in
   memory), [ADR-0002](0002-rlock-snapshot-synchronization.md) (the tree owns state),
   [ADR-0003](0003-config-and-secrets-via-env-file.md) (config / secrets in files),
@@ -35,7 +35,11 @@
   [ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md) (decision 1: a pin's
   set and end are rows of its node where they change what it shows — decisions 4 and
   12), [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
-  (decisions 2 and 8: maintenance's own words, and *Handled*, which lists every pin).
+  (decisions 2 and 8: maintenance's own words, and *Handled*, which lists every pin),
+  [ADR-0144](0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md)
+  (a silence's deadline, read in this grammar — amended),
+  [ADR-0150](0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md) (an entry is its schedule, and its end its schedule's — decisions
+  4, 11 and 19 amended)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -53,7 +57,7 @@ entry with an expiry.
 1. **A maintenance side-table in the tree.** `StatusTree` owns `dict[path → Pin]`,
    where an entry is a `Pin` of kind `maintenance`
    ([ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
-   decision 1) — its note, `set_at`, `expires_at` and `set_by` among the fields §7
+   decision 1) — its note, `set_at`, its schedule and `set_by` among the fields §7
    lists; `Status.maintenance` stays the in-tree bool: the snapshot derives
    `MAINTENANCE` from it, which contributes nothing to the roll-up
    ([ADR-0039](0039-status-rollup-semantics.md) rule 3), and a check keeps writing a
@@ -92,8 +96,17 @@ entry with an expiry.
    configurable in `settings.yaml` ([ADR-0120](0120-every-stored-time-is-an-instant.md)
    decision 7) —
    unless an explicit duration is given (`parse_duration`: `2h`, `3d`, `2w`, …). **No
-   indefinite.** The scheduler ([ADR-0001](0001-in-process-threaded-engine.md))
-   sweeps each tick and ends every pin past `expires_at`, a node's and a line's: a
+   indefinite.** A maintenance entry is its schedule, a recurrence set in RFC 5545
+   text, and holds while a window of it is open
+   ([ADR-0150](0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md)
+   decisions 1 and 4): its end is its schedule's, the end of its last window. A one-off
+   window, what the form writes, is a schedule of one interval, `DTSTART` in the
+   configured zone and `DTEND` in UTC — from its set, or from the start the form's
+   *Starts* names in §§21 and 22's grammar, blank meaning now, a duration then counting
+   from it; an edit that names its end alone keeps its start. The scheduler
+   ([ADR-0001](0001-in-process-threaded-engine.md)) sweeps each tick, opens and closes
+   a maintenance entry's windows as they come due, and ends every pin past its end —
+   `expires_at`, or the end of an entry's last window — a node's and a line's: a
    node's end is a row of its node, and a line's one where its node shows something
    else for it ([ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md)
    decision 1). Ending a pin restores nothing, because nothing was destroyed: the check
@@ -143,8 +156,9 @@ reason field is the whole point of a pin; losing it quietly is the bad kind of c
    **edit** — it keeps the entry, replaces note and expiry, and never passes through
    an unpinned state.
 7. **Both dates.** A pin carries `{note, set_at, expires_at, set_by, created_at,
-   created_by}`, beside its kind and its id — made when it is first set and kept
-   through every edit (ADR-0141 decisions 1 and 2). `set_at` / `set_by` mean **the
+   created_by}` — a maintenance entry its schedule in place of `expires_at` (§11) —
+   beside its kind and its id, made when it is first set and kept through every edit
+   (ADR-0141 decisions 1 and 2). `set_at` / `set_by` mean **the
    last write that changed the pin** — a set that says what the stored pin says, the
    same note and the same expiry, writes nothing
    ([ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md)) — and `created_at` /
@@ -209,8 +223,15 @@ space and §2's file shape grow, nothing above is withdrawn)*
     expiry anyway. A pin's `set_at`, `created_at` and `expires_at` are instants,
     written in UTC ([ADR-0120](0120-every-stored-time-is-an-instant.md)), and the file
     is read strictly: one of them without a zone refuses the file whole, as a shape it
-    does not know does. Beside the list sits a second top-level key the state layer
-    stamps on every write, `generation` — the writer's mark, its count of the file's
+    does not know does. A maintenance entry carries its `schedule`, `not_on` and
+    `changed` and no `expires_at`
+    ([ADR-0150](0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md)
+    decision 1), the text read as strictly as an instant is. An entry of the shape
+    before it, an `expires_at` and no schedule, is dropped as the file is read, with no
+    line at the start, and the other pins read on — §19's hard cut without its warning,
+    on Lex's word, which the release notes say instead (ADR-0150 decision 7). Beside the
+    list sits a second top-level key the state layer stamps on every write,
+    `generation` — the writer's mark, its count of the file's
     writes, and whether it held the keeper's lease
     ([ADR-0134](0134-the-state-is-compressed-and-stamped.md) decision 4) — which a
     reader that takes the list by name passes over.
@@ -246,7 +267,8 @@ asked.
     least the shortest period among the units beneath it, which is what that node says
     it is read on. A window that ends before the fastest unit beneath it runs again
     holds no run of anything; one that outlasts it holds runs of that unit, which
-    is what the floor exists to guarantee.
+    is what the floor exists to guarantee. The year is counted from when the window
+    is set: its end lies at most a year from then, however far ahead it starts.
     §4 said *finite*, and finite was not enough. `-1d` and `0` parse cleanly,
     land `expires_at` in the past, and the very next sweep drops the entry — so the
     note and both authorships are gone within a tick, behind a redirect that
@@ -269,7 +291,10 @@ asked.
     got a week has learned nothing. The one value that still falls back is the
     deployment's **configured default**: a `settings.yaml` typo must not make the form
     unusable. A blank field therefore keeps that exemption whole — the default is
-    never refused, and is held to no floor of §13's.
+    never refused, and is held to no floor of §13's. A configured default a blank
+    field cannot run for — one that reads as no duration, or lies past the bound — is
+    said once in the log at start, and the week a blank field runs for instead stands
+    in its place.
 15. **A blank note on an edit keeps the stored text.** Blank means *"I did not touch
     this field"*, so an edit that only moves the window keeps the explanation. On a
     **new** pin there is nothing to keep and the literal `maintenance` stays the honest
@@ -306,6 +331,7 @@ trying to reach. The two depths now follow one interaction.
     change no file shape. If a future maintenance change genuinely needs a different
     shape, it follows §11's hard-cut precedent — loud old-shape warning, new writes only,
     no migrator or compatibility reader — rather than making this UI pass a migration.
+    A maintenance entry's schedule took that cut without the warning (§11).
 
 ### Naming the expiry instead of calculating a duration
 *(decided 2026-08-02; decision §4's explicit input widens, and §13's bound applies to
@@ -341,7 +367,10 @@ natural-language parser whose meaning changes by locale or library version.
     one second, and the covering checks' longest `frequency` — and be at most 365 days
     away. It is an instant in UTC, which the tree stores as it is
     ([ADR-0120](0120-every-stored-time-is-an-instant.md)): nothing turns it back into
-    the machine's clock.
+    the machine's clock. A silence's deadline is read in this grammar and held to the
+    same floors, at most thirty days away rather than a year
+    ([ADR-0144](0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md)
+    decision 4).
 23. **The grammar is visible at the field.** Every shared maintenance editor labels
     the control *Duration or expiry*, states the configured timezone and carries a
     click-opened, keyboard-native format table. It is closed by default and never

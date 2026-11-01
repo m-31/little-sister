@@ -23,15 +23,16 @@ from unittest import TestCase, mock
 
 os.environ.setdefault("SECRET_KEY", "test-key")
 
-from little_sister import api, contract
+from little_sister import api, contract, instants
 from little_sister import app as app_module
 from little_sister.aggregation import AggregationRule, RuleSet, Table
 from little_sister.checks.base import Check, CheckResult, Measurement
 from little_sister.checks.file import FileFreshnessCheck
 from little_sister.checks.ssh import HostMetricsCheck
 from little_sister.engine import Engine
-from little_sister.pins import SEEN
+from little_sister.pins import DONE, SEEN, SILENCED
 from little_sister.reasons import Entry
+from little_sister.schedule import Schedule
 from little_sister.series import MemoryStore, SeriesKey, SeriesRecord
 from little_sister.status import StatusCode
 from little_sister.tags import Vocabulary
@@ -46,11 +47,22 @@ VOLATILE = ["generated_at", "observed_at", "next_at", "version",
             "set_at", "created_at", "since"]
 
 
-#: The ids the scene's four pins are given, in the order they are set — two in
-#: maintenance and two seen: a pin's id is made when it is first set (ADR-0141
-#: decision 2), and the artifact holds these.
+#: The ids the scene's thirteen pins are given, in the order they are set — two in
+#: maintenance, two seen, one done, one silenced, one in maintenance on an entry not
+#: reported now, two in maintenance on a node not reported now and on one of its
+#: entries, and four maintenance entries planned or open by their schedule: a pin's id
+#: is made when it is first set (ADR-0141 decision 2), and the artifact holds these.
 PIN_IDS = ["5c1d0a7e3f4b2c18", "9e2f4a6b8c0d1e3f", "3a7b9c1d5e2f4a6b",
-           "c4d6e8f0a2b4c6d8"]
+           "c4d6e8f0a2b4c6d8", "f6a8b0c2d4e6f8a1", "e5f7a9b1c3d5e7f9",
+           "7d9f1b3c5e7a9c2e", "2b4d6f8a0c2e4a6c", "8f0b2d4f6a8c0e2a",
+           "1e3a5c7e9b1d3f5a", "6b8d0f2a4c6e8a0c", "4f6a8c0e2b4d6f8b",
+           "a0c2e4a6c8e0b2d4"]
+
+#: The instant the scene is set and read at: a Saturday night in Berlin, 23:30 there,
+#: inside the weekly window of the mail relay below and before every window planned
+#: — fixed, so that what is open and what is planned is the same on every run and
+#: every pin's end is still to come, whatever day the artifact is checked on.
+SCENE_NOW = datetime(2026, 11, 7, 22, 30, tzinfo=UTC)
 
 
 def build_scene(tree: StatusTree) -> None:
@@ -60,7 +72,8 @@ def build_scene(tree: StatusTree) -> None:
     never populated: a reader who deletes one deletes a shape the client is no
     longer tested against.
     """
-    with mock.patch("little_sister.pins.new_id", side_effect=list(PIN_IDS)):
+    with mock.patch("little_sister.pins.new_id", side_effect=list(PIN_IDS)), \
+            mock.patch.object(instants, "now", lambda: SCENE_NOW):
         _build_scene(tree)
 
 
@@ -243,11 +256,100 @@ def _build_scene(tree: StatusTree) -> None:
                             expires_at=None, set_by="ada")
     tree.upsert("/staging/jobs", StatusCode.ERROR, [
         Entry("job-7", "job 7 failed", code=StatusCode.ERROR, occurrence="7/1"),
-        Entry("job-8", "job 8 passed", code=StatusCode.OK, occurrence="8/1")],
+        Entry("job-8", "job 8 passed", code=StatusCode.OK, occurrence="8/1"),
+        Entry("job-9", "job 9 failed", code=StatusCode.ERROR, occurrence="9/4"),
+        Entry("job-10", "job 10 failed", code=StatusCode.ERROR, occurrence="10/1")],
         members=True)
     tree.set_acknowledgment("/staging/jobs", "job-7", SEEN, "A flaky runner.",
                             expires_at=datetime(2027, 1, 1, tzinfo=UTC),
                             set_by="ada")
+    # **What a person closed** (ADR-0146): a job's failed run looked into and over,
+    # marked done — its entry keeps the error its check declared and counts OK in
+    # its node, `contribution.by` naming `done`, its `handled` the done with the
+    # failure it closed, the run and the attempt it closed, and no end. Set before
+    # the silence below, whose set is what moves the node.
+    tree.set_acknowledgment("/staging/jobs", "job-10", DONE,
+                            "The runner ran out of disk; it is cleaned up.",
+                            expires_at=None, set_by="ada")
+    # **What a person silenced** (ADR-0144): a job that flaps, silenced at a warning
+    # at most until a deadline — its line keeps its true color and its entry counts as
+    # the warning the silence holds it at, `contribution.by` naming `silenced`, its
+    # `handled` the silence with its level's table and its deadline, and neither a
+    # status nor an occurrence, a silence being bound to no failure.
+    tree.set_acknowledgment("/staging/jobs", "job-9", SILENCED,
+                            "It flaps since the runner moved.",
+                            expires_at=datetime(2027, 1, 1, tzinfo=UTC),
+                            set_by="ada", level=StatusCode.WARN)
+    # **A pin on an entry not reported now** (3.1.0): a workflow somebody pinned
+    # that the check does not return now — a finding that comes and goes — so that
+    # its pin holds nothing, and stands beside the entries rather than among them,
+    # in `entries.not_reported`: its slug and what stands on it. Every other node
+    # carries the list empty. Set last, so that the ids before it stay theirs.
+    tree.set_entry_maintenance("/platform/actions", "1001-workflow-5",
+                               "the old deploy, switched off for the migration",
+                               expires_at=datetime(2026, 12, 19, 12, 30,
+                                                   tzinfo=UTC),
+                               set_by="ada")
+    # **What stands on a node not reported now** (3.1.0): a runner somebody pinned,
+    # and one of its entries, that the check does not return now — or has not written
+    # since the start — so that both pins hold nothing, and stand beside the nearest
+    # node above that stands rather than among its children, in its
+    # `nodes_not_reported`: the node's path, what stands on it and what stands on its
+    # entries. Every other node carries the list empty. Set last, so that the ids
+    # before them stay theirs.
+    tree.set_maintenance("/platform/actions/retired-runner",
+                         "decommissioned; its jobs moved to the new pool",
+                         expires_at=datetime(2026, 12, 19, 12, 30, tzinfo=UTC),
+                         set_by="ada")
+    tree.set_entry_maintenance("/platform/actions/retired-runner", "disk",
+                               "the disk alarm waits for the wipe",
+                               expires_at=datetime(2026, 12, 19, 12, 30,
+                                                   tzinfo=UTC),
+                               set_by="ada")
+    # **Maintenance planned, and a series' window open** (3.1.0, ADR-0150), each set
+    # last so that the ids before them stay theirs. A window set ahead for the
+    # platform's certificates, a week out: listed in its node's `planned`, beside its
+    # `handled` and never among it, with its next window, its schedule's end and its
+    # sentence, and counting nothing — `/platform` keeps the code it had. Every other
+    # node carries the list empty but where an entry of its own is planned.
+    tree.set_maintenance(
+        "/platform", "the certificates are rotated",
+        schedule=Schedule.one_off(datetime(2026, 11, 14, 21, tzinfo=UTC),
+                                  datetime(2026, 11, 15, 3, tzinfo=UTC),
+                                  "Europe/Berlin"),
+        set_by="ada")
+    # The mail relay's weekly window, open at the scene's instant: listed in its
+    # `handled` with the window open, `starts_at` and `expires_at` — its time left,
+    # never its schedule's end a year away — and that end, `until`, and its sentence.
+    tree.upsert("/services/mail", StatusCode.OK)
+    tree.set_maintenance("/services/mail", "the relay is patched every Saturday",
+                         schedule=Schedule.parse(
+                             "DTSTART;TZID=Europe/Berlin:20261107T220000\n"
+                             "DURATION:PT8H\n"
+                             "RRULE:FREQ=WEEKLY;BYDAY=SA;UNTIL=20271030T215959Z"),
+                         set_by="lex")
+    # A runner's entry, its nightly series between two windows: listed in its node's
+    # `planned` with its `slug`, the soonest first.
+    tree.set_entry_maintenance("/staging/runners", "runner-2",
+                               "runner 2 is reimaged on Sunday nights",
+                               schedule=Schedule.parse(
+                                   "DTSTART;TZID=Europe/Berlin:20261108T030000\n"
+                                   "DURATION:PT2H\n"
+                                   "RRULE:FREQ=WEEKLY;BYDAY=SU;"
+                                   "UNTIL=20270425T235959Z"),
+                               set_by="ada")
+    # A workflow the check does not return now, a series planned for it that leaves
+    # out a holiday list the instance cannot have: no window is to open, its
+    # `starts_at` and `expires_at` null — the shape a decoder expecting a date breaks
+    # on — and `why` the page's words; and its record in `entries.not_reported`
+    # stands for that planned entry alone, its `handled` empty.
+    tree.set_entry_maintenance("/platform/actions", "1001-workflow-6",
+                               "the nightly deploy, paused over the holidays",
+                               schedule=Schedule.parse(
+                                   "DTSTART;TZID=Europe/Berlin:20261108T010000\n"
+                                   "DURATION:PT1H\n"
+                                   "RRULE:FREQ=DAILY;UNTIL=20261231T225959Z"),
+                               not_on="DE-BY", set_by="ada")
 
 
 def envelope_from(tree: StatusTree) -> dict:
@@ -258,7 +360,8 @@ def envelope_from(tree: StatusTree) -> dict:
     # The envelope a server with no engine answers (`disabled`): this suite imports
     # the application and never starts it (ADR-0091), and the artifact is not about
     # that.
-    with mock.patch.object(app_module, "engine_error", None):
+    with mock.patch.object(app_module, "engine_error", None), \
+            mock.patch.object(instants, "now", lambda: SCENE_NOW):
         answer = client.get("/status", headers=JSON_HEADERS)
     assert answer.status_code == 200, answer.status_code
     body: dict = answer.get_json()
@@ -305,8 +408,32 @@ class GoldenEnvelopeTests(TestCase):
         self.assertTrue(any(node.get("run") for node in nodes))
         self.assertTrue(any("run" not in node for node in nodes))
         self.assertTrue(any(node["entries"]["addressable"] for node in nodes))
+        self.assertTrue(any(node["entries"]["not_reported"] for node in nodes))
+        self.assertTrue(any(gone["handled"] and gone["not_reported"]
+                            for node in nodes for gone in node["nodes_not_reported"]))
         self.assertTrue(any(not node["entries"]["addressable"]
                             and node["entries"]["items"] for node in nodes))
+        # 3.1.0's maintenance by schedule (ADR-0150): a series' window open, its end
+        # its own and its schedule's end beside it; a window set ahead, a node's own;
+        # an entry's series between two windows, with its slug; and one with no
+        # window to open, in a record that stands for it alone
+        held = [said for node in nodes for said in node["handled"]
+                if said["kind"] == "maintenance"]
+        self.assertTrue(all(said["starts_at"] and said["until"] and said["sentence"]
+                            for said in held))
+        self.assertTrue(any(said["expires_at"] != said["until"] for said in held))
+        planned = [item for node in nodes for item in node["planned"]]
+        self.assertTrue(any("slug" not in item and item["starts_at"]
+                            for item in planned))
+        self.assertTrue(any(item.get("slug") and item["starts_at"]
+                            for item in planned))
+        self.assertTrue(all("counts_as" not in item for item in planned))
+        alone = [record for node in nodes
+                 for record in node["entries"]["not_reported"]
+                 if not record["handled"]]
+        self.assertTrue(any(item["starts_at"] is None and item["expires_at"] is None
+                            and item["why"] for record in alone
+                            for item in record["planned"]))
         self.assertTrue(any(node["report"] for node in nodes))
         # All three states of the tri-state: stated true, stated false, and nobody
         # said (ADR-0063).
@@ -328,7 +455,8 @@ class GoldenEnvelopeTests(TestCase):
         # counts nothing by `maintenance`, a line a configured rule heals counts OK
         # by `aggregation`, and a line no rule touches carries it as null.
         lines = {(item["contribution"] or {}).get("by"): item for item in items}
-        self.assertEqual(set(lines), {"maintenance", "aggregation", "seen", None})
+        self.assertEqual(set(lines), {"maintenance", "aggregation", "seen",
+                                      "silenced", "done", None})
         self.assertIsNone(lines["maintenance"]["contribution"]["code"])
         self.assertEqual(lines["aggregation"]["contribution"]["code"], "OK")
         self.assertEqual(lines["aggregation"]["code"], "WARN")
@@ -341,9 +469,30 @@ class GoldenEnvelopeTests(TestCase):
                           accepted["counts_as"]),
                          ("seen", "ERROR", "7/1", {"WARN": "OK", "ERROR": "OK"}))
         self.assertIsNotNone(accepted["expires_at"])
+        # a line a person silenced at a warning at most counts as that warning in its
+        # node and keeps its color, its silence listed with its level's table and its
+        # deadline (3.1.0)
+        self.assertEqual((lines["silenced"]["code"],
+                          lines["silenced"]["contribution"]["code"]), ("ERROR", "WARN"))
+        silence, = lines["silenced"]["handled"]
+        self.assertEqual((silence["kind"], silence["source"], silence["counts_as"]),
+                         ("silenced", "person", {"ERROR": "WARN"}))
+        self.assertIsNotNone(silence["expires_at"])
+        self.assertNotIn("status", silence)
+        # a line a person marked done counts OK in its node, its own code the error
+        # its check declared, its done bound to the failure and the event it closed,
+        # with no end (3.1.0)
+        self.assertEqual((lines["done"]["code"], lines["done"]["contribution"]["code"]),
+                         ("ERROR", "OK"))
+        closed, = lines["done"]["handled"]
+        self.assertEqual((closed["kind"], closed["source"], closed["status"],
+                          closed["occurrence"], closed["expires_at"],
+                          closed["counts_as"]),
+                         ("done", "person", "ERROR", "10/1", None,
+                          {"WARN": "OK", "ERROR": "OK"}))
         # 3.0.0's `rule`: the pin or the configured rule that decided, which the
         # entry's own `handled` lists by the same id
-        for by in ("maintenance", "aggregation", "seen"):
+        for by in ("maintenance", "aggregation", "seen", "silenced", "done"):
             decided = lines[by]["contribution"]["rule"]
             self.assertIn(decided, [said["id"] for said in lines[by]["handled"]])
         # 2.12.0's `tags`: a node's own beside those from above, those from above
@@ -388,8 +537,10 @@ class GoldenEnvelopeTests(TestCase):
         self.assertIsNone(rules["undefined"]["code"])
         self.assertIsNotNone(rules["damping"]["code"])
         # the rule that decided, where one pin or one configured rule did, and null
-        # for a mechanism
-        self.assertEqual(rules["maintenance"]["rule"], PIN_IDS[0])
+        # for a mechanism — a pin by its id, the database's and the mail relay's
+        self.assertEqual({node["contribution"]["rule"] for node in nodes
+                          if (node["contribution"] or {}).get("by") == "maintenance"},
+                         {PIN_IDS[0], PIN_IDS[10]})
         self.assertEqual(rules["aggregation"]["rule"], "staging advises")
         self.assertEqual(rules["seen"], {"code": "OK", "by": "seen",
                                          "rule": PIN_IDS[2]})

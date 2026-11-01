@@ -28,6 +28,7 @@ from little_sister.engine import Engine
 from little_sister.series import MemoryStore, SeriesKey, SeriesRecord
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
+from tests.browser_binary import chromium
 from tests.browser_looks import looks
 from tests.browser_server import PageServer
 from tests.test_series_index import T0, _Cost, _Kept
@@ -37,7 +38,6 @@ try:  # pragma: no cover - environment probe
 except ImportError:  # pragma: no cover
     sync_playwright = None  # type: ignore[assignment]
 
-_SANDBOX_CHROMIUM = Path("/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
 _BOOTSTRAP = (Path(__file__).resolve().parent.parent / "var" / "bootstrap"
               / "node_modules" / "bootstrap" / "dist")
 
@@ -148,8 +148,7 @@ class IndexFoldsBrowserTests(unittest.TestCase):
         try:
             cls.playwright = sync_playwright().start()
             cls.browser = cls.playwright.chromium.launch(
-                executable_path=(str(_SANDBOX_CHROMIUM) if _SANDBOX_CHROMIUM.is_file()
-                                 else None))
+                executable_path=chromium())
         except Exception as error:  # pragma: no cover - no browser here
             if cls.playwright is not None:
                 cls.playwright.stop()

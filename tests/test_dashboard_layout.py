@@ -116,8 +116,8 @@ class ModelConstantsMirrorTheStylesheetTests(TestCase):
         self.assertEqual(round(float(gap.group(1)) * 160), model._CHIP_GAP)
 
     def test_a_run_asks_its_own_column_how_many_it_holds(self):
-        # A run with room for one column only wraps as it comes (backlog #91's note,
-        # §2, 2026-10-17), and from two on stands in as many as fit, each a query on
+        # A run with room for one column only wraps as it comes (ADR-0127 decision 12),
+        # and from two on stands in as many as fit, each a query on
         # the run's own width against its line height — one column and the gap, the
         # model's — with the stylesheet's fallback column the model's too.
         from little_sister import dashboard_layout as model
@@ -146,8 +146,8 @@ class ModelConstantsMirrorTheStylesheetTests(TestCase):
                          [(k, k) for k in range(3, model.MAX_LAYOUT_TRACKS + 1)])
 
     def test_a_chips_estimate_takes_its_anatomy_from_the_stylesheet(self):
-        # The server's estimate of a chip before the script measures it (backlog
-        # #91's note, §2, 2026-10-17): its padding and border, its cue and the cue's
+        # The server's estimate of a chip before the script measures it
+        # (ADR-0127 decision 12): its padding and border, its cue and the cue's
         # margin, the counts' margin where its level counts, and its font, as the
         # stylesheet sizes them under the aligned look.
         from little_sister import dashboard_layout as model
@@ -175,8 +175,8 @@ class ModelConstantsMirrorTheStylesheetTests(TestCase):
         self.assertAlmostEqual(float(counts.group(1)), model.CHIP_COUNTS_EM)
 
     def test_each_themes_letter_is_the_one_the_planner_counts(self):
-        # The estimate's length reads `--ls-chip-letter` (backlog #91's note, §2,
-        # 2026-10-18): the root's for the system's faces, and a theme drawn in a
+        # The estimate's length reads `--ls-chip-letter` (ADR-0127 decision 12):
+        # the root's for the system's faces, and a theme drawn in a
         # face of its own restates it in its block — the planner's faces hold the
         # same letters, theme by theme, and no theme restates one the planner does
         # not know.
@@ -932,7 +932,7 @@ class FirstLookPricingTests(TestCase):
 
     def test_a_run_that_holds_one_column_wraps_as_it_comes(self):
         # Below two of its level's columns and their gap a run draws its chips at
-        # their own widths, sharing lines (backlog #91's note, §2, 2026-10-17): eight
+        # their own widths, sharing lines (ADR-0127 decision 12): eight
         # names of seven characters with their chips' room and two of thirty-four,
         # in a level whose columns are thirty-four wide. Each chip takes its own
         # width and the gap after it; a line holds what fits.

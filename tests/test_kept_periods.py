@@ -40,6 +40,7 @@ from little_sister.engine import Engine
 from little_sister.pins import MAINTENANCE as PIN_MAINTENANCE
 from little_sister.pins import Pin, PinStore
 from little_sister.reasons import Entry
+from little_sister.schedule import Schedule
 from little_sister.state import EVENTS_FILE, StateLayer
 from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.tree import (
@@ -1134,7 +1135,8 @@ class PinTests(TestCase):
         new.restore_maintenance({PATH: Pin.from_dict({
             "id": "0123456789abcdef", "kind": "maintenance",
             "note": "planned", "set_at": there.isoformat(sep=" "),
-            "expires_at": instants.stamp(_SOON), "set_by": "lex"})})
+            "schedule": Schedule.one_off(_at(3), _SOON, "Europe/Berlin").text(),
+            "set_by": "lex"})})
         self.assertEqual(_kept(new)["nodes"][PATH]["since"], _spelled(3))
 
     def test_a_pin_the_tree_sees_set_dates_nothing_it_did_not_begin(self) -> None:

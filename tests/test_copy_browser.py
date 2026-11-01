@@ -28,6 +28,7 @@ from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 from little_sister import app as app_module
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
+from tests.browser_binary import chromium
 from tests.browser_server import PageServer
 from tests.page_tree import parse
 
@@ -35,10 +36,6 @@ try:  # pragma: no cover - environment probe
     from playwright.sync_api import sync_playwright
 except ImportError:  # pragma: no cover
     sync_playwright = None  # type: ignore[assignment]
-
-#: A sandbox pins one browser build; a Playwright from the lock may expect another,
-#: so the one that is there is what runs (as ``tests/sweep_contrast.py`` does).
-_SANDBOX_CHROMIUM = Path("/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
 
 #: Bootstrap as ``tests/sweep_contrast.py`` vendors it (``docs/testing-the-gui.md``,
 #: Mode 4), where there is a copy; the CDN otherwise.
@@ -162,8 +159,7 @@ class _CopyCase(unittest.TestCase):
         try:
             cls.playwright = sync_playwright().start()
             cls.browser = cls.playwright.chromium.launch(
-                executable_path=(str(_SANDBOX_CHROMIUM) if _SANDBOX_CHROMIUM.is_file()
-                                 else None),
+                executable_path=chromium(),
                 args=[f"--host-resolver-rules=MAP {_NAME} {_LOOPBACK}"])
         except Exception as error:  # pragma: no cover - no browser here
             if cls.playwright is not None:

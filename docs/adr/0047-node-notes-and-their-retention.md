@@ -1,7 +1,7 @@
 # ADR-0047 — A node keeps notes, and they outlive it
 
 - **Status:** Accepted
-- **Date:** 2026-10-25 (accepted 2026-08-08, in the design round on what a
+- **Date:** 2026-11-01 (accepted 2026-08-08, in the design round on what a
   maintenance pin leaves behind)
 - **Related:** [ADR-0014](0014-maintenance-persistence.md) (the pin, its side-table,
   the two dates and the compare-and-set token this reuses; its `reason` field is
@@ -30,7 +30,10 @@
   [ADR-0116](0116-a-path-with-no-node-says-what-is-known-of-it.md) (the page of a path
   no node stands at, which lists its notes),
   [ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md) (*seen*,
-  an acknowledgment, which this does not replace)
+  an acknowledgment, which this does not replace),
+  [ADR-0145](0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)
+  (a pin's note recording its end, and retention by
+  entries — amended)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -108,11 +111,14 @@ issue tracker buys nothing, and it would not have answered the second half at al
    kept one.
 
 5. **A note is editable while its owning pin is live, and frozen once that pin
-   ends.** Editing a live pin's explanation is correcting a sentence; editing it a
-   year later is rewriting history. The note records the owning pin's `created_at`
-   as its owner token and is editable exactly while a pin with that token is in the
-   table. A note written with no pin is editable while it is the newest note on its
-   node. Dates follow [ADR-0014](0014-maintenance-persistence.md)
+   ends, but for the end itself.** Editing a live pin's explanation is correcting a
+   sentence; editing it a year later is rewriting history. The note records the owning
+   pin's `created_at` as its owner token and is editable exactly while a pin with that
+   token is in the table. Beside its words it keeps the pin's kind, and the write that
+   ends the pin records the end in it — when, why, and who ended it by hand
+   ([ADR-0145](0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)
+   decision 4). A note written with no pin is editable while it is the newest note on
+   its node. Dates follow [ADR-0014](0014-maintenance-persistence.md)
    exactly — `created_at` / `created_by` the first write, `set_at` / `set_by` the
    last — and writes carry the same compare-and-set token, for the same reason two
    admins on one node needed it there.
@@ -141,15 +147,19 @@ issue tracker buys nothing, and it would not have answered the second half at al
    not delete — from a pin to a note, and it is the reason the notes index cannot be
    only a walk of the live tree.
 
-9. **Retention is a count floor, a count cap, an age floor and an age ceiling.** A
-   note is retired if and only if
+9. **Retention is a count floor, a count cap, an age floor and an age ceiling, and it
+   counts a tab's entries.** An entry is a note of its own, or the notes of the pins
+   one act set, which name one pin: they are kept and retired as one, by their first
+   note's age
+   ([ADR-0145](0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)
+   decision 5). An entry is retired if and only if
 
    > it is **not among the last `notes_keep`** on its node, **and** either it is
-   > older than `notes_max_age`, **or** the node holds more than `notes_cap` notes
+   > older than `notes_max_age`, **or** the node holds more than `notes_cap` entries
    > and it is older than `notes_min_age`.
 
    Precedence, because the rules conflict: **the count floor wins over everything.**
-   A node with ten three-year-old notes keeps all ten — otherwise the node that has
+   A node with ten three-year-old entries keeps all ten — otherwise the node that has
    been healthy longest loses precisely the history that would let anyone recognize
    the problem when it returns. The age ceiling then retires by age alone, and the
    cap does the routine trimming with the age floor as its guard: you may trim for

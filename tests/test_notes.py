@@ -1,7 +1,8 @@
 """A node's notes (ADR-0047, ADR-0140): the book and its file, the retention that
 retires a note, the pins that write one, and the surfaces that show them — the Notes
-view, the line's way there, the Copy document's block and the page of a path no node
-stands at."""
+tab, the line's way there, the Copy document's block and the page of a path no node
+stands at. What the tab does as the place to act (ADR-0145) is
+``test_notes_tab.py``'s."""
 import json
 import tempfile
 import time
@@ -24,10 +25,13 @@ from little_sister.notes import (
     NoteBook,
     NoteStore,
     Retention,
+    Tally,
     context_of,
     parse_age,
+    planned_of,
 )
-from little_sister.pins import MAINTENANCE, NO_NOTE, Pin
+from little_sister.pins import MAINTENANCE, NO_NOTE, SEEN, Pin
+from little_sister.schedule import Schedule
 from little_sister.state import BACKUP_SUFFIX, NOTES_FILE, StateLayer
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
@@ -207,16 +211,21 @@ class BookTests(TestCase):
         assert later is not None
         self.assertEqual(self.book.of("/db"), (later, again))
 
-    def test_a_pin_without_a_note_writes_none(self):
-        self.assertIsNone(self.book.pinned("/db", "", _pin(NO_NOTE, _utc(2026, 1, 1)),
-                                           Context()))
-        self.assertEqual(self.book.count("/db"), 0)
-        # and one given its note by an edit writes it then
+    def test_a_pin_without_a_note_writes_a_record(self):
+        # every pin leaves an entry, one set without words a note with no text — the
+        # placeholder a maintenance pin holds being nobody's words (ADR-0145
+        # decision 4)
         created = _utc(2026, 1, 1)
+        record = self.book.pinned("/db", "", _pin(NO_NOTE, created), Context())
+        self.assertEqual((record.text, record.kind, record.pin),
+                         ("", MAINTENANCE, instants.stamp(created)))
+        self.assertEqual(self.book.count("/db"), 1)
+        # and the record takes the words an edit gives it, as a note follows its pin
         given = _pin("now with words", created, set_at=_utc(2026, 1, 2), set_by="ben")
         note = self.book.pinned("/db", "", given, Context())
-        assert note is not None
-        self.assertEqual((note.created_at, note.created_by), (_utc(2026, 1, 2), "ben"))
+        self.assertEqual((note.key, note.text, note.created_by, note.set_by),
+                         (record.key, "now with words", "ada", "ben"))
+        self.assertEqual(self.book.count("/db"), 1)
 
     def test_a_lines_pin_and_the_nodes_keep_notes_apart(self):
         created = _utc(2026, 1, 1)
@@ -320,9 +329,16 @@ class StoreTests(TestCase):
             self.assertEqual(store.load(), book.tables())
 
     def test_a_file_it_cannot_take_is_a_load_failure_and_starts_empty(self):
+        stamp = "2026-01-01T00:00:00Z"
         for payload in ([1, 2], {"notes": []}, {"notes": {"/db": {}}},
                         {"notes": {"/db": [{"text": "x",
-                                            "created_at": "2026-01-01T00:00:00"}]}}):
+                                            "created_at": "2026-01-01T00:00:00"}]}},
+                        # a maintenance entry's tally that is none (ADR-0150)
+                        *({"notes": {"/db": [{"text": "x", "created_at": stamp,
+                                              "tally": tally}]}}
+                          for tally in ([], {"windows": -1}, {"windows": "2"},
+                                        {"held": True},
+                                        {"open_since": "2026-01-01T00:00:00"}))):
             with self.subTest(payload=payload), \
                     tempfile.TemporaryDirectory() as directory:
                 state = StateLayer(directory)
@@ -367,6 +383,51 @@ class StoreTests(TestCase):
         self.assertNotIn("slug", plain.to_dict())
         self.assertNotIn("pin", plain.to_dict())
         self.assertEqual(Note.from_dict("/db", plain.to_dict()), plain)
+        # a maintenance entry's what it was planned as and the windows it counted
+        # (ADR-0150), one open now and the last that closed — and none, where a note
+        # written before notes counted windows carries none
+        counted = Note(path="/db", slug="", text="", created_at=_utc(2026, 1, 1),
+                       created_by="ada", set_at=_utc(2026, 1, 1), set_by="ada",
+                       pin=instants.stamp(_utc(2026, 1, 1)), kind=MAINTENANCE,
+                       planned="schedule",
+                       tally=Tally(windows=3, held=5400.5,
+                                   open_since=_utc(2026, 1, 3),
+                                   open_until=_utc(2026, 1, 3, 2),
+                                   last_start=_utc(2026, 1, 2),
+                                   last_end=_utc(2026, 1, 2, 1), last_closed="hand",
+                                   last_closed_by="ben"))
+        self.assertEqual(Note.from_dict("/db", json.loads(json.dumps(
+            counted.to_dict()))), counted)
+        self.assertEqual(Note.from_dict("/db", counted.to_dict() | {
+            "tally": {"windows": 0, "held": 0}}).tally, Tally())
+        self.assertNotIn("tally", plain.to_dict())
+        self.assertIsNone(Note.from_dict("/db", plain.to_dict()).tally)
+
+
+class PlannedOfTests(TestCase):
+    """What a maintenance entry was planned as (ADR-0150): a series a schedule, which an
+    edit that makes it one window leaves a schedule; one window set ahead a window; one
+    set from now nothing, and so is every other pin."""
+
+    def test_each_entry_and_every_other_pin(self):
+        made = _utc(2026, 11, 4, 10)
+        series = Schedule.parse("DTSTART;TZID=Europe/Berlin:20261105T220000\n"
+                                "DURATION:PT2H\nRRULE:FREQ=DAILY;UNTIL=20261110T225959Z")
+        ahead = Schedule.one_off(_utc(2026, 11, 5, 9), _utc(2026, 11, 5, 11),
+                                 "Europe/Berlin")
+        now = Schedule.one_off(made, _utc(2026, 11, 4, 12), "Europe/Berlin")
+
+        def entry(schedule: Schedule) -> Pin:
+            return Pin(MAINTENANCE, "x", made, set_by="ada", schedule=schedule)
+
+        self.assertEqual(planned_of(entry(series)), "schedule")
+        self.assertEqual(planned_of(entry(ahead)), "window")
+        self.assertEqual(planned_of(entry(now)), "")
+        self.assertEqual(planned_of(entry(now), "schedule"), "schedule",
+                         "a schedule made one window stays a schedule")
+        self.assertEqual(planned_of(entry(now), "window"), "")
+        self.assertEqual(planned_of(Pin(SEEN, "", made, set_by="ada",
+                                        status=StatusCode.ERROR)), "")
 
 
 class ContextTests(TestCase):
@@ -406,6 +467,8 @@ class _Web(TestCase):
         self.tree.upsert("/db", StatusCode.ERROR,
                          {"slow": "queries are slow", "disk": "disk at 91%"},
                          members=True)
+        # the start's wiring: every pin the tree ends is recorded in its note
+        self.tree.on_pin_end(self.book.pin_ended)
 
     def _login(self) -> None:
         self.client.post("/login", data={"username": "pan", "password": "12345678"})
@@ -457,15 +520,20 @@ class PinsWriteNotesTests(_Web):
         self.client.post("/pins/maintenance", data={"path": "db", "action": "clear",
                                                 "set_at": now.token})
         self.assertIsNone(self.tree.maintenance_entry("/db"))
-        self.assertEqual(self.book.of("/db"), (note,))
+        # kept, its words as they were, and its end recorded (ADR-0145 decision 4)
+        (kept,) = self.book.of("/db")
+        self.assertEqual((kept.key, kept.text, kept.ended, kept.ended_by),
+                         (note.key, note.text, "hand", "pan"))
 
-    def test_a_pin_without_a_note_and_a_refused_pin_write_none(self):
+    def test_a_pin_without_a_note_writes_a_record_and_a_refused_one_none(self):
         self._login()
-        self._pin(note="")
-        self.assertEqual(self.book.of("/db"), ())
         refused = self._pin(note="mine", set_at="2020-01-01T00:00:00Z")
         self.assertEqual(refused.status_code, 200)
         self.assertEqual(self.book.of("/db"), ())
+        self._pin(note="")
+        (record,) = self.book.of("/db")
+        self.assertEqual((record.text, record.kind, record.created_by,
+                          record.context.code), ("", MAINTENANCE, "pan", "error"))
 
     def test_a_lines_pin_writes_the_lines_note(self):
         self._login()
@@ -476,8 +544,8 @@ class PinsWriteNotesTests(_Web):
 
 
 class NotesViewTests(_Web):
-    """The Notes view (ADR-0140): a tab after History, its count beside it, every
-    note newest first, and an admin's add and edit."""
+    """The Notes tab (ADR-0140, ADR-0145): a tab after History, its count beside it,
+    what came before newest first, and the form's note, added and edited."""
 
     def test_the_tab_stands_after_history_with_its_count_and_not_on_the_root(self):
         self._login()
@@ -502,14 +570,13 @@ class NotesViewTests(_Web):
         notes = page.all("ls-note")
         self.assertEqual([note.one("ls-note__text").text() for note in notes],
                          ["the line", "the node"])
-        said = notes[0].one("ls-note__said").text()
-        self.assertIn("On a line: queries are slow.", said)
-        self.assertIn("Written by ben", said)
+        self.assertIn("Note · on its line: queries are slow",
+                      notes[0].one("ls-entry__head").text())
+        self.assertIn("Written by ben", notes[0].one("ls-note__said").text())
         self.assertIn("<strong>node</strong>", self._page("/notes/db"))
-        link = notes[0].one("ls-note__said").one(tag="a")
+        link = notes[0].one("ls-entry__on").one(tag="a")
         self.assertEqual(link.attrs["href"], "/status/db?reason=slow#pinned-reason")
-        self.assertEqual(notes[1].one("ls-note__said").text().split(" Written")[0],
-                         "On the node.")
+        self.assertIn("Note · on the node", notes[1].one("ls-entry__head").text())
         # what the line read then, folded
         context = notes[0].one("ls-note__context")
         self.assertEqual(context.tag, "details")
@@ -539,38 +606,52 @@ class NotesViewTests(_Web):
         self._login()
         self.book.add("/db", "gone", "about a line", by="ada", context=Context(
             code="warn", lines=(ContextLine("gone", "warn", "a line once"),)))
-        said = parse(self._page("/notes/db")).one("ls-note__said")
-        self.assertIn("On a line: a line once", said.text())
-        self.assertIn("the check does not report it now", said.text())
-        self.assertEqual(said.all(tag="a"), [])
+        on = parse(self._page("/notes/db")).one("ls-entry__on")
+        self.assertIn("on its line: a line once", on.text())
+        self.assertIn("the check does not report it now", on.text())
+        self.assertEqual(on.all(tag="a"), [])
 
-    def test_a_pins_note_says_whether_its_pin_stands(self):
+    def test_a_pin_stands_in_what_stands_and_joins_the_history_as_it_ends(self):
+        # ADR-0145 decision 6: what came before is what stands no longer
         self._login()
         self._pin(note="rotating the logs")
-        said = parse(self._page("/notes/db")).one("ls-note__said").text()
-        self.assertIn("The note of a pin that stands, and changed with it.", said)
-        self.assertEqual(parse(self._page("/notes/db")).all("ls-note__edit"), [])
+        html = self._page("/notes/db")
+        page = parse(html)
+        self.assertIn("rotating the logs", page.one("ls-tab__stands").text())
+        self.assertEqual(page.all("ls-entry"), [])
+        self.assertIn('Notes <span class="ls-views__count">1</span>', html,
+                      "the tab's number counts it, standing")
         entry = self.tree.maintenance_entry("/db")
         assert entry is not None
         self.client.post("/pins/maintenance", data={"path": "db", "action": "clear",
-                                                "set_at": entry.token})
-        said = parse(self._page("/notes/db")).one("ls-note__said").text()
-        self.assertIn("The note of a pin that has ended.", said)
-        # a pin set since is another pin: the note it names is its own
+                                                    "set_at": entry.token})
+        page = parse(self._page("/notes/db"))
+        (shown,) = page.all("ls-entry")
+        self.assertIn("Maintenance · on the node", shown.one("ls-entry__head").text())
+        self.assertIn("ended: by hand, by pan", shown.one("ls-note__said").text())
+        self.assertIn(" → ", shown.one("ls-entry__when").text())
+        self.assertEqual(shown.one("ls-note__text").text(), "rotating the logs")
+        self.assertEqual(page.all("ls-note__edit"), [])
+        self.assertNotIn("rotating the logs", page.one("ls-tab__stands").text())
+        # a pin set since is another pin: it stands, and the ended one is history
         self._pin(note="rebooting")
-        said = [box.text()
-                for box in parse(self._page("/notes/db")).all("ls-note__said")]
-        self.assertIn("The note of a pin that stands, and changed with it.", said[0])
-        self.assertIn("The note of a pin that has ended.", said[1])
+        page = parse(self._page("/notes/db"))
+        self.assertIn("rebooting", page.one("ls-tab__stands").text())
+        self.assertEqual([entry.one("ls-note__text").text()
+                          for entry in page.all("ls-entry")], ["rotating the logs"])
 
     def test_an_admin_adds_a_note_on_the_node_or_a_line(self):
         self._login()
-        page = parse(self._page("/notes/db?reason=disk"))
-        add = page.with_id("add-note")
-        self.assertIn("open", add.attrs)
+        page = parse(self._page("/notes/db?reason=disk&kind=note"))
+        form = page.with_id("add-note")
+        (note,) = [each for each in form.all(tag="form")
+                   if each.attrs.get("data-kind") == "note"]
         options = {box.attrs["value"]: "selected" in box.attrs
-                   for box in add.all(tag="option")}
+                   for box in note.all(tag="option")}
         self.assertEqual(options, {"": False, "slow": False, "disk": True})
+        self.assertEqual([box.attrs["value"] for box in form.all(tag="input")
+                          if box.attrs.get("name") == "tab-kind"
+                          and "checked" in box.attrs], ["note"])
         response = self.client.post("/notes/db", data={
             "action": "add", "slug": "disk", "text": "grows 2% a week"})
         self.assertEqual(response.status_code, 302)
@@ -606,24 +687,28 @@ class NotesViewTests(_Web):
         saved = self.client.post("/notes/db", data={**fields, "text": "final"})
         self.assertEqual(saved.status_code, 302)
         self.assertEqual(self.book.of("/db")[0].text, "final")
-        # the same form again: somebody changed it since
+        # the same form again: somebody changed it since — said in its editor, with
+        # the words in it
         stale = self.client.post("/notes/db", data={**fields, "text": "mine"})
         self.assertEqual(stale.status_code, 200)
         page = parse(stale.get_data(as_text=True))
-        self.assertIn("Somebody changed this note",
-                      page.one("ls-notes__refused").text())
+        refused = page.one("ls-notes__refused")
+        self.assertIn("Somebody changed this note", refused.text())
         editor = page.one("ls-note__edit")
+        self.assertTrue(refused.within(editor))
         self.assertIn("open", editor.attrs)
         self.assertEqual(editor.one(tag="textarea").source(), "mine")
         token = [box.attrs["value"] for box in editor.all(tag="input")
                  if box.attrs["name"] == "set_at"]
         self.assertEqual(token, [self.book.of("/db")[0].token])
-        # and the older one is no longer the newest: it may not be changed
+        # and the older one is no longer the newest: it may not be changed, and the
+        # words come back in the form's note, above which it says why
         refused = self.client.post("/notes/db", data={
             "action": "edit", "key": older.key, "set_at": older.token,
             "text": "rewritten"})
         page = parse(refused.get_data(as_text=True))
         self.assertIn("A newer note was written", page.one("ls-notes__refused").text())
+        self.assertTrue(page.one("ls-notes__refused").within(page.with_id("add-note")))
         self.assertEqual(page.with_id("note-text").source(), "rewritten")
         self.assertEqual(self.book.find("/db", older.key), older)
 
@@ -631,16 +716,18 @@ class NotesViewTests(_Web):
         self._viewer()
         self.book.add("/db", "", "kept", by="ada", context=Context())
         page = parse(self._page("/notes/db"))
-        self.assertEqual(page.all("ls-notes__add"), [])
+        self.assertEqual(page.all("ls-tab__form"), [])
         self.assertEqual(page.all("ls-note__edit"), [])
+        self.assertEqual(len(page.all("ls-entry")), 1)
         self.assertEqual(self.client.post("/notes/db", data={
             "action": "add", "text": "x"}).status_code, 403)
 
     def test_a_line_leads_to_its_note(self):
+        # a line's ◇, its door, opens the tab with its form on the line (ADR-0147
+        # decision 1), where a note is written as every other kind is set
         self._login()
         page = parse(self._page("/status/db"))
-        links = [box.one(tag="a").attrs["href"]
-                 for box in page.all("rule-block__notes")]
+        links = [door.attrs["href"] for door in page.all("line-door")]
         self.assertIn("/notes/db?reason=slow#add-note", links)
 
     def test_the_view_needs_a_sign_in_and_a_node(self):
@@ -668,8 +755,8 @@ class GonePathTests(_Web):
                 notes = section.all("ls-note")
                 self.assertEqual([note.one("ls-note__text").text() for note in notes],
                                  ["replaced", "the box was retired"])
-                self.assertIn("At /gone/disk.", notes[0].one("ls-note__said").text())
-                self.assertNotIn("At ", notes[1].one("ls-note__said").text())
+                self.assertIn("At /gone/disk.", notes[0].one("ls-entry__head").text())
+                self.assertNotIn("At ", notes[1].one("ls-entry__head").text())
                 self.assertEqual(section.all("ls-note__edit"), [])
                 self.assertIn("2 notes are kept for it and beneath it",
                               section.text())
@@ -699,7 +786,7 @@ class CopyNotesTests(TestCase):
                       "2026-01-02 09:00 +00:00 — the note of a pin — on its line: "
                       "queries slow", block)
         self.assertIn("  - An index is missing.\n    \n    See T-1.", block)
-        self.assertIn("- 2 more on its Notes view: https://x/notes/db", block)
+        self.assertIn("- 2 more on its Notes tab: https://x/notes/db", block)
 
     def test_no_note_no_block(self):
         self.assertNotIn("**Notes**", format_node_markdown(self.node, self.style))
@@ -714,7 +801,7 @@ class CopyNotesTests(TestCase):
         document = format_node_markdown(tree.snapshot("/host"), self.style,
                                         notes=NotesSaid(note))
         self.assertLess(document.index("**Notes**"), document.index("**Beneath it**"))
-        self.assertNotIn("more on its Notes view", document)
+        self.assertNotIn("more on its Notes tab", document)
 
     def test_the_copy_page_carries_the_block(self):
         app_module.app.config["TESTING"] = True
@@ -730,7 +817,7 @@ class CopyNotesTests(TestCase):
             body = client.get("/copy/db").get_data(as_text=True)
         self.assertIn("newest", body)
         self.assertNotIn("older", body)
-        self.assertIn("1 more on its Notes view: http://localhost/notes/db", body)
+        self.assertIn("1 more on its Notes tab: http://localhost/notes/db", body)
 
 
 class StartTests(TestCase):
@@ -746,7 +833,8 @@ class StartTests(TestCase):
             state = StateLayer(directory)
             NoteStore(state).save(book.tables())
             engine = Engine([], StatusTree())
-            app_module._restore_notes(engine, state)
+            app_module._restore_notes(state)
+            app_module._retain_notes(engine)
             self.assertEqual(started.of("/db"), (old,))
             # written through from now on
             started.add("/web", "", "new", by="ben", context=Context())
@@ -760,6 +848,23 @@ class StartTests(TestCase):
                 engine._publish(time.monotonic())
             self.assertEqual(started.of("/db"), ())
             self.assertEqual(set(NoteStore(state).load()), {"/web"})
+
+    def test_the_start_hears_the_ends_and_the_windows_a_note_records(self):
+        tree = StatusTree()
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(app_module, "notes_book", NoteBook()) as started, \
+                mock.patch.object(app_module, "status_tree", tree):
+            app_module._restore_notes(StateLayer(directory))
+            write = tree.set_maintenance("/db", "a quick swap", set_by="ada",
+                                         expires_at=datetime.now(UTC)
+                                         + timedelta(hours=1))
+            assert write.current is not None
+            started.pinned("/db", "", write.current, Context())
+            tree.clear_maintenance("/db", by="ben")
+            (note,) = started.of("/db")
+            assert note.tally is not None
+            self.assertEqual((note.ended, note.ended_by, note.tally.windows,
+                              note.tally.ran), ("hand", "ben", 1, 1))
 
     def test_a_sweep_that_raises_is_a_line_and_the_tick_goes_on(self):
         engine = Engine([], StatusTree())

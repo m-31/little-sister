@@ -43,3 +43,8 @@ retry_attempts: 6
 # The standing second head line (card_status_line: below) — here to be seen, and
 # because the demo's short names would otherwise never show the two-line shape.
 card_status_line: below
+
+# *◇ details* (ADR-0147 decision 6) left at the library's default, off, on purpose: the
+# wall shows what a fresh install shows, a handled part its color and its mark, and the
+# band's switch turns the blocks on for this browser alone. The kiosk follows this key.
+handled_details: false

@@ -50,7 +50,7 @@
                 <div class="ls-events-filter__group" role="group" aria-label="Status">
                     {%- for word in status_words %}
                     <input class="ls-events-filter__check" type="checkbox" name="status" value="{{ word }}" id="status-{{ word }}"{% if word in statuses_on %} checked{% endif %} data-ls-submit>
-                    <label class="ls-events-filter__switch ls-events-filter__switch--{{ word }}" for="status-{{ word }}">{{ word }}</label>
+                    <label class="ls-events-filter__switch ls-events-filter__switch--{{ word }}" for="status-{{ word }}"{% if status_titles.get(word) %} title="{{ status_titles[word] }}"{% endif %}>{{ word }}</label>
                     {%- endfor %}
                 </div>
                 {#- Apart from the statuses and in neutral ink: *maintenance* is a status
@@ -140,11 +140,16 @@
                     The status word stands in a span of its own, apart from the
                     chips after it, and the page is a log (`.ls-log`), as a node's
                     History tab is: cyberpunk restates the row tints on a log and
-                    lights each row's word in its state's ink (ADR-0028). -#}
+                    lights each row's word in its state's ink (ADR-0028). A row a
+                    node's own pin or window wrote where the node neither shows nor
+                    reports anything of its own — a host's window closing — says
+                    *nothing of its own* for its word (`status_word`, ADR-0150): its
+                    tint and the *undefined* switch read its code, and that switch's
+                    title says so. -#}
                 {% for e in events %}
                     <tr class="row-{{ e.new | status_slug }}">
                         <td class="text-nowrap">{{ e.timestamp | localtime }}</td>
-                        <td><span class="ls-log__status">{{ e.new.name.lower() }}</span>{% set chip = cause_chip(e) %}{% if chip %} <span class="event-cause{% if e.cause == 'removed' %} event-cause--removed{% elif e.cause == 'reached' %} event-cause--reached{% endif %}">{{ chip }}</span>{% endif %}{% if e.suppressed_by %} <span class="event-suppressed">{{ e.suppressed_by }}</span>{% endif %}</td>
+                        <td><span class="ls-log__status">{{ status_word(e) }}</span>{% set chip = cause_chip(e) %}{% if chip %} <span class="event-cause{% if e.cause == 'removed' %} event-cause--removed{% elif e.cause == 'reached' %} event-cause--reached{% endif %}">{{ chip }}</span>{% endif %}{% if e.suppressed_by %} <span class="event-suppressed">{{ e.suppressed_by }}</span>{% endif %}</td>
                         <td class="text-muted">{% if e.path in existing_paths %}<a href="{{ url_for('status', branch=(e.path | url_branch) or none) }}">{{ e.path }}</a>{% else %}{{ e.path }}{% endif %}</td>
                         <td class="md-body">{{ e.reason | join('; ') | markdown_inline(node=e.path) }}</td>
                     </tr>

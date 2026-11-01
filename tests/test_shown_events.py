@@ -2,7 +2,7 @@
 
 The log followed the code a check reports, and what a node shows is worked out from its
 lines and their pins. So a line's pin, which wrote no event, left the log, History and
-the Time card saying what the wall did not show (backlog #89's B15):
+the Time card saying what the wall did not show:
 
 * Pinning a node's one failing line turned it ok and wrote nothing, and so did the
   pin's end.
@@ -11,10 +11,12 @@ the Time card saying what the wall did not show (backlog #89's B15):
 * A pin that ran out while the instance was down left History saying *maintenance*,
   *current*, over a node that showed *warn*.
 
-An event is written for every change of what a node shows, and none for a line by
-itself; a change of the reading that the node does not show is a row of its own, held
-back; an event carries its cause and what the check reported; and a restart replays
-nothing — the first reading is compared with what the log last showed and reported.
+An event is written for every change of what a node shows; a line's pin is a row of
+its node for its set, its edit and its end, whatever it does to what the node shows,
+every end saying why (ADR-0145 decision 9); a change of the reading that the node does
+not show is a row of its own, held back; an event carries its cause and what the check
+reported; and a restart replays nothing — the first reading is compared with what the
+log last showed and reported.
 """
 from __future__ import annotations
 
@@ -106,7 +108,9 @@ def _restarted(old: StatusTree, kept: _Kept, *,
 
 
 class LinePinTests(TestCase):
-    """A line's pin is an event where it changes what its node shows."""
+    """A line's pin is a row of its node, whatever it does to what the node shows —
+    its set, its edit and its end, one row a pin — and its end says why (ADR-0145
+    decision 9)."""
 
     def setUp(self) -> None:
         self.tree, self.kept = _tree()
@@ -130,12 +134,12 @@ class LinePinTests(TestCase):
 
     def test_its_end_writes_the_change_back(self):
         _pin(self.tree, "deploy")
-        self.tree.clear_entry_maintenance(PATH, "deploy")
+        self.tree.clear_entry_maintenance(PATH, "deploy", by="ada")
         event = _events(self.tree)[-1]
         self.assertEqual(_moved(event), (OK, ERROR))
         self.assertEqual(event.suppressed_by, "")
-        self.assertEqual(event.reason, ("deploy: error", "tests: ok"),
-                         "the node's lines again, as a node's pin ends")
+        self.assertEqual((event.reason, event.ended), (("deploy: error",), "hand"),
+                         "the line whose pin ended, as a seen's end names it, and why")
 
     def test_an_expiry_is_an_end(self):
         _write(self.tree, deploy=ERROR, tests=WARN, build=OK)
@@ -144,8 +148,13 @@ class LinePinTests(TestCase):
         count = len(_events(self.tree))
         self.tree.sweep_expired(now=datetime.now(UTC) + timedelta(hours=2))
         swept = _events(self.tree)[count:]
-        self.assertEqual([_moved(event) for event in swept], [(OK, ERROR)],
-                         "two pins of one node ran out in one sweep: one row")
+        self.assertEqual(
+            [(_moved(event), event.cause, event.reason, event.ended)
+             for event in swept],
+            [((OK, ERROR), "line-pin-ended", ("deploy: error",), "clock"),
+             ((ERROR, ERROR), "line-pin-ended", ("tests: warn",), "clock")],
+            "two pins of one node ran out in one sweep: a row each, the first the "
+            "node's change")
         self.assertIs(_shows(self.tree), ERROR)
 
     def test_the_last_line_pinned_turns_the_node_to_maintenance(self):
@@ -155,22 +164,35 @@ class LinePinTests(TestCase):
         self.tree.clear_entry_maintenance(PATH, "deploy")
         self.assertEqual(_moved(_events(self.tree)[-1]), (MAINTENANCE, ERROR))
 
-    def test_a_pin_that_changes_nothing_the_node_shows_writes_nothing(self):
+    def test_a_pin_that_changes_nothing_the_node_shows_is_a_row_all_the_same(self):
         _write(self.tree, deploy=ERROR, tests=ERROR)
         count = len(_events(self.tree))
         _pin(self.tree, "deploy")                    # one of two failing lines
         _pin(self.tree, "deploy", "a better note")   # an edit of that pin
         _pin(self.tree, "gone")                      # a line no run reports
         self.tree.clear_entry_maintenance(PATH, "gone")
-        self.assertEqual(len(_events(self.tree)), count)
+        self.assertEqual(
+            [(_moved(event), event.cause, event.reason, event.ended)
+             for event in _events(self.tree)[count:]],
+            [((ERROR, ERROR), "line-pin-set", ("deploy: error", "being reworked"), ""),
+             ((ERROR, ERROR), "line-pin-edited", ("deploy: error", "a better note"),
+              ""),
+             ((ERROR, ERROR), "line-pin-set", ("being reworked",), ""),
+             ((ERROR, ERROR), "line-pin-ended", (), "hand")],
+            "a line no run reports is named by no slug: a slug means nothing")
         self.assertIs(_shows(self.tree), ERROR)
+        self.assertEqual([period.code for period in self.tree.history(PATH)],
+                         [ERROR], "and none of them begins a period")
 
-    def test_an_edit_of_a_line_s_pin_is_no_event_either(self):
+    def test_an_edit_of_a_line_s_pin_is_a_row_of_its_own(self):
         _pin(self.tree, "deploy")
         count = len(_events(self.tree))
         self.assertTrue(_pin(self.tree, "deploy", "one more day",
                              lasts=timedelta(days=1)).applied)
-        self.assertEqual(len(_events(self.tree)), count)
+        edit, = _events(self.tree)[count:]
+        self.assertEqual((_moved(edit), edit.cause, edit.reason),
+                         ((OK, OK), "line-pin-edited",
+                          ("deploy: error", "one more day")))
 
     def test_a_pin_on_a_node_no_check_has_written_writes_nothing(self):
         tree, _ = _tree()
@@ -206,16 +228,19 @@ class LinePinTests(TestCase):
         self.assertEqual((_moved(event), event.cause),
                          ((OK, ERROR), "line-pin-ended"))
 
-    def test_a_node_s_pin_and_its_line_s_running_out_together_are_one_row(self):
-        # the node ends on what it shows without either
+    def test_a_node_s_pin_and_its_line_s_running_out_together_are_a_row_each(self):
+        # the line's first, changing nothing beneath the node's pin; then the
+        # node's, which ends on what it shows without either
         _pin(self.tree, "deploy")
         self.tree.set_maintenance(PATH, "fleet replaced",
                                   expires_at=datetime.now(UTC) + _SOON)
         count = len(_events(self.tree))
         self.tree.sweep_expired(now=datetime.now(UTC) + timedelta(hours=2))
         self.assertEqual(
-            [(_moved(event), event.cause) for event in _events(self.tree)[count:]],
-            [((MAINTENANCE, ERROR), "pin-ended")])
+            [(_moved(event), event.cause, event.ended)
+             for event in _events(self.tree)[count:]],
+            [((MAINTENANCE, MAINTENANCE), "line-pin-ended", "clock"),
+             ((MAINTENANCE, ERROR), "pin-ended", "clock")])
 
 
 class NodePinTests(TestCase):
@@ -555,8 +580,9 @@ class RestartTests(TestCase):
         self.assertEqual(count, len(old.recent_events()), "nothing at the restart")
         self.assertTrue(_write(new, deploy=ERROR, tests=OK))
         event, = self._since(new, count)
-        self.assertEqual((_moved(event), event.cause, event.suppressed_by),
-                         ((OK, ERROR), "line-pin-ended", ""))
+        self.assertEqual((_moved(event), event.cause, event.suppressed_by,
+                          event.ended),
+                         ((OK, ERROR), "line-pin-ended", "", "clock"))
         node = new.snapshot(PATH)
         assert node is not None
         self.assertEqual(event.timestamp, node.timestamp,
@@ -570,8 +596,12 @@ class RestartTests(TestCase):
         new = _restarted(old, kept, after=timedelta(hours=5))
         count = len(new.recent_events())
         _write(new, deploy=OK, tests=ERROR)
-        event, = self._since(new, count)
-        self.assertEqual((_moved(event), event.cause), ((OK, ERROR), "reading"))
+        self.assertEqual(
+            [(_moved(event), event.cause, event.ended)
+             for event in self._since(new, count)],
+            [((OK, ERROR), "reading", ""),
+             ((ERROR, ERROR), "line-pin-ended", "clock")],
+            "and the pin's end a row of its own, changing nothing more")
 
     def test_a_node_s_pin_that_ran_out_ends_at_the_first_reading(self):
         # it wrote nothing, and History said maintenance over a node showing warn
@@ -583,8 +613,9 @@ class RestartTests(TestCase):
         self.assertIsNone(new.maintenance_entry("/db"))
         self.assertTrue(new.upsert("/db", WARN, "lagging"))
         event, = self._since(new, count)
-        self.assertEqual((_moved(event), event.cause, event.suppressed_by),
-                         ((MAINTENANCE, WARN), "pin-ended", ""))
+        self.assertEqual((_moved(event), event.cause, event.suppressed_by,
+                          event.ended),
+                         ((MAINTENANCE, WARN), "pin-ended", "", "clock"))
         self.assertEqual([period.code for period in new.history("/db")],
                          [WARN, MAINTENANCE, WARN])
 
@@ -599,8 +630,8 @@ class RestartTests(TestCase):
         new = _restarted(old, kept, after=timedelta(hours=5))
         event = new.recent_events()[-1]
         self.assertEqual(
-            (event.path, _moved(event), event.cause, event.reported),
-            ("/hosts/a", (MAINTENANCE, UNDEFINED), "pin-ended", UNDEFINED))
+            (event.path, _moved(event), event.cause, event.reported, event.ended),
+            ("/hosts/a", (MAINTENANCE, UNDEFINED), "pin-ended", UNDEFINED, "clock"))
         self.assertEqual(event.timestamp, pin.expires_at,
                          "the pin's own end: nothing else is claimed")
         self.assertIsNone(new.snapshot("/hosts/a"), "and no node is made for it")
@@ -636,9 +667,13 @@ class RestartTests(TestCase):
         new = _restarted(old, kept, after=timedelta(hours=5))
         count = len(new.recent_events())
         _write(new, deploy=ERROR, tests=WARN, build=OK)
-        event, = self._since(new, count)
-        self.assertEqual((_moved(event), event.cause),
-                         ((OK, ERROR), "line-pin-ended"))
+        self.assertEqual(
+            [(_moved(event), event.cause, event.reason, event.ended)
+             for event in self._since(new, count)],
+            [((OK, ERROR), "line-pin-ended", ("deploy: error", "tests: warn",
+                                              "build: ok"), "clock"),
+             ((ERROR, ERROR), "line-pin-ended", ("tests: warn",), "clock")],
+            "a row each: the first the node's change, the second its own")
 
     def test_a_node_s_pin_and_a_line_s_that_ran_out_end_as_the_node_s(self):
         old, kept = _tree()
@@ -649,9 +684,12 @@ class RestartTests(TestCase):
         new = _restarted(old, kept, after=timedelta(hours=5))
         count = len(new.recent_events())
         _write(new, deploy=ERROR, tests=OK)
-        event, = self._since(new, count)
-        self.assertEqual((_moved(event), event.cause),
-                         ((MAINTENANCE, ERROR), "pin-ended"))
+        self.assertEqual(
+            [(_moved(event), event.cause, event.ended)
+             for event in self._since(new, count)],
+            [((MAINTENANCE, ERROR), "pin-ended", "clock"),
+             ((ERROR, ERROR), "line-pin-ended", "clock")],
+            "the node's end the change, the line's a row of its own")
 
     def test_a_branch_s_pin_in_force_across_it_writes_nothing(self):
         old, kept = _tree()
@@ -818,10 +856,11 @@ class EventsPageTests(_Pages):
         self.tree.set_maintenance(PATH, "planned", expires_at=soon)
         self.tree.clear_maintenance(PATH)
         self.assertEqual(self._rows(), [
-            ("error maintenance ended", ["maintenance ended"], []),
+            ("error maintenance ended · by hand", ["maintenance ended · by hand"], []),
             ("maintenance edited", ["edited"], []),
             ("maintenance set", ["set"], []),
-            ("error line's maintenance ended", ["line's maintenance ended"], []),
+            ("error line's maintenance ended · by hand",
+             ["line's maintenance ended · by hand"], []),
             ("ok line's pin set", ["line's pin set"], []),
             ("error", [], [])])
 
@@ -832,6 +871,7 @@ class EventsPageTests(_Pages):
         self.assertEqual(self._rows(), [
             ("error maintenance", [], ["maintenance"]),
             ("warn", [], []),
+            ("ok line's pin set", ["line's pin set"], []),
             ("ok", [], [])])
         self.assertEqual(self._rows("/events?held=yes"),
                          [("error maintenance", [], ["maintenance"])],

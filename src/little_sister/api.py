@@ -24,21 +24,23 @@ from datetime import datetime
 from typing import Any
 
 from little_sister import instants
-from little_sister.aggregation import AggregationRule
-from little_sister.codes import StatusCode
+from little_sister.aggregation import Table
 from little_sister.measures import Measure
-from little_sister.pins import MAINTENANCE, Pin
+from little_sister.pins import DONE, MAINTENANCE, SEEN, Pin
+from little_sister.schedule import Window
 from little_sister.secrets import same_secret
 from little_sister.series import Placed
 from little_sister.tree import (
-    ACCEPTED,
     AGGREGATION_RULE,
-    MAINTENANCE_RULE,
-    SEEN_RULE,
+    EntryWords,
+    NodeNotReported,
     Period,
+    Planned,
     ReasonLine,
     RuleAt,
     StatusSnapshot,
+    acknowledged_table,
+    line_contribution,
     lines_rules,
 )
 
@@ -59,15 +61,19 @@ def _pin(pin: Pin) -> dict[str, Any]:
     a person set it, its note, who set it last and when and who first did, when it
     ends — null where it has no end, a *seen* given none — and what it makes its part
     count as, in the notation a configured rule's table is written in: a maintenance
-    pin's part counting ``nothing``, a seen one's failure counting ``OK``. Both dates
-    ship, because both are kept: ``set_*`` is the last write, ``created_*`` the first,
-    and a pin whose creation was never recorded reads its set, so the pair is always
-    present and never guessed at here.
+    pin's part counting ``nothing``, a seen one's failure counting ``OK``, and a
+    silenced one's by its level (ADR-0144) — every failure ``OK``, or an error
+    ``WARN``. Both dates ship, because both are kept: ``set_*`` is the last write,
+    ``created_*`` the first, and a pin whose creation was never recorded reads its set,
+    so the pair is always present and never guessed at here.
 
-    **An acknowledgment adds what it is bound to** (ADR-0142): the ``status`` it was
-    set at, which a worse one ends, and the ``occurrence`` of the failure it accepted
-    — the line's, its type's field or its reading's identity — null where it is bound
-    to the failing stretch it was set in."""
+    **A seen adds what it is bound to** (ADR-0142): the ``status`` it was set at,
+    which a worse one ends, and the ``occurrence`` of the failure it accepted — the
+    line's, its type's field or its reading's identity — null where it is bound to the
+    failing stretch it was set in. **So does a done** (ADR-0146): ``status``, the
+    failure it closed, and the ``occurrence`` of the event it closed, which it always
+    has; it has no end, its ``expires_at`` null. A silence is bound to its deadline
+    and its level, which ``expires_at`` and ``counts_as`` say already."""
     said: dict[str, Any] = {
         "id": pin.id,
         "kind": pin.kind,
@@ -80,12 +86,52 @@ def _pin(pin: Pin) -> dict[str, Any]:
         "expires_at": (None if pin.expires_at is None
                        else instants.stamp(pin.expires_at)),
         "counts_as": ("nothing" if pin.kind == MAINTENANCE
-                      else {key.name: value.name for key, value in ACCEPTED.entries}),
+                      else _table(acknowledged_table(pin))),
     }
-    if pin.acknowledgment:
+    if pin.kind in (SEEN, DONE):
         said["status"] = None if pin.status is None else pin.status.name
         said["occurrence"] = pin.occurrence or None
     return said
+
+
+def _held(pin: Pin, window: Window | None, words: EntryWords) -> dict[str, Any]:
+    """A pin as ``handled`` lists it, a maintenance one with its window open
+    (ADR-0150, 3.1.0): ``starts_at`` and ``expires_at`` that window's — a one-off's
+    start and its end — ``until`` its schedule's end, the last window its text writes,
+    which is the entry's, and ``sentence``, the entry in the words its page says it
+    in, the deployment's zone and time format: a client shows *every Saturday* as the
+    page does, and computes nothing (ADR-0080 decision 1)."""
+    said = _pin(pin)
+    if pin.kind != MAINTENANCE:
+        return said
+    counts_as = said.pop("counts_as")
+    assert pin.expires_at is not None and pin.schedule is not None
+    start, end = ((pin.schedule.starts_at, pin.expires_at) if window is None
+                  else (window.start, window.end))
+    return {**said, "starts_at": instants.stamp(start),
+            "expires_at": instants.stamp(end), "until": instants.stamp(pin.expires_at),
+            "sentence": words.sentence(pin), "counts_as": counts_as}
+
+
+def _planned(planned: Planned, words: EntryWords, *,
+             slug: str | None = None) -> dict[str, Any]:
+    """A maintenance entry that stands and holds nothing now, as ``planned`` lists it
+    (ADR-0150, 3.1.0): the pin's fields as ``handled`` gives them, with no
+    ``counts_as`` — it counts nothing until a window opens — and its next window,
+    ``starts_at`` and ``expires_at``, both null where none is to open; ``until``, its
+    schedule's end; ``sentence``; and ``why``, the page's words for why no window is to
+    open or from when its windows stop, null where nothing stops them. A line's
+    carries its ``slug`` where a node lists it."""
+    said = _pin(planned.pin)
+    del said["counts_as"]
+    upcoming = planned.next
+    assert planned.pin.expires_at is not None
+    return {**({} if slug is None else {"slug": slug}), **said,
+            "starts_at": None if upcoming is None else instants.stamp(upcoming.start),
+            "expires_at": None if upcoming is None else instants.stamp(upcoming.end),
+            "until": instants.stamp(planned.pin.expires_at),
+            "sentence": words.sentence(planned.pin),
+            "why": words.why(planned) or None}
 
 
 def _configured(at: RuleAt) -> dict[str, Any]:
@@ -104,7 +150,7 @@ def _configured(at: RuleAt) -> dict[str, Any]:
         "file": str(rule.file),
         "since": rule.since.isoformat(),
         "level": rule.level,
-        "counts_as": _table(rule),
+        "counts_as": _table(rule.table),
     }
     named = rule.lines if rule.level == "lines" else rule.children
     if named is not None:
@@ -115,10 +161,10 @@ def _configured(at: RuleAt) -> dict[str, Any]:
     return said
 
 
-def _table(rule: AggregationRule) -> dict[str, str] | str:
-    """A configured rule's table in the notation ``config/aggregation.yaml`` writes
-    it in: ``nothing``, or each status it names with what that counts as."""
-    table = rule.table
+def _table(table: Table) -> dict[str, str] | str:
+    """A table — a configured rule's, or what a person's acknowledgment makes of its
+    part — in the notation ``config/aggregation.yaml`` writes it in: ``nothing``, or
+    each status it names with what that counts as."""
     if table.left_out:
         return "nothing"
     return {key.name: value.name for key, value in table.entries}
@@ -130,14 +176,15 @@ def _acting(at: RuleAt | None) -> bool:
     return at is not None and at.changes
 
 
-def _handled(snapshot: StatusSnapshot) -> list[dict[str, Any]]:
-    """What handles a node now (ADR-0141 decision 3): a person's pin while it stands,
+def _handled(snapshot: StatusSnapshot, words: EntryWords) -> list[dict[str, Any]]:
+    """What handles a node now (ADR-0141 decision 3): a person's pin while it holds,
     and a configured rule while it changes what counts — on what the node passes up,
     on how its parent counts it among its children, on how its children count, on
     how its lines count. Empty on most nodes."""
     handled: list[dict[str, Any]] = []
     if snapshot.maintenance_entry is not None:
-        handled.append(_pin(snapshot.maintenance_entry))
+        handled.append(_held(snapshot.maintenance_entry, snapshot.maintenance_window,
+                             words))
     if snapshot.acknowledgment is not None:
         handled.append(_pin(snapshot.acknowledgment))
     for at in (snapshot.rule, snapshot.parent_rule, snapshot.children_rule):
@@ -148,12 +195,12 @@ def _handled(snapshot: StatusSnapshot) -> list[dict[str, Any]]:
     return handled
 
 
-def _line_handled(line: ReasonLine) -> list[dict[str, Any]]:
+def _line_handled(line: ReasonLine, words: EntryWords) -> list[dict[str, Any]]:
     """What handles one of a node's lines now: its pin, its acknowledgment, and a
     configured rule on the node's lines while it changes how the line counts."""
     handled: list[dict[str, Any]] = []
     if line.maintenance is not None:
-        handled.append(_pin(line.maintenance))
+        handled.append(_held(line.maintenance, line.window, words))
     if line.acknowledgment is not None:
         handled.append(_pin(line.acknowledgment))
     if _acting(line.rule):
@@ -162,7 +209,8 @@ def _line_handled(line: ReasonLine) -> list[dict[str, Any]]:
     return handled
 
 
-def _entry(line: ReasonLine, node: StatusSnapshot) -> dict[str, Any]:
+def _entry(line: ReasonLine, node: StatusSnapshot,
+           words: EntryWords) -> dict[str, Any]:
     """One of a node's entries: its key, its text, whatever code and pin it carries.
 
     ``code`` is ``None`` where the entry carries the node's rather than one of its
@@ -202,7 +250,9 @@ def _entry(line: ReasonLine, node: StatusSnapshot) -> dict[str, Any]:
 
     ``handled`` is 3.0.0's, where the pin's own object stood: what handles the line
     now, a list as a node's is. A *seen* on the line is among them, and makes its
-    ``contribution`` ``OK`` by ``seen`` while it reads a failure (ADR-0142).
+    ``contribution`` ``OK`` by ``seen`` while it reads a failure (ADR-0142); a *done*
+    makes it ``OK`` by ``done`` (ADR-0146), the line's ``code`` staying what its check
+    declared, as a pinned line's does.
     """
     return {
         "slug": line.slug,
@@ -214,7 +264,7 @@ def _entry(line: ReasonLine, node: StatusSnapshot) -> dict[str, Any]:
         "refused": line.refused or None,
         "form": line.form or None,
         "grading": line.grading or None,
-        "handled": _line_handled(line),
+        "handled": _line_handled(line, words),
         "contribution": _line_contribution(line, node),
     }
 
@@ -222,35 +272,88 @@ def _entry(line: ReasonLine, node: StatusSnapshot) -> dict[str, Any]:
 def _line_contribution(line: ReasonLine,
                        node: StatusSnapshot) -> dict[str, Any] | None:
     """What a line's node counted of it, and why, where that is not the line as it
-    reads (ADR-0137): a pin counts nothing of it, a person's acknowledgment counts
-    its failure as OK (ADR-0142), and a configured rule what its table makes of
-    it."""
-    if line.maintenance is not None:
-        return {"code": None, "by": MAINTENANCE_RULE, "rule": line.maintenance.id}
-    if line.acknowledgment is not None:
-        reads = line.code if line.code is not None else node.reported_code
-        if reads in (StatusCode.WARN, StatusCode.ERROR):
-            return {"code": StatusCode.OK.name, "by": SEEN_RULE,
-                    "rule": line.acknowledgment.id}
+    reads (ADR-0137): :func:`~little_sister.tree.line_contribution`, the one
+    derivation a line's rail draws too (ADR-0143)."""
+    contribution = line_contribution(line, node)
+    if contribution is None:
         return None
-    if line.rule is None or not line.rule.changes:
-        return None
-    counts = line.rule.counts
-    return {"code": None if counts is None else counts.name, "by": AGGREGATION_RULE,
-            "rule": line.rule.rule.name}
+    code = contribution.code
+    return {"code": None if code is None else code.name, "by": contribution.by,
+            "rule": contribution.rule}
 
 
-def _entries(snapshot: StatusSnapshot) -> dict[str, Any]:
+def _not_reported(line: ReasonLine, words: EntryWords) -> dict[str, Any]:
+    """An entry the node does not report now, and what stands on or is planned for
+    it: its ``slug``, ``handled`` and ``planned``, either of the two empty."""
+    return {"slug": line.slug, "handled": _line_handled(line, words),
+            "planned": [] if line.planned is None else [_planned(line.planned, words)]}
+
+
+def _planned_on(snapshot: StatusSnapshot, words: EntryWords) -> list[dict[str, Any]]:
+    """What is planned for a node and for the lines it reports (3.1.0): its own entry
+    that stands and holds nothing now, and its lines', each with its ``slug``, the
+    soonest window first, then the one with none to open; never among ``handled``,
+    an entry standing in one place at a time."""
+    found: list[tuple[str | None, Planned]] = []
+    if snapshot.planned_entry is not None:
+        found.append((None, snapshot.planned_entry))
+    found += [(line.slug, line.planned) for line in snapshot.reasons
+              if line.planned is not None]
+    found.sort(key=lambda item: _soonest(item[1]))
+    return [_planned(planned, words, slug=slug) for slug, planned in found]
+
+
+def _soonest(planned: Planned) -> tuple[int, Any]:
+    """Planned entries the soonest next window first, then those with none to open by
+    when they were first set."""
+    if planned.next is not None:
+        return 0, planned.next.start
+    return 1, planned.pin.created_at
+
+
+def _entries(snapshot: StatusSnapshot, words: EntryWords) -> dict[str, Any]:
     """A node's entries, as an object rather than an array of strings.
 
     ``addressable`` is the snapshot's ``members``: whether these items may be pinned
     one by one (ADR-0036). Prose and members are different things, and the array of
     bare strings could say which only by convention. Order is the check's own and is
     never sorted.
+
+    ``not_reported`` is 3.1.0's: each entry that something stands on or is planned
+    for and that the node does not report now — a finding that comes and goes, or
+    every entry of a node whose check failed — its ``slug``, what stands on it,
+    ``handled``, and its entry planned, ``planned``, in the order they were set.
+    Never among ``items``, being no entry now: what stands on one holds nothing until
+    it is reported again (ADR-0036 decision 6). The page says it, *A line not
+    reported now*, so the envelope does (ADR-0080 decision 1), from the same snapshot
+    (``StatusSnapshot.not_reported``).
     """
     return {
         "addressable": snapshot.members,
-        "items": [_entry(line, snapshot) for line in snapshot.reasons],
+        "items": [_entry(line, snapshot, words) for line in snapshot.reasons],
+        "not_reported": [_not_reported(line, words)
+                         for line in snapshot.not_reported],
+    }
+
+
+def _node_not_reported(gone: NodeNotReported, words: EntryWords) -> dict[str, Any]:
+    """A node no node stands at now, beneath the node that lists it, and what stands
+    on or is planned for it (3.1.0): its ``path``; what stands on the node itself,
+    ``handled``, its pin and a person's acknowledgment as a node's ``handled`` lists
+    them; its own entry planned, ``planned``, as a node's lists it; and what stands on
+    or is planned for its lines, ``not_reported``, as a node's ``entries`` lists a line
+    it does not report now, in the order it was set — any of the three empty
+    (``StatusSnapshot.nodes_not_reported``)."""
+    handled = [] if gone.maintenance_entry is None else [
+        _held(gone.maintenance_entry, gone.maintenance_window, words)]
+    if gone.acknowledgment is not None:
+        handled.append(_pin(gone.acknowledgment))
+    return {
+        "path": gone.path,
+        "handled": handled,
+        "planned": ([] if gone.planned_entry is None
+                    else [_planned(gone.planned_entry, words)]),
+        "not_reported": [_not_reported(line, words) for line in gone.not_reported],
     }
 
 
@@ -326,8 +429,14 @@ def _contribution(snapshot: StatusSnapshot) -> dict[str, Any] | None:
 Handbooks = Callable[[str], str]
 
 
+#: How an entry is said where no surface said how — an instant as RFC 3339 UTC, the
+#: zone UTC's: what an envelope built with no page behind it, as a test's, writes.
+PLAIN_WORDS = EntryWords(instants.stamp, "UTC")
+
+
 def snapshot_to_dict(snapshot: StatusSnapshot, *,
-                     handbooks: Handbooks | None = None) -> dict[str, Any]:
+                     handbooks: Handbooks | None = None,
+                     words: EntryWords = PLAIN_WORDS) -> dict[str, Any]:
     """Serialize a status snapshot subtree to the ADR-0080 JSON shape.
 
     The three statuses are ADR-0032's, under their own names: ``reported`` is what the
@@ -368,6 +477,20 @@ def snapshot_to_dict(snapshot: StatusSnapshot, *,
     that carries none. Unlike the details they are the node's whole set, so that a
     client asks whether a node carries a tag of the node in hand, in a subtree fetched
     by its path too, whose root's nodes above are not in the response.
+
+    **What stands on a node not reported now** stands beside the nearest node above it
+    that stands, ``nodes_not_reported``, next to its ``children`` and never among them
+    (3.1.0): each such node's ``path``, what stands on it and on its lines — its check
+    no longer reports it, or has not written it since the instance started, and what
+    stands on it holds nothing until it is reported again. The page lists it there,
+    and the snapshot it lists it from carries it, so the envelope does (ADR-0080
+    decision 1). Empty on most nodes.
+
+    **What is planned for a node stands beside what handles it** (3.1.0, ADR-0150):
+    ``planned``, its own maintenance entry that stands and holds nothing now and its
+    lines', with the next window of each, never among ``handled`` — and every
+    maintenance pin in ``handled`` carries its window open. Each says itself in
+    ``words``, the page's: the deployment's zone and time format.
     """
     return {
         "path": snapshot.path,
@@ -392,7 +515,8 @@ def snapshot_to_dict(snapshot: StatusSnapshot, *,
         "report": snapshot.report,
         "order": snapshot.order,
         "show_when_quiet": snapshot.show_when_quiet,
-        "handled": _handled(snapshot),
+        "handled": _handled(snapshot, words),
+        "planned": _planned_on(snapshot, words),
         "stale": snapshot.stale,
         # **What this node's check measured, and the object it measured**
         # (ADR-0085). The object's own identifier rather than the node's path,
@@ -410,17 +534,21 @@ def snapshot_to_dict(snapshot: StatusSnapshot, *,
         "shielded_by": snapshot.shielded_by,
         "changes": snapshot.changes,
         **({} if (run := _run(snapshot)) is None else {"run": run}),
-        "entries": _entries(snapshot),
-        "children": [snapshot_to_dict(child, handbooks=handbooks)
+        "entries": _entries(snapshot, words),
+        "children": [snapshot_to_dict(child, handbooks=handbooks, words=words)
                      for child in snapshot.children],
+        "nodes_not_reported": [_node_not_reported(gone, words)
+                               for gone in snapshot.nodes_not_reported],
     }
 
 
 def status_envelope(snapshot: StatusSnapshot, *, version: str = "",
                     engine: str = "", now: datetime | None = None,
-                    handbooks: Handbooks | None = None) -> dict[str, Any]:
+                    handbooks: Handbooks | None = None,
+                    words: EntryWords = PLAIN_WORDS) -> dict[str, Any]:
     """Wrap a serialized snapshot in the versioned response envelope — each node's
-    handbook addressed by ``handbooks``, where one is (:func:`snapshot_to_dict`).
+    handbook addressed by ``handbooks``, where one is, and each maintenance entry
+    said in ``words``, the page's (:func:`snapshot_to_dict`).
 
     ``generated_at`` is the serving instance's clock (UTC) at snapshot time, and
     ``instance`` says who answered — the version and the engine's state, the two facts
@@ -432,7 +560,7 @@ def status_envelope(snapshot: StatusSnapshot, *, version: str = "",
         "schema_version": SCHEMA_VERSION,
         "generated_at": instants.stamp(now or instants.now()),
         "instance": {"version": version, "engine": engine},
-        "status": snapshot_to_dict(snapshot, handbooks=handbooks),
+        "status": snapshot_to_dict(snapshot, handbooks=handbooks, words=words),
     }
 
 

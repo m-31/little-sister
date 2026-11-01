@@ -1,7 +1,7 @@
 # ADR-0031 — One deployment config directory, split by aspect
 
 - **Status:** Accepted
-- **Date:** 2026-10-25 (accepted 2026-08-01)
+- **Date:** 2026-11-01 (accepted 2026-08-01)
 - **Related:** [ADR-0015](0015-check-discovery-union.md) (the path-list this generalizes),
   [ADR-0012](0012-node-metadata.md) (`nodes.yaml`, the first non-check tenant),
   [ADR-0030](0030-curated-links.md) (`links.yaml`, the third),
@@ -21,7 +21,9 @@
   [ADR-0048](0048-an-assembled-content-security-policy.md) (decision 5: the `csp`
   aspect), each a root's to add to,
   [ADR-0035](0035-registering-a-config-aspect.md) (the seam through which a dependent
-  package registers an aspect of its own).
+  package registers an aspect of its own),
+  [ADR-0149](0149-a-deployments-holidays-are-named-lists-of-the-days-nobody-works.md) (the `holidays`
+  aspect — decisions 2 and 4 amended).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -77,10 +79,13 @@ two of them."
    decision 3). `aggregation`, the deployment's configured rules, which say how a part
    of the tree counts above it
    ([ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)
-   decision 2), and `tags`, the known tags, each with a line of what it means, which
-   gives no node a tag
+   decision 2), `tags`, the known tags, each with a line of what it means, which gives
+   no node a tag
    ([ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md) decision 3),
-   are always a file.
+   and `holidays`, the deployment's holidays — named lists of the days nobody works, read
+   by `little_sister.holidays`
+   ([ADR-0149](0149-a-deployments-holidays-are-named-lists-of-the-days-nobody-works.md)
+   decision 1) — are always a file.
 
    ```
    config/
@@ -89,6 +94,7 @@ two of them."
      aggregation.yaml   the configured rules
      csp.yaml           what the deployment adds to the content policy
      handbook/          the handbooks, one Markdown file each
+     holidays.yaml      the holidays, named lists of the days nobody works
      links.yaml         curated links
      nodes.yaml         node metadata
      settings.yaml      the settings, once config.yaml
@@ -135,6 +141,7 @@ two of them."
    | `settings.yaml` | shallow merge, later root wins **per key** — the file is a flat mapping of scalars, so this is well defined |
    | `aggregation.yaml` | every root's file read, the root named last first, so that a site's root decides where it and a shared base pick one place — a later root winning, as everywhere else in the chain; a rule's name is unique across them ([ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md) decision 2) |
    | `tags.yaml` | every root's file read and added up, the later root's line winning for a tag two of them name, each tag keeping the place it was first named in ([ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md) decision 3) |
+   | `holidays.yaml` | every root's file read, a list named in two of them the later root's, whole, in the place it was first named in, and `default` the later root's; a root's file that cannot be read leaves every list unreadable ([ADR-0149](0149-a-deployments-holidays-are-named-lists-of-the-days-nobody-works.md) decisions 3 and 4) |
    | `csp.yaml` | union: a site root adds its sources, and there is nothing to overwrite ([ADR-0048](0048-an-assembled-content-security-policy.md) decision 5) |
    | `users.yaml` | the **first** root that declares it wins entirely; a second is a warning |
 
@@ -233,11 +240,14 @@ two of them."
    ([ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
    decision 3); so is what cannot be read in `tags.yaml`, a tag being a node's metadata
    too ([ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md)
-   decision 3), and a rule in `aggregation.yaml` that cannot apply, the alarm it was to
+   decision 3), a rule in `aggregation.yaml` that cannot apply, the alarm it was to
    quiet staying
    ([ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)
-   decision 2). The program never writes `aggregation.yaml`, as it writes nothing in
-   `config/` (decision 6).
+   decision 2), and what cannot be read in `holidays.yaml`, a list that cannot be read
+   applying nowhere
+   ([ADR-0149](0149-a-deployments-holidays-are-named-lists-of-the-days-nobody-works.md)
+   decision 3). The program never writes `aggregation.yaml` or `holidays.yaml`, as it
+   writes nothing in `config/` (decision 6).
 
 8. **The override ladder is the house pattern.** Three features now share one shape —
    scripts ([ADR-0021](0021-script-resolution.md)), icons

@@ -137,10 +137,13 @@ _ENTERING_KEY = "identity_door"
 
 
 #: The acts a person may be let do, one permission each, by the name of the kind of pin
-#: the act sets (ADR-0141 decision 4) — planning maintenance, and marking a failure seen
-#: (ADR-0142): every one an admin's, until roles map onto them (backlog #59) — which
-#: makes that a mapping rather than a rewrite of every route.
-PERMISSIONS: frozenset[str] = frozenset({"maintenance", "seen"})
+#: the act sets (ADR-0141 decision 4) — planning maintenance, marking a failure seen
+#: (ADR-0142), silencing one (ADR-0144) and closing an event as done (ADR-0146) — and
+#: writing a note, a kind of the *Notes* tab's form beside them (ADR-0145 decision 3):
+#: every one an admin's, until roles map onto them — which makes that a mapping
+#: rather than a rewrite of every route.
+PERMISSIONS: frozenset[str] = frozenset({"maintenance", "seen", "silenced", "done",
+                                         "note"})
 
 
 class _Unset:

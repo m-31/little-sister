@@ -1,7 +1,7 @@
 """A period is a run of events that show the same status (ADR-0099).
 
 What a pin did to its node's periods, found in walking the built block on a running
-deployment (backlog #89's B9):
+deployment:
 
 * An edit of the pin writes an event, deliberately (ADR-0014 decision 9), and every
   event began a period: a node silenced at 11:19:02 and edited at 11:20:44 read

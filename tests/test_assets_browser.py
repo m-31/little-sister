@@ -4,7 +4,7 @@
 That a page states a digest and every part it fetches states one is a response's to
 show, and ``tests/test_hashed_assets.py`` holds it. What a running page does when
 the two differ is a browser's: it reloads, once for a digest, and waits for an open
-editor as every refresh does.
+editor or the drawer as every refresh does.
 
 Served by a real server to headless Chromium, with the page's clock in the test's
 hand. Skipped wherever Playwright or a Chromium binary is unavailable, so the
@@ -122,24 +122,23 @@ class StaleAssetsBrowserTests(_BrowserCase):
         self.assertFalse(self._marked())
         self.assertIsNone(self.page.evaluate(_GRID_CHANGED))
 
-    def test_it_waits_for_an_open_editor(self) -> None:
+    def test_it_waits_for_the_drawer_as_for_an_open_editor(self) -> None:
+        # what the drawer holds stays: the page neither swaps nor reloads under it
+        # (ADR-0147 decision 4)
         card = self.page.locator(".status-card").filter(
             has=self.page.locator('.status-card__head[data-path="/hemulen"]'))
-        card.locator('.status-card__head [data-control="pin"]').click()
-        self.page.wait_for_function(
-            "document.activeElement !== null"
-            " && document.activeElement.name === 'note'")
-        self.page.keyboard.type("half a sentence")
+        card.locator('.status-card__head [data-control="door"]').click()
+        self.page.wait_for_function("document.getElementById('ls-drawer').open")
         self._upgrade()
         before = len(self.asked)
         self.page.clock.run_for(30_000)
         self.page.wait_for_timeout(100)
         self.assertEqual(len(self.asked), before)
         self.assertTrue(self._marked())
-        self.assertEqual(self.page.evaluate("document.activeElement.value"),
-                         "half a sentence")
-        # the editor closes, and the next tick finds the difference
-        self.page.keyboard.press("Escape")
+        self.assertTrue(self.page.evaluate("document.getElementById('ls-drawer').open"))
+        # the drawer closes, and the next tick finds the difference
+        self.page.locator(".ls-drawer__close").click()
+        self.page.wait_for_function("!document.getElementById('ls-drawer').open")
         self._tick()
         self.page.wait_for_function(f"{_SAYS} === '{_NEWER}'")
         self.assertFalse(self._marked())

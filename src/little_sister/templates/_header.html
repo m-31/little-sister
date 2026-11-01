@@ -1,4 +1,10 @@
     <meta charset="utf-8">
+    {#- The *Notes* tab's panel mode, the page the drawer frames over the wall
+        (ADR-0147 decision 3): its links leave the frame, here, and its forms stay in
+        it, each saying so (`in_frame`). -#}
+    {%- if panel %}
+    <base target="_top">
+    {%- endif %}
     {#- The device's own width, at its own scale. Without it a phone lays the page
         out 980 pixels wide and scales that to its screen, and none of the narrow
         layouts is ever reached. Nothing is said about zooming, which stays the
@@ -62,11 +68,16 @@
     cookie; `kiosk` is the third, and the one this file branches on rather than
     leaving to CSS. Each look of `looks.py` is an attribute of its own, the
     browser's choice or the deployment's default, which the stylesheet and the
-    scripts read — the theme first, `data-ls-theme`. -#}
+    scripts read — the theme first, `data-ls-theme`. The panel the drawer frames
+    says so, `data-ls-panel`, and `data-ls-mine` where it holds words somebody
+    wrote that a write did not take — a refusal's, given back, or a maintenance
+    editor's preview (`previewing`, ADR-0150, landing 4) — which a close of the
+    drawer asks before it drops (ADR-0147 decision 5). -#}
 <body
       {%- for look in looks %} {{ look.attribute }}="{{ look_values[look.key] }}"{% endfor %} data-ls-layout="{{ layout }}"
       {%- if card_status_line == 'below' %} data-ls-card-state="below"{% endif %}
-      {%- if bs_theme %} data-bs-theme="{{ bs_theme }}"{% endif %}>
+      {%- if bs_theme %} data-bs-theme="{{ bs_theme }}"{% endif %}
+      {%- if panel %} data-ls-panel{% if mine | default('') or previewing | default(false) %} data-ls-mine{% endif %}{% endif %}>
 {#- Resolving the `auto` theme before first paint. Why it exists and why it has to
     be inline are in the partial; it is shared with the login page, which includes no
     header, so the two documents spend one hash between them rather than two. -#}
@@ -75,8 +86,8 @@
     — a wall display has nothing to click — so this is the one layout the server
     branches on instead of leaving to CSS. Its own line is emitted inside the page
     below, and _kiosk_line.html carries the freshness stamp the bar has no room
-    for. -#}
-{% if layout != 'kiosk' %}
+    for. The panel the drawer frames has neither: the wall it stands over has them. -#}
+{% if layout != 'kiosk' and not panel %}
 {#- No `navbar-light`: it pins Bootstrap's navbar variables to light values, which
     would survive `data-bs-theme: dark` and leave a dark theme with a light bar.
     Without it the navbar follows the theme, and the light themes are unchanged. -#}
@@ -109,8 +120,9 @@
 {% endif %}
 {# A failed engine start must not hide in the log: while the engine is down the
    tree is empty, so this persistent alert is the page's only truthful signal.
-   It reaches the kiosk too — an unattended screen is where it matters most. #}
-{% if engine_error %}
+   It reaches the kiosk too — an unattended screen is where it matters most. The
+   panel the drawer frames leaves it to the page it stands over, which says it. #}
+{% if engine_error and not panel %}
 <div class="container-fluid mt-3 px-4">
     <div class="alert alert-danger mb-0" role="alert">
         <strong>Engine not started</strong> — {{ engine_error }}
@@ -120,7 +132,7 @@
 {#- The shell: the rail beside the page. Closed by _page_end.html, which every
     page including this file must carry. -#}
 <div class="ls-shell">
-    {% if layout != 'kiosk' %}
+    {% if layout != 'kiosk' and not panel %}
     <nav class="ls-rail" id="ls-rail" aria-label="sections">
         <button class="ls-rail__burger" type="button" aria-expanded="false"
                 aria-controls="ls-rail" aria-label="Expand the section labels">
@@ -139,6 +151,6 @@
     </nav>
     {% endif %}
     <main class="ls-page">
-    {%- if layout == 'kiosk' %}
+    {%- if layout == 'kiosk' and not panel %}
     <div class="container-fluid px-4 pt-3">{% include '_kiosk_line.html' %}</div>
     {%- endif %}

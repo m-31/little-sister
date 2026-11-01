@@ -20,8 +20,10 @@
 {#- The kiosk has no band: its slim line already carries the sentence, the stamp
     and the exit, and a wall display has no use for a title or for filters it
     cannot be clicked. The stamp lives in that line instead, so there is still
-    exactly one of it on the page. -#}
-{%- if layout != 'kiosk' %}
+    exactly one of it on the page. Nor has the panel the drawer frames (ADR-0147
+    decision 3): the drawer's head names the node and links to its page and its
+    tab. -#}
+{%- if layout != 'kiosk' and not panel %}
 <div class="ls-band">
     <div class="ls-band__row">
         <h1 class="ls-band__title">
@@ -64,6 +66,21 @@
                            id="hide_idle" name="hide_idle" value="1"
                            {% if hide_idle %}checked{% endif %} data-ls-submit>
                     <label class="form-check-label" for="hide_idle">hide idle</label>
+                </div>
+                {#- *◇ details* (ADR-0147 decision 6): on, every block of what handles a
+                    part stands on the wall where it stands, the button that opens the
+                    drawer at it; off, the library's default, a handled part says its
+                    color and its mark alone. A cookie keeps it as it keeps the two
+                    beside it, and `settings.yaml` gives its default; its query
+                    parameter, its cookie and its default share one name,
+                    `handled_details`, since `details` alone names a node's details
+                    (ADR-0133). It hides nothing that counts. -#}
+                {%- from '_rule_block.html' import handled_mark %}
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch"
+                           id="handled_details" name="handled_details" value="1"
+                           {% if handled_details | default(false) %}checked{% endif %} data-ls-submit>
+                    <label class="form-check-label ls-band__details" for="handled_details" title="Show who handles a part, until when and why, on the wall">{{ handled_mark() }} details</label>
                 </div>
                 {#- The tag the wall shows only what carries (ADR-0139 decision 5): one at
                     a time, the known ones in their order, each option's tooltip what it
@@ -121,7 +138,8 @@
         with what is declared and what the tree holds, not with a reading; History on
         every node but the root, which declares nothing of its own and has no
         periods; Notes beside it, on every node but the root, with the number of
-        notes its view lists as Series carries its curves (ADR-0140); Handbook on a
+        entries its tab lists, standing or not, as Series carries its curves
+        (ADR-0140, ADR-0145 decision 6); Handbook on a
         node that has one (ADR-0133 decision 3), which the configuration gives it, or
         a run's first fill, so it does not come and go either; Copy on every node and
         on the root, whose Copy is the tree's document (ADR-0115 decision 7) — last,

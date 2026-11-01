@@ -1,7 +1,7 @@
 # ADR-0127 — The wall is a tree: a node is closed or open, and a click changes which
 
 - **Status:** Accepted
-- **Date:** 2026-10-25 (accepted 2026-10-11)
+- **Date:** 2026-11-01 (accepted 2026-10-11)
 - **Related:** [ADR-0056](0056-stable-useful-dashboard-flow.md) (dense mode, its
   `branch_cap` and the band's depth and chips controls, which this retires; the flow
   model, which prices the first look),
@@ -34,9 +34,10 @@
   [ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md) (decision 5, a
   wall filtered by a tag),
   [ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md)
-  (decision 5, the ringed check after ‖),
+  (decision 5, where a failure is marked seen),
   [ADR-0138](0138-a-viewer-may-pack-a-levels-boxes.md) (how a level's boxes stand, a
-  look a browser keeps)
+  look a browser keeps),
+  [ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md) (the door, ◇, among an open head's own buttons, and *◇ details* in the band — decisions 3 and 7 amended)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -112,14 +113,15 @@ explain the chip's color and add up the same way at every level. A leaf's chip c
 its lines the same way, and a leaf of one line shows no count: its chip is that line.
 Beside the counts a ringed diamond and a number say how many parts beneath a rule
 handles that the counts do not show as such — a pinned branch, the chip's own node among
-them, and a line's pin where its node is not ‖ among the counts (ADR-0135 decision 6). A
-stale leaf's own chip is drawn as the warning it counts as. The counts are said in words
-as the chip's tooltip and in its accessible name — *2 errors, 1 warning, 119 ok* — a
-damped count with how near it is to escalating and a running line among them, and the
-words end with what each job handles: *1 ok, 1 handled: 1 line in maintenance*; there is
-no legend, and every open head pairs its cue with its word. A chip counts what
-is beneath it before *hide ok* and *hide idle* drop what they hide, so a filter changes
-what the page shows and never what a chip says.
+them, and a line's pin where its node is not ‖ among the counts (ADR-0135 decision 6) —
+a count and no door, the chip being itself the button that opens its node (decision
+11). A stale leaf's own chip is drawn as the warning it counts as. The counts are said
+in words as the chip's tooltip and in its accessible name — *2 errors, 1 warning, 119
+ok* — a damped count with how near it is to escalating and a running line among them,
+and the words end with what each job handles: *1 ok, 1 handled: 1 line in
+maintenance*; there is no legend, and every open head pairs its cue with its word. A
+chip counts what is beneath it before *hide ok* and *hide idle* drop what they hide, so
+a filter changes what the page shows and never what a chip says.
 
 A chip carries no title. Measured on one deployment's own tree, 162 of the 255 chips in
 its runs had one, and 70 said something the name does not — a workflow's display name
@@ -135,12 +137,11 @@ head the button that opens the node's page is the first after its name; its heal
 fold (decision 4), a funnel, pressed while the node's healthy ones are folded — pressed
 is the compact look for both buttons — with its count in its tooltip and accessible
 name, and not ✓, which stays the cue of an ok state and the ok count; ▤, its children as
-chips (decision 5); for an admin, ‖, which opens a pin's editor in the node's box
-(ADR-0104) — the page's one editor, kept outside the grid the refresh swaps and cloned
-where it is asked for, never one drawn into every head — and after it, where something
-at or beneath the node fails and may be marked seen, the ringed check that marks it
-(ADR-0142 decision 5); and after the head's own, the node's actions, which a
-deployment's `node.actions` slot fills (ADR-0034), and ⋯. The head's own are small
+chips (decision 5); ◇, the door, for every reader, lit with the number of parts handled
+behind it, which opens the node's *Notes* tab in a drawer over the waiting wall
+([ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)
+decisions 1 to 3); and after the head's own, the node's actions, which a deployment's
+`node.actions` slot fills (ADR-0034), and ⋯. The head's own are small
 square icons that look the same on every head, on every open head but the kiosk's,
 drawn from the ink of the surface they stand on, as the rule buttons and action chips
 are, so that they hold in every theme (ADR-0028): at rest an edge of the ink at 75 %
@@ -287,9 +288,11 @@ are never clamped, the healthy fold theirs, and they keep the check's order.
 ### 7. The band keeps its filters and loses depth and the chips switch
 
 *hide ok* and *hide idle* stay filters: the server drops what they hide, the address and
-the cookie carry them, and every fold works inside what they leave. The depth control
-goes — opening a node is its depth — and so does the chips switch, since a closed node
-is the chip; their cookies are no longer read. The band gains three buttons that set
+the cookie carry them, and every fold works inside what they leave. Beside them stands
+*◇ details*, which shows a handled part's blocks on the wall, off unless the deployment
+says otherwise (ADR-0147 decision 6). The depth control goes — opening a node is its
+depth — and so does the chips switch, since a closed node is the chip; their cookies
+are no longer read. The band gains three buttons that set
 every node at once: *Close all*, *As configured* and *Open all*, the last also showing
 the healthy. *Close all* closes everything the configuration and the failure budget
 opened, and keeps every node the viewer opened with the nodes above it; under it nothing
@@ -428,6 +431,25 @@ its shorter forms passed; a click or a key in the page keeps it at once. What th
 healthy fold hides stays beyond a find, as dense mode's surplus boxes were, and a
 browser without the attribute finds what is open.
 
+A chip carries no door: it is itself the button that opens and closes its node, and a
+door inside it would be a button in a button, so its ◇ stays a count beside its counts
+(decision 2, ADR-0147 decision 1).
+
+A click near the page's end keeps the window where it stood, as a refresh keeps it
+(decision 10). A click that closes a node by its head, or folds with ▤, the funnel or
+*⌃ less*, shortens the page, and where the window stood within what that freed at the
+page's end, the browser would pull the window up out of it, the node clicked landing
+lower: on one deployment's wall, closing a box at the end moved the page 59 pixels at a
+desk, and on a phone, 150 pixels above the end, 205, another node under the finger. So
+the page's foot keeps what the window still needs as room, an empty block after the
+grid, measured once the boxes are packed, and the window stands where it stood. The room
+gives way as the window scrolls up through it or grows shorter, and as anything grows
+into it — a box opened, a refresh that brought a line; only such a click adds to it, a
+refresh keeps it, and a load starts without it. *Close all* and *Open all* keep the
+browser's way and take the room with them, as the kiosk does when it forgets what was
+touched: room kept after *Close all* at the foot of a long wall would leave a blank
+screen.
+
 ### 12. A run of chips lines up in columns, or wraps where a browser says so
 
 As decision 1 has it, a run is a node's closed children standing next to each other in
@@ -512,8 +534,7 @@ drawn.
   buttons are wider by their gaps, which its title gives way to.
 - **Unchanged:** the snapshot and the envelope, and the macOS client, which draws no
   tree; the filters; a level's order (ADR-0055), whichever of its children are open; a
-  pin's block and its editor, though one editor now serves a page; the refresh's
-  cadence and what holds it back.
+  pin's block and its editor; the refresh's cadence and what holds it back.
 - **Amended:** ADR-0012, ADR-0017, ADR-0019, ADR-0029, ADR-0034, ADR-0056, ADR-0061,
   ADR-0063 and ADR-0104, each where it decided otherwise.
 
@@ -535,6 +556,9 @@ drawn.
   anchoring turned off on the grid**, and **the grid planned before anything is
   measured**, either of which ends the jump but leaves the window where it was when a
   line is added above it.
+- **The room at the page's foot kept until the next refresh**, which brings a click's
+  jump back within ten seconds while somebody reads; and **the browser's way,
+  accepted**, which leaves another node under a phone's finger.
 - **Every failure opens its way**, today's rule: with every leaf failing the real wall
   is 12.6 screens; the first three under each node, 6.6; the first three a card, 3.5.
   **A chip holds its failures**, opening none, is the most compact, 3.2 screens and 8.5

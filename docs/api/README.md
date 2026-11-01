@@ -75,7 +75,10 @@ members with stable slugs that can be pinned one by one, and each item carries i
 vocabulary, of which only `at`, `started` and `ended` are typed, as RFC 3339 UTC
 date-times at any depth — and the `form` its text was written from, where the check's
 grading named one: the key a deployment re-words that line under, to show beside it and
-never to parse. `run` holds the timing — `observed_at`, `wall_seconds`, `next_at`,
+never to parse; `not_reported` beside the items says what still stands on an entry the
+node does not report now, and `nodes_not_reported` beside the children the same of a
+node beneath it that is not reported now, listed at the nearest node above it that
+stands. `run` holds the timing — `observed_at`, `wall_seconds`, `next_at`,
 `frequency_seconds` where a check reads this node's subject on an interval, and
 `stale_after_seconds`, the tolerance the server measured freshness by, wherever it
 applied one — and is **absent entirely** where nothing answers for the node, which is
@@ -346,6 +349,56 @@ failing stretch it was set in. Its `expires_at` is null where it was given no en
 kind or a source a client does not know is shown as it reads: further kinds come
 without another major.
 
+**3.1.0 adds two kinds of pin.** The first is `silenced` (little-sister ADR-0144): a
+failure that flaps, held through every recovery until a deadline. Its part keeps its
+`code` and is counted above at the silence's level — `OK`, or a warning at most —
+`contribution.by` saying `silenced`, on a node and on an entry; its item's `counts_as`
+is that level's table, `{"WARN": "OK", "ERROR": "OK"}` or `{"ERROR": "WARN"}`, its
+`expires_at` its deadline and never null, and it carries neither a `status` nor an
+`occurrence`, being bound to no failure. The second is `done` (little-sister ADR-0146):
+an entry's failure that is an event — a failed run — looked into and over, closed. Its
+entry keeps its `code` and is counted `OK` in its node until it reads anything other
+than the failure it closed — another event, the same one recovered or worse, or no
+entry at all — `contribution.by` saying `done`, on an entry only; its item's
+`counts_as` is a seen's, its `status` the failure it closed and its `occurrence` the
+event, never null, and its `expires_at` is null. A configured rule that counts how many
+of its parts fail counts a part a person holds — seen or silenced — as it reads, which
+its `failing` says, the part itself still counted as it is held; an entry marked done it
+counts as `OK`, as its node counts it, its event being over. A period's `cause` gains
+the silence's six and the done's three. And a node's `entries` gains `not_reported`:
+each entry a pin or a person's acknowledgment stands on that the node does not report
+now — a finding that comes and goes, or every entry of a node whose check failed — its
+`slug` and its `handled`, in the order it was set, and never among `items`. What stands
+on one holds nothing until the entry is reported again; the dashboard says it as *A
+line not reported now*. And a node gains `nodes_not_reported`, beside its `children` and
+never among them: each node beneath it that is not reported now — its check no longer
+returns it, or has not written it since the instance started — and that a pin or a
+person's acknowledgment stands on, listed at the nearest node above it that stands, a
+node whose whole branch is gone at the root, with its `path`, what stands on it,
+`handled`, and on its entries, `not_reported`, in the order what stands on it was set.
+What stands on one holds nothing until it is reported again; the dashboard counts it
+where it is listed, *not reported now*. And maintenance is planned (little-sister
+ADR-0150): an entry is a schedule — one window, set ahead or now, or a series — and
+holds while a window of it is open. Every `maintenance` item in `handled` gives the
+window open, `starts_at` and `expires_at` — its time left; a one-off's start and its end
+— and `until`, its schedule's end, the end of the last window it writes, and
+`sentence`, the entry in the words the dashboard says it in, its instants in the
+deployment's zone and time format: *Every Saturday from 22:00 for 8 hours, until
+2027-10-31 05:00:00, not on holidays in Bavaria*, or *Once, from … until …*. A client
+shows it as it reads and computes nothing from it. A node gains `planned`, beside
+`handled` and never among it — an entry is in one list at a time: its own entry that
+stands and holds nothing now and its entries', an entry's with its `slug`, the soonest
+next window first, each the pin's fields without `counts_as` — it counts nothing until a
+window opens — with its next window, `starts_at` and `expires_at`, both null where none
+is to open, `until`, `sentence` and `why`, the dashboard's words for why no window is to
+open, *applies not at all* and why, or from when its windows stop, *from 2028-01-01
+00:00:00 its windows do not apply: the list is not complete for 2028*; null where its
+holiday list stops none. An entry or a node not reported now carries what is planned for
+it in its own record, `planned` beside `handled`: `entries.not_reported` and
+`nodes_not_reported` list what stands on **or is planned for** a part not reported now,
+and such a record may stand for a planned window alone, its `handled` empty. Additive:
+`schema_version` stays 3.
+
 Decode defensively all the same: tolerate unknown fields and any child order, and
 treat an absent `run` as *nothing answers for this node* rather than as an error.
 
@@ -358,7 +411,13 @@ carrying `frequency_seconds` and `stale_after_seconds`, the `wall_seconds` it to
 the `next_at` it is due, and one carrying none of them, entries addressable and prose,
 an entry carrying `subject` and `data`, one carrying neither and one whose record was
 `refused`, an entry written from a `form` beside entries that carry none, an entry whose
-work is `running` and one a pin of its own handles, a `period` that is a
+work is `running` and one a pin of its own handles, an entry the node does not report
+now that a pin still stands on and one a series is planned for alone, its holiday list
+one the instance cannot have — no window to open, its `starts_at` and `expires_at` null
+and its `why` the dashboard's words — a window set ahead on a node and a series planned
+for an entry, each in its node's `planned`, a series' window open, its `expires_at` its
+own beside its schedule's `until`, every maintenance item with its `sentence`, a
+`period` that is a
 bound and one a change began, naming `by`, an `own_period` of each kind, a leaf without
 `period` and a container without `own_period`, a node with a `handbook` and one without,
 `details` its check type gave and its deployment gave, a key both name and one given
@@ -366,7 +425,9 @@ empty, `tags` a node carries from above and of its own beside nodes that carry n
 record carrying the typed `at` / `started` / `ended` keys at two depths, what handles a
 node — a person's pin, a configured rule on what a node passes up and one on its
 lines, a failure a person marked seen, a node's own with no end and a line's bound to
-its occurrence until a day — and nothing, `show_when_quiet` in all three of its states,
+its occurrence until a day, a line a person marked done, bound to the failure and the
+event it closed, and a line a person silenced at a warning at most until its deadline —
+and nothing, `show_when_quiet` in all three of its states,
 and the `instance` block. It carries **both** shapes of `contribution`: the withheld
 one, which reports `code: null` and names its rule (a pin's `maintenance`, a shielded
 node's `dependency`, and `undefined` for a node that has never reported), and a damped
@@ -377,7 +438,9 @@ two shapes are deliberately both here: before damping every rule withheld, so a 
 with only the null would quietly teach a client that `contribution` means *not counted*.
 An entry carries `contribution` in each of its shapes as well: a pinned line's
 `maintenance`, a line a rule heals, `aggregation` with the OK its node counted, a line
-marked seen, `seen` with the same OK, and the null on every other — each naming its
+marked seen, `seen` with the same OK, a line marked done, `done` with the same OK, a
+line silenced, `silenced` with the warning its silence holds it at, and the null on
+every other — each naming its
 `rule`, which the part's own `handled` lists. It is **generated from the server's own
 API** and a test holds the server to it, so it cannot quietly stop being true.
 

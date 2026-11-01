@@ -567,7 +567,7 @@ body[data-ls-layout="topbar"] .ls-rail { display: none; }
     flex-shrink: 0;
 }
 /* The state cluster is one fact, and each of its parts is whole: the stale mark, the
-   pin's pip, the time, the cue with the word, and what the reading says beside them.
+   time, the cue with the word, and what the reading says beside them.
    In the row it keeps its whole width, and right-aligns whole or drops whole to a
    line of its own; where that line is narrower than it is, it breaks between its
    parts, right-aligned. Each part is whole where the line has room for it and broken at
@@ -796,9 +796,9 @@ body:is([data-ls-head-buttons="name"], [data-ls-head-buttons="pointer-name"]) .n
 
 /* Maintenance surfacing (ADR-0014): the persisted maintenance set, surfaced
    so a pin the roll-up and a shallow depth hide is still findable — a count **pill** in
-   the strip (folding the always-visible index it replaced), a **pip** on each ancestor card,
-   and the click **popover** both open. All maintenance-tinted, reading as maintenance
-   whatever the surrounding status colors. */
+   the strip (folding the always-visible index it replaced) and the click **popover** it
+   opens; a card says what is handled at and beneath it on its door, ◇ (ADR-0147). All
+   maintenance-tinted, reading as maintenance whatever the surrounding status colors. */
 
 /* the strip band holds the maintenance pill (left) and the heartbeat pill (right),
    right-aligned beneath the controls. */
@@ -834,32 +834,8 @@ body:is([data-ls-head-buttons="name"], [data-ls-head-buttons="pointer-name"]) .n
 .maintenance-pill__glyph { flex: 0 0 auto; }
 .maintenance-pill__count { font-variant-numeric: tabular-nums; }
 
-/* the "contains maintenance" pip on an ancestor card — a solid maintenance-blue button
-   that reads on any card fill (an actual maintenance card is the pin itself and gets no
-   pip). A click opens its popover (maintenance.js); the right gap keeps it off the
-   status cue. */
-.maintenance-pip {
-    appearance: none;
-    -webkit-appearance: none;
-    border: none;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    color: var(--ls-maintenance-ink);
-    background: var(--ls-maintenance);
-    border-radius: 4px;
-    padding: 2px 3px;
-    margin-left: 0.4em;
-    margin-right: 0.5em;
-    vertical-align: -0.28em;
-    line-height: 0;
-}
-.maintenance-pip:hover { background: var(--ls-maintenance-strong); }
-.maintenance-pip:focus-visible { outline: 2px solid var(--ls-tint-maintenance-ink); outline-offset: 1px; }
-.maintenance-pip > svg { width: 14px; height: 14px; display: block; }
-
-/* the popover the pip opens (maintenance.js): that card's pins as links, floated over
-   the grid and positioned by Floating UI (ADR-0019). */
+/* the popover the pill opens (maintenance.js): what is handled, the pins as links,
+   floated over the grid and positioned by Floating UI (ADR-0019). */
 .maintenance-pop {
     position: fixed;
     z-index: 100;
@@ -911,17 +887,6 @@ body:is([data-ls-head-buttons="name"], [data-ls-head-buttons="pointer-name"]) .n
     opacity: 0.8;
 }
 
-/* An admin's editor of a pin still to be set (ADR-0104 decision 3, ADR-0127
-   decision 3): the page's one `template#pin-editor`, which ‖ among the head's icons
-   clones into the node's box, where the pin's block will stand — a card's panel,
-   a box after its head's row — and which Cancel and Escape take away again
-   (`tree.js`, `maintenance-edit.js`). The clone is the pause mark's disclosure as
-   it was, so the open editor holds the refresh as before; its summary is never
-   shown, since without script there is no clone. */
-.status-panel > .pin-setter,
-.tree-box > .pin-setter,
-.status-panel > .ack-setter,
-.tree-box > .ack-setter { display: block; }
 .maintenance-pop__reason {
     display: block;
     padding-left: 0.2rem;      /* its own line under the pin's row, never an orphan */
@@ -942,6 +907,181 @@ body:is([data-ls-head-buttons="name"], [data-ls-head-buttons="pointer-name"]) .n
 /* the "+N more" row links to the full list, *Handled* at /handled. */
 .maintenance-pop__more { margin-top: 0.2rem; }
 .maintenance-pop__more a { color: var(--ls-tint-maintenance-ink); font-weight: 600; }
+
+/* The drawer (ADR-0147 decisions 3 to 5): what a door opens over the page, a modal
+   dialog as large as the window. Its own backdrop is clear: the shade is cast by the
+   hole over the box clicked (`drawer.js` places it and keeps it on the box as the
+   page scrolls), so that the box stands lit in a page dimmed just enough to read,
+   the header and the rail with it. The panel stands at the right at a desk, 480
+   pixels wide, and at the left where the box would sit under it (`is-left`), nothing
+   reflowing beneath; on a phone it is a sheet from the foot, the strip above it the
+   page's. In it, the head the page draws — the node's cue, its name and its state,
+   its page, its tab and ✕ — the question before a close drops words, and the frame
+   of the node's *Notes* tab, the tab's panel mode. */
+.ls-drawer {
+    --ls-drawer-width: 480px;
+    --ls-drawer-shade: rgba(16, 20, 24, 0.32);
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    background: transparent;
+    color: var(--ls-ink);
+}
+.ls-drawer::backdrop { background: transparent; }
+/* a dark page needs a deeper shade to say it waits */
+body[data-bs-theme="dark"] .ls-drawer { --ls-drawer-shade: rgba(0, 0, 0, 0.5); }
+.ls-drawer__lit {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0;
+    height: 0;
+    border-radius: 6px;
+    box-shadow: 0 0 0 100vmax var(--ls-drawer-shade);
+    pointer-events: none;     /* a click there is a click on the page, which closes */
+}
+.ls-drawer__panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(var(--ls-drawer-width), 100%);
+    display: flex;
+    flex-direction: column;
+    background: var(--ls-canvas);
+    border-left: 1px solid var(--ls-panel-line);
+    box-shadow: -6px 0 24px var(--ls-panel-shadow);
+}
+.ls-drawer.is-left .ls-drawer__panel {
+    right: auto;
+    left: 0;
+    border-left: 0;
+    border-right: 1px solid var(--ls-panel-line);
+    box-shadow: 6px 0 24px var(--ls-panel-shadow);
+}
+.ls-drawer__head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.5rem 0.5rem 0.5rem 0.9rem;
+    border-bottom: 1px solid var(--ls-line);
+    background: var(--ls-panel);
+}
+/* the node's name and its state as the box clicked says them, one line, ellipsed, and
+   under them *updates paused* while the page waits for the drawer (`poll.js`) */
+.ls-drawer__who {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.ls-drawer__title {
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 1rem;
+    font-weight: 600;
+}
+.ls-drawer__title:focus { outline: none; }  /* where the dialog opens, for a moment */
+.ls-drawer__state {
+    font-size: 0.8rem;
+    font-weight: 400;
+    color: var(--ls-muted);
+}
+.ls-drawer__state .head-mark { margin-left: 0.3em; }
+/* What holds a refreshing page says so in its own head, the stamp keeping its width
+   (ADR-0147 decision 4): *updates paused*, muted — the drawer's under the node's name,
+   an editor's at the top of its form. Shown here while its holder stands open on a
+   page `poll.js` refreshes — the drawer over it, an editor in what it swaps — so that
+   it comes in the frame its holder opens in; hidden everywhere else, a page nothing
+   refreshes and an editor closed, whose words a search of the page must not find. */
+.ls-paused {
+    display: none;
+    margin: 0;
+    font-size: 0.75rem;
+    line-height: 1.3;
+    color: var(--ls-muted);
+}
+[data-ls-polled] .ls-drawer[open] .ls-drawer__paused,
+[data-ls-poll-target] .maintenance-editor-disclosure[open] .ls-paused { display: block; }
+.rule-block__editor > .ls-paused { margin-bottom: 0.35rem; }
+.ls-drawer__to {
+    flex: 0 0 auto;
+    font-size: 0.8rem;
+    white-space: nowrap;
+}
+.ls-drawer__close {
+    flex: 0 0 auto;
+    width: 2rem;
+    height: 2rem;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font-size: 1rem;
+    line-height: 1;
+}
+.ls-drawer__close:hover { background: color-mix(in srgb, var(--ls-menu-hover) 8%, transparent); }
+.ls-drawer__close:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
+/* Discard what you wrote? — asked in the drawer, its head and its frame waiting */
+.ls-drawer__ask {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 0.9rem;
+    border-bottom: 1px solid var(--ls-line);
+    background: var(--ls-tint-warn);
+    color: var(--ls-tint-warn-ink);
+}
+.ls-drawer__ask[hidden] { display: none; }
+.ls-drawer__ask-words {
+    flex: 1 1 100%;
+    margin: 0;
+    font-weight: 600;
+}
+/* in the question's own ink, beside *Keep writing*, the one it focuses */
+.ls-drawer__discard {
+    color: inherit;
+    border: 1px solid currentColor;
+}
+.ls-drawer__discard:hover,
+.ls-drawer__discard:focus-visible {
+    color: inherit;
+    border-color: currentColor;
+    background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.ls-drawer__frame {
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 0;
+    border: 0;
+    background: var(--ls-canvas);
+}
+@media (max-width: 767.98px) {
+    .ls-drawer__panel,
+    .ls-drawer.is-left .ls-drawer__panel {
+        top: auto;
+        right: 0;
+        left: 0;
+        width: auto;
+        height: 72%;
+        border: 0;
+        border-top: 1px solid var(--ls-panel-line);
+        border-radius: 12px 12px 0 0;
+        box-shadow: 0 -6px 24px var(--ls-panel-shadow);
+    }
+    .ls-drawer__head { border-radius: 12px 12px 0 0; }
+}
+/* The panel itself, in the frame (ADR-0147 decision 3): no bar above it, so nothing
+   it scrolls to stands under one. */
+body[data-ls-panel] { --ls-bar-height: 0px; }
 
 /* A node's short title (ADR-0017) follows its name; ellipsed when too long. */
 .node-title {
@@ -1053,8 +1193,10 @@ body:is([data-ls-head-buttons="name"], [data-ls-head-buttons="pointer-name"]) .n
 
 /* a box's links underline under the pointer — not a head's name, whose whole row
    answers the pointer instead, nor a chip, which answers it as the row does (the
-   outlines, with the head's row and the chip below) */
-.status-node a:not([data-control="toggle"], .tree-chip):hover {
+   outlines, with the head's row and the chip below), nor a block, which washes, nor a
+   head's mark or its lit ◇, which are signs */
+.status-node a:not([data-control="toggle"], .tree-chip, .rule-block--door, .head-mark,
+                   .door-mark):hover {
     text-decoration: underline;
 }
 
@@ -1157,6 +1299,14 @@ body[data-ls-toggle-hover="wash"] {
     float: left;
     margin: 0.2em 0.35rem 0 0;
 }
+/* A line marked done shows its OK cue and, beside it, the failure it closed
+   (ADR-0146): the word floats with the cue, so that the line's own words wrap beside
+   both rather than starting a line of their own beneath them. */
+.status-node__reason > .line-closed,
+.check-reason__body > .line-closed {
+    float: left;
+    margin: 0 0.35rem 0 0;
+}
 
 /* A silenced reason (ADR-0036). Quiet is **shown**, never hidden (ADR-0032 rule 5):
    a suppression that covered its own tracks is exactly the failure the contribution
@@ -1173,8 +1323,8 @@ body[data-ls-toggle-hover="wash"] {
    nowhere near AA — and an `opacity: 0.75` on top dragged even the good pairs to
    3.9-4.4. A tint of its own removes every one of those variables at once: the pair is
    `--ls-tint-maintenance` + `--ls-tint-maintenance-ink`, 7.1-9.1:1 in every theme,
-   independent of what is underneath. That is what the maintenance pill, the pip and
-   the maintenance leaf chip already do; these three rules were the stragglers.
+   independent of what is underneath. That is what the maintenance pill and the
+   maintenance leaf chip already do; these three rules were the stragglers.
 
    Two rules follow, and `test_contrast.py` now enforces both: **no rule dims an ink
    it also sets** (that was the whole defect — a token picked and measured undimmed,
@@ -1280,7 +1430,7 @@ body[data-ls-toggle-hover="wash"] {
     background: var(--ls-tint-warn);
     color: var(--ls-tint-warn-ink);
 }
-/* A node's page draws its node in a frame (backlog #91 §3.5): the page is the same
+/* A node's page draws its node in a frame (ADR-0127 decision 8): the page is the same
    tree as the wall, rooted at the node, which is always open — framed with
    everything that is part of it, its head the frame's top, its children inside and
    its facts last. The frame's edge is the node's state, drawn from that state's
@@ -1319,8 +1469,6 @@ body[data-ls-toggle-hover="wash"] {
 /* What the head says beneath its row: the rules, the lines and the damping counter,
    each a full line. */
 .viewed-head > .rule-list,
-.viewed-head > .rule-setter,
-.viewed-head > .ack-setter,
 .viewed-head > .own-lines { margin-top: 0.35rem; }
 .viewed-head > .damping-note { margin: 0.35rem 0 0; }
 /* The facts at a reading measure, after the cards, every card open; the last card
@@ -1559,7 +1707,7 @@ textarea.form-control.maintenance-reason-source {
    maintenance is its first kind: a pin on a node, or on one of its lines. On a
    node's own page the node's blocks are the rows heading the **frame** the page
    draws its node in, which is the border that runs round every line the pin
-   covers (decision 8, backlog #91 §3.5), and a line's block hangs beneath its line.
+   covers (decision 8), and a line's block hangs beneath its line.
 
    **The block paints its own tint and the frame is a border**, so both stand on a
    node of any color (decision 8): a page's head wears the node's fill, which
@@ -1583,39 +1731,203 @@ textarea.form-control.maintenance-reason-source {
     vertical-align: -0.08em;
 }
 .rule-block__what > .rule-mark,
-.rule-block__scope > .rule-mark,
-.rule-setter__toggle > .rule-mark { margin-right: 0.3em; }
-/* A configured rule's mark on a line it changes the count of (ADR-0137): §, in the
-   line's own ink before its words, floating at the line's head beside its cue as
-   the cue does, so the words wrap beside both. The line keeps its true color — its
-   tint and its cue are its reading's — and the mark says that its node counts it
-   otherwise, in its title and its hidden text. */
-.line-rule {
+.rule-block__scope > .rule-mark { margin-right: 0.3em; }
+/* A handled part (ADR-0143) keeps its true color, its tint and its place, and says
+   what acts on it in two things: the job's **mark** — the ringed check of a person's
+   acceptance, § of a configured rule, ‖ of a pin — and, wherever one level up counts
+   it as something other than it shows, a **rail** on its right edge in the color it
+   counts as instead: `contribution`, drawn. The mark says which job, the rail what it
+   counts as; the right edge of a card reads as one column of what is taken care of.
+
+   A rail is the color of the status it counts as, the ink of that status's tint, and
+   a part counted as nothing draws the undefined ink. */
+.rail-ok { --ls-rail: var(--ls-tint-ok-ink); }
+.rail-warn { --ls-rail: var(--ls-tint-warn-ink); }
+.rail-error { --ls-rail: var(--ls-tint-error-ink); }
+.rail-nothing { --ls-rail: var(--ls-tint-undefined-ink); }
+/* A line's rail runs down its right edge — on a node's page down its whole row, its
+   record and its block with it, so that a long row still reads as handled. It
+   stands on the line's own tint, against which every tint's ink clears the non-text
+   bar (`tests/test_contrast.py`); a line with no tint of its own stands on its box's
+   fill, which a box's vivid status paints and which the inks do not clear, so its
+   rail stands on a strip of the page, as a box's does (below). */
+:is(.status-node__reason, .check-reason).has-rail {
+    box-shadow: inset -4px 0 0 var(--ls-rail);
+}
+:is(.status-node__reason, .check-reason).has-rail:not(.is-coded, .is-quiet) {
+    box-shadow: inset -4px 0 0 var(--ls-rail), inset -6px 0 0 var(--ls-canvas);
+}
+.check-reason.has-rail:not(.is-coded, .is-quiet) { padding-right: 0.5rem; }
+/* A box's rail — a card, a box within one, the head of a node's page — runs down its
+   right edge inside the border, on a strip of the page two pixels wide: a box is
+   filled vivid where its node counts its failure for itself, and the tints' inks fall
+   under the non-text bar on the vivid red and, in dark, the vivid amber, while
+   against the page's color every one of them clears it. A shadow, so nothing moves,
+   which a theme's own shadows take first (cyberpunk's glass, below). A closed chip
+   draws none. */
+:is(.status-card, .status-node).has-rail {
+    box-shadow: inset -4px 0 0 var(--ls-rail), inset -6px 0 0 var(--ls-canvas);
+}
+/* A line's mark stands at its top right, left of its rail, in the room the line
+   keeps for it; the line's action chips float beside it. It is drawn in the color of
+   what the line counts as instead, a pin's in maintenance's ink, and it is the line's
+   door: a link to its node's *Notes* tab at what handles it (ADR-0147 decision 7). A
+   line with no tint of its own stands on its box's fill, and its glyph on its own
+   tint, as a status sign draws its word. */
+.line-mark {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
+    color: var(--ls-mark);
+    text-decoration: none;
 }
-.status-node__reason > .line-rule,
-.check-reason__body > .line-rule {
-    float: left;
-    margin: 0.2em 0.35rem 0 0;
+.line-mark__glyph { display: inline-flex; }
+.line-mark__glyph > .rule-mark { width: 14px; height: 14px; }
+.line-mark.on-fill > .line-mark__glyph {
+    background: var(--ls-mark-tint);
+    border-radius: 3px;
+    padding: 1px;
 }
-/* A ringed check on a line a person has seen (ADR-0142), placed as § is: the line
-   keeps its true color — its tint and its cue are its reading's — and the mark says
-   that it is accepted, by whom and until when, in its title and its hidden text. */
-.line-ack {
+.mark-ok { --ls-mark: var(--ls-tint-ok-ink); --ls-mark-tint: var(--ls-tint-ok); }
+.mark-warn { --ls-mark: var(--ls-tint-warn-ink); --ls-mark-tint: var(--ls-tint-warn); }
+.mark-error { --ls-mark: var(--ls-tint-error-ink); --ls-mark-tint: var(--ls-tint-error); }
+.mark-nothing { --ls-mark: var(--ls-tint-undefined-ink); --ls-mark-tint: var(--ls-tint-undefined); }
+.mark-maintenance { --ls-mark: var(--ls-tint-maintenance-ink); --ls-mark-tint: var(--ls-tint-maintenance); }
+/* On the wall the mark's own box is its target, 24 pixels square with the glyph in
+   its middle (WCAG 2.2's 2.5.8, which a pseudo-element's area does not meet: the
+   scanners measure the link's box), and a line shorter than it stands as tall, so that
+   two marks on lines one above the other never overlap. The words keep clear of it. */
+.status-node__reason.has-mark {
+    position: relative;
+    min-height: 24px;
+    padding-right: calc(28px + 0.25rem);
+}
+.status-node__reason > .line-mark {
+    position: absolute;
+    top: 0;
+    right: 4px;
+    width: 24px;
+    height: 24px;
+}
+/* The mark follows the words, so their last block is no longer the line's last child,
+   whose margin `.md-body` takes away: it does so here, or the mark makes the line a
+   line taller. */
+.status-node__reason.has-mark > :has(+ .line-mark) { margin-bottom: 0; }
+/* over a box's links, which take their line's ink (`.status-node a`) and underline
+   under the pointer */
+:is(.status-node__reason, .check-reason__box, .check-reason__rail) > .line-mark {
+    color: var(--ls-mark);
+}
+.status-node .status-node__reason > a.line-mark:hover {
+    color: var(--ls-mark);
+    text-decoration: none;
+}
+a.line-mark:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
+/* On a node's page a member line has one seat at its end, for the reader who may set
+   something on it (ADR-0147 decision 1): ◇, the line's door, where nothing handles the
+   line, and where something does the mark of what handles it, in ◇'s place — so the
+   door used becomes the mark where it stood — which otherwise ends the line's rail.
+   ◇ is a small square of the line's ink, as a head's buttons are, and the seat's box is
+   its target. */
+.check-reason__box > .line-mark.is-seated,
+.check-reason__box > .line-door {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 1.5rem;
+    height: 1.2rem;
+}
+.line-door {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
+    color: inherit;
+    text-decoration: none;
+    opacity: 0.75;
 }
-.status-node__reason > .line-ack,
-.check-reason__body > .line-ack {
-    float: left;
-    margin: 0.2em 0.35rem 0 0;
+.line-door > .icon-mark { width: 0.9rem; height: 0.9rem; }
+.line-door:hover { opacity: 1; color: inherit; }
+.line-door:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; opacity: 1; }
+/* What acts on a node's own part, beside its head's state (ADR-0143): the kind's mark
+   on its own tint, as a status sign (`.ls-sign`) is drawn, since a head stands on its
+   box's fill, vivid where the node counts its failure for itself. */
+.head-mark {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 0.35em;
+    padding: 1px 2px;
+    vertical-align: -0.12em;
 }
+.head-mark > .rule-mark { width: 13px; height: 13px; }
 /* What a head's ringed check marks, listed where the page knows it: each failure,
    its line's words and its node, in the block's own ink. */
 .ack-parts {
     margin: 0.25rem 0 0.45rem;
     padding-left: 1.1rem;
+}
+/* The ringed check's one editor (ADR-0144): a choice of *Seen* or *Silence* above the
+   two forms, each its act's, and only the chosen one's form in view, so that the form
+   Enter submits is the one that shows — *Done* a third where a block's part takes one
+   (ADR-0146). A browser without `:has()` shows every form, each whole, and no choice,
+   which would choose nothing there. A node's Notes tab builds its form the same way
+   over every kind the reader may set (ADR-0145 decision 2): a kind added is a line of
+   the rule below. */
+.ack-kinds {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin: 0 0 0.45rem;
+}
+.ack-kind {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin: 0;
+    padding: 0.05rem 0.55rem;
+    border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+    border-radius: 0.375rem;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    cursor: pointer;
+}
+/* The chosen one ringed, no wash: the choice stands on its node's fill, where a wash
+   of the ink fell under the bars before (the block buttons' note above). */
+.ack-kind:has(> input:checked) {
+    border-color: currentColor;
+    box-shadow: inset 0 0 0 1px currentColor;
+}
+.ack-kind > input { margin: 0; }
+/* A note's bubble beside the rules' marks, at their size (ADR-0145 decision 2). */
+.ack-kind > .block-mark { width: 12px; height: 12px; }
+.ack-kind:has(> input:focus-visible) {
+    outline: 2px solid currentColor;
+    outline-offset: 1px;
+}
+.ack-form__does { margin: 0 0 0.45rem; font-size: 0.8rem; }
+@supports selector(:has(*)) {
+    .ack-choice:has(> .ack-kinds input[value="note"]:checked) > .ack-form:not([data-kind="note"]),
+    .ack-choice:has(> .ack-kinds input[value="done"]:checked) > .ack-form:not([data-kind="done"]),
+    .ack-choice:has(> .ack-kinds input[value="seen"]:checked) > .ack-form:not([data-kind="seen"]),
+    .ack-choice:has(> .ack-kinds input[value="silenced"]:checked) > .ack-form:not([data-kind="silenced"]),
+    .ack-choice:has(> .ack-kinds input[value="maintenance"]:checked) > .ack-form:not([data-kind="maintenance"]) {
+        display: none;
+    }
+}
+@supports not selector(:has(*)) {
+    .ack-kinds { display: none; }
+}
+/* A silence's level (ADR-0144): a fieldset of two radios, its legend a field's label
+   rather than Bootstrap's heading-sized one. */
+.silence-level {
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+.silence-level > legend {
+    float: none;
+    width: auto;
+    margin-bottom: 0.25rem;
+    font-size: inherit;
 }
 .rule-button {
     display: inline-flex;
@@ -1660,59 +1972,328 @@ textarea.form-control.maintenance-reason-source {
     background: var(--ls-tint-maintenance);
     color: var(--ls-tint-maintenance-ink);
 }
-/* A block's buttons on the wall are marks (ADR-0135 decisions 3 and 4): the note's
-   speech bubble and an admin's pencil, each a target of a finger's width in the
-   block's own ink, its words in its title and its hidden text. */
-.block-button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 24px;
-    padding: 0;
-    border: 0;
-    border-radius: 0.375rem;
-    background: none;
-    color: inherit;
-    cursor: pointer;
-    list-style: none;
-}
-.block-button:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
-.block-button:focus-visible {
-    outline: 2px solid currentColor;
-    outline-offset: 1px;
-}
-.block-button[aria-expanded="true"] { background: color-mix(in srgb, currentColor 16%, transparent); }
 /* A block with no fill of its own — every rule's but maintenance's, a configured
    rule's first (ADR-0137) — stands on its node's fill, whichever status gives it, where
    maintenance's stands on its own tint. So its dashes are its ink at 75 %, as a head's
-   squares' edges are, and its marks wash at 8 %, a ring saying which one is open: at
-   65 % and 12 % a block on an amber or a green node fell under the bars in four themes
+   squares' edges are, and the wall's link washes at 8 % under the pointer: at 65 %
+   and 12 % a block on an amber or a green node fell under the bars in four themes
    (`tests/sweep_contrast.py`). */
 .rule-block:not([data-rule="maintenance"]) {
     border-color: color-mix(in srgb, currentColor 75%, transparent);
 }
-.rule-block:not([data-rule="maintenance"]) .block-button:hover,
-.rule-block:not([data-rule="maintenance"]) .block-button[aria-expanded="true"] {
-    background: color-mix(in srgb, currentColor 8%, transparent);
+/* **A planned window is drawn without the tint** (ADR-0150): it holds nothing, so
+   its block stands on its node's fill as a rule's that changes nothing does — the
+   page's own ink and edge — and maintenance's blue is what a window open paints. */
+.rule-block--planned[data-rule="maintenance"] {
+    background: none;
+    color: inherit;
+    border-color: color-mix(in srgb, currentColor 75%, transparent);
 }
-.rule-block:not([data-rule="maintenance"]) .block-button[aria-expanded="true"] {
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 75%, transparent);
+.rule-block__why { overflow-wrap: anywhere; }
+/* **A series' block has two rows** (ADR-0150, landing 4; decision 5 of #35's note):
+   the window open now, with *Extend* and *End now*, and beneath it the schedule — its
+   sentence and the next start — with *Edit* and *Clear*, smaller, a hairline between
+   them. A planned series is the second row alone, as its own block. */
+.rule-block__head--schedule {
+    margin-top: 0.35rem;
+    padding-top: 0.35rem;
+    border-top: 1px dashed color-mix(in srgb, currentColor 40%, transparent);
 }
-.rule-block--wall > .rule-block__head { column-gap: 0.25rem; }
-.rule-block__head:has(> .rule-block__edit[open]) > .rule-note-mark { display: none; }
-/* The wall's *Clear*, in its editor beside *Save changes* and *Cancel*: an outline in
-   the editor panel's own ink, which Bootstrap's grey outline is not on a dark panel. */
-.rule-block__clear-now {
+.rule-block__schedule {
+    flex: 1 1 16rem;
+    min-width: 0;
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+}
+.rule-block__extend[open],
+.rule-block__end[open] {
+    flex-basis: 100%;
+    min-width: 0;
+    order: 2;
+}
+.rule-block__window-form {
+    margin-top: 0.5rem;
+    padding: 0.6rem 0.7rem;
+    border: 1px solid var(--ls-panel-line);
+    border-radius: 6px;
+    background: var(--ls-panel);
+    color: var(--ls-ink);
+}
+.rule-block__window-form > .ls-paused { margin-bottom: 0.35rem; }
+.rule-block__presets {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem;
+    margin: 0 0 0.5rem;
+}
+.rule-block__presets > span { flex-basis: 100%; }
+/* **A maintenance entry's editor** (ADR-0150, landing 4; decision 4 of #35's note):
+   one column at the drawer's 480 pixels and on a phone. The form's first button is a
+   hidden one that sets, so that Enter in a field sets rather than pressing the first
+   of the rest's buttons; it takes no room and no focus. */
+.ls-default-submit {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    border: 0;
+}
+.ls-repeats__row,
+.ls-every,
+.ls-month__row,
+.ls-add__row,
+.ls-days__row,
+.ls-days__picks {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem 0.5rem;
+}
+.ls-repeats__select { width: auto; }
+.ls-every__count,
+.ls-month__day { width: 5rem; }
+.ls-month__row + .ls-month__row,
+.ls-days__picks { margin-top: 0.35rem; }
+.ls-days,
+.ls-month,
+.ls-add { min-width: 0; }
+.ls-day {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.15rem 0.5rem;
+    border: 1px solid var(--ls-panel-line);
+    border-radius: 999px;
+}
+.ls-day:has(input:checked) {
+    border-color: currentColor;
+    font-weight: 600;
+}
+.ls-add__row > input { flex: 1 1 9rem; min-width: 0; width: auto; }
+.ls-schedule-rest {
+    margin: 0.5rem 0;
+    min-width: 0;
+}
+.ls-schedule-rest > summary { cursor: pointer; }
+.ls-schedule-rest__body { margin-top: 0.5rem; }
+.ls-schedule-preview { margin: 0.5rem 0; }
+.ls-schedule-next__label {
+    margin: 0 0 0.2rem;
+    font-weight: 600;
+}
+.ls-schedule-next {
+    margin: 0 0 0.4rem;
+    padding-left: 1.4rem;
+    overflow-wrap: anywhere;
+}
+.ls-schedule-next__clock,
+.ls-schedule-next__more,
+.ls-schedule-next__none { color: var(--ls-muted); }
+.ls-schedule-sentence {
+    margin: 0;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+.ls-schedule-problem {
+    margin: 0;
+    color: var(--ls-ink);
+    font-weight: 600;
+}
+/* **The editor's month** (ADR-0150, landing 5; decision 4 of #35's note): its name
+   between its paging, and six weeks, Monday first, each day a button that fills its
+   cell — its date, its hours from and to, the time of a window it leaves out struck, a
+   night the clocks change its note — a day with a window in maintenance's tint, as a
+   block that holds is. On a phone a day shows its span as a bar instead of its hours,
+   which its name still says. */
+.ls-cal { margin: 0 0 0.5rem; }
+.ls-cal__head {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin-bottom: 0.25rem;
+}
+.ls-cal__title {
+    flex: 1;
+    text-align: center;
+    font-weight: 600;
+}
+.ls-cal__page {
+    min-width: 2rem;
+    padding: 0 0.4rem;
+    border: 1px solid var(--ls-panel-line);
+    border-radius: 6px;
+    background: none;
+    color: inherit;
+}
+.ls-cal__page:disabled { opacity: 0.35; }
+.ls-cal__grid {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: separate;
+    border-spacing: 2px;
+}
+.ls-cal__grid th {
+    font-size: 0.7rem;
+    font-weight: normal;
+    text-align: center;
+    color: var(--ls-muted);
+}
+.ls-cal__grid td { padding: 0; vertical-align: top; }
+.ls-cal__day {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.1rem;
+    width: 100%;
+    min-height: 3.3rem;
+    padding: 0.15rem 0.2rem;
+    border: 1px solid var(--ls-panel-line);
+    border-radius: 4px;
+    background: none;
+    color: inherit;
+    font-size: 0.7rem;
+    line-height: 1.15;
+    text-align: left;
+    overflow: hidden;
+}
+.ls-cal__day.is-other-month,
+.ls-cal__day.is-past { opacity: 0.45; }
+.ls-cal__day[aria-disabled="true"] { cursor: default; }
+.ls-cal__day:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
+.ls-cal__day.is-today { border-color: currentColor; }
+.ls-cal__day.is-window {
+    background: var(--ls-tint-maintenance);
+    color: var(--ls-tint-maintenance-ink);
+}
+.ls-cal__day.is-listed .ls-cal__date,
+.ls-cal__day.is-uncovered .ls-cal__date { text-decoration: underline dotted; }
+.ls-cal__date { font-weight: 600; }
+.ls-cal__struck { text-decoration: line-through; }
+.ls-cal__note { color: inherit; opacity: 0.8; }
+.ls-cal__bar {
+    display: none;
+    position: relative;
+    width: 100%;
+    height: 0.35rem;
+    margin-top: auto;
+    border-radius: 2px;
+    background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.ls-cal__bar > span {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-radius: 2px;
+    background: var(--ls-maintenance-strong);
+}
+@media (max-width: 575.98px) {
+    .ls-cal__hours { display: none; }
+    .ls-cal__bar { display: block; }
+    .ls-cal__day { min-height: 2.6rem; }
+}
+.ls-handmade__item { overflow-wrap: anywhere; }
+.ls-handmade__drop {
+    margin-left: 0.25rem;
+    padding: 0 0.4rem;
+    border: 1px solid var(--ls-panel-line);
+    border-radius: 999px;
+    background: none;
+    color: inherit;
+    line-height: 1.3;
+}
+/* What *Repeats* asks for, shown as it is chosen — with script and without: a once's
+   end field, a repeat's *Length*, its count, its days, *Until* and *Not on*. */
+form:has(select[name="repeat"] option[value="once"]:checked) .ls-when-repeat,
+form:not(:has(select[name="repeat"] option[value="once"]:checked)) .ls-when-once,
+form:not(:has(select[name="repeat"] option[value="daily"]:checked)) .ls-when-daily,
+form:not(:has(select[name="repeat"] option[value="weekly"]:checked)) .ls-when-weekly,
+form:not(:has(select[name="repeat"] option[value="monthly"]:checked)) .ls-when-monthly {
+    display: none;
+}
+/* An open one-off's *Starts* stays blank unless a repeat is chosen, the windows to come
+   starting at it: with script it shows once one is, and without it stands with its
+   hint. */
+.maintenance-edit-enhanced form:has(select[name="repeat"] option[value="once"]:checked)
+    .ls-starts-open-once {
+    display: none;
+}
+/* With script what the editor would set follows its fields, so *Preview* goes. */
+.maintenance-edit-enhanced .ls-preview-button { display: none; }
+/* A series' *Clear* asks first (decision 5 of #35's note): its question stands open
+   across the block, as an editor does, *Clear the schedule* and *Keep it* beneath. */
+.rule-block__ask[open] {
+    flex-basis: 100%;
+    min-width: 0;
+    order: 2;
+}
+.rule-block__ask-form {
+    margin-top: 0.5rem;
+    padding: 0.6rem 0.7rem;
+    border: 1px solid var(--ls-panel-line);
+    border-radius: 6px;
+    background: var(--ls-panel);
+    color: var(--ls-ink);
+}
+.rule-block__question { margin: 0 0 0.5rem; }
+/* **What is planned on a node's page** (ADR-0150): one line each beneath the head's
+   blocks, a door to its block in the drawer, untinted and small. */
+.planned-lines {
+    margin: 0.3rem 0 0.4rem;
+    padding: 0;
+    list-style: none;
+    font-size: 0.8rem;
+}
+.planned-line__door {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    color: inherit;
+    text-decoration: none;
+}
+.planned-line__door:hover { text-decoration: underline; }
+.planned-line__door:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 1px;
+}
+.planned-line__said {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+.planned-line__chevron {
+    flex: none;
     margin-left: auto;
-    --bs-btn-color: var(--ls-ink);
-    --bs-btn-border-color: color-mix(in srgb, var(--ls-ink) 45%, transparent);
-    --bs-btn-hover-color: var(--ls-ink);
-    --bs-btn-hover-bg: transparent;
-    --bs-btn-hover-border-color: var(--ls-ink);
-    --bs-btn-active-color: var(--ls-ink);
-    --bs-btn-active-bg: transparent;
-    --bs-btn-active-border-color: var(--ls-ink);
+}
+/* **On the wall a block is one link**, the button that opens the drawer at it
+   (ADR-0147 decision 7): its sentence its name and a chevron at its end, in the
+   block's own ink and without an underline — a box is a wall of links, plain until
+   hovered — a wash under the pointer, laid over the tint as an inset shadow so that
+   maintenance's blue stays beneath it, and the ring every link takes on focus. */
+a.rule-block--door {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    color: inherit;
+    text-decoration: none;
+}
+a.rule-block--door:hover {
+    box-shadow: inset 0 0 0 100vmax color-mix(in srgb, currentColor 12%, transparent);
+}
+a.rule-block--door:not([data-rule="maintenance"]):hover {
+    box-shadow: inset 0 0 0 100vmax color-mix(in srgb, currentColor 8%, transparent);
+}
+a.rule-block--door:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 1px;
+}
+.rule-block__chevron {
+    flex: none;
+    margin-left: auto;
+    font-size: 1.15em;
+    line-height: 1;
 }
 .rule-block--line {
     margin: 0.3rem 0 0.2rem 1.35rem;
@@ -1778,52 +2359,30 @@ textarea.form-control.maintenance-reason-source {
    A node's name may bring its inspection card (`cursor: help`, above), and a block
    or an editor in the node's box is not what the hint is about.
 
-   On a card an admin's *Edit* shows on hover or keyboard focus, as the pause mark
-   does: a wall of pinned cards is read far more often than it is operated, and a
-   wall of buttons would be the loudest thing on it. On the wall it is a pencil and
-   *Clear* stands in its editor (ADR-0135 decision 4); off it, a node's page states
-   *Edit* and *Clear* in words. They keep their place while hidden, so nothing moves
-   when they show, and they are shown outright where there is no hover to reveal
-   them. A branch's head shows them always, as a leaf's page does. */
+   On the wall a block has no buttons: it is the link that opens the drawer at it,
+   where its *Edit* and *Clear* stand (ADR-0147 decision 7). On the card a node's page
+   draws at depth 0 an admin's *Edit* shows on hover or keyboard focus, as the pause
+   mark does: a card of pins is read far more often than it is operated, and buttons
+   would be the loudest thing on it. They keep their place while hidden, so nothing
+   moves when they show, and they are shown outright where there is no hover to
+   reveal them. A branch's head shows them always, as a leaf's page does. */
 .status-panel > .rule-block,
-.status-panel > .pin-setter > .rule-block,
-.status-panel > .ack-setter > .rule-block,
-.tree-box > .rule-block,
-.tree-box > .pin-setter > .rule-block,
-.tree-box > .ack-setter > .rule-block {
+.tree-box > .rule-block {
     padding: 0.35rem 0.55rem;
     font-size: 0.8rem;
     cursor: auto;
 }
-.status-panel > .rule-block,
-.status-panel > .pin-setter > .rule-block,
-.status-panel > .ack-setter > .rule-block { margin: 0 0 0.4rem; }
-.tree-box > .rule-block,
-.tree-box > .pin-setter > .rule-block,
-.tree-box > .ack-setter > .rule-block { margin: 0.3rem 0 0.25rem; }
+.status-panel > .rule-block--door,
+.tree-box > .rule-block--door { cursor: pointer; }
+.status-panel > .rule-block { margin: 0 0 0.4rem; }
+.tree-box > .rule-block { margin: 0.3rem 0 0.25rem; }
 /* On a node's page the blocks are the rows of the head's list of rules, each a block
-   of the page's size; *Set maintenance* stands where the node's own will. */
+   of the page's size. */
 .viewed-head > .rule-list > .rule-block {
     margin: 0.2rem 0 0.25rem;
     padding: 0.5rem 0.7rem;
     font-size: 0.875rem;
     cursor: auto;
-}
-.viewed-head > .rule-setter,
-.viewed-head > .ack-setter { cursor: auto; min-width: 0; }
-/* With script the head's ‖ opens it, and closed it takes no line (`tree.js`). So it
-   stands from the first paint where the page has its scripts — `tree-pending.js`
-   puts `ls-script` on <html> before the body is parsed — the setter out of sight and
-   ‖ in the head's row, as `tree.js` will draw them, so the page's cards do not move up
-   a line when it runs. Bootstrap hides `[hidden]` with `!important`, which a class
-   and three attributes outweigh. */
-.viewed-head > .rule-setter.is-in-row:not([open]),
-html.ls-script .viewed-head > .rule-setter:not([open]),
-.viewed-head > .ack-setter.is-in-row:not([open]),
-html.ls-script .viewed-head > .ack-setter:not([open]) { display: none; }
-html.ls-script .node-icons > [data-control="pin"][aria-controls="head-setter"][hidden],
-html.ls-script .node-icons > [data-control="ack"][aria-controls="head-ack-setter"][hidden] {
-    display: inline-flex !important;
 }
 /* A page's head runs the frame's whole width, and a sentence, a note or a form that
    did would be past reading. The block's tint fills its row, and what stands in it
@@ -1886,6 +2445,132 @@ html.ls-script .node-icons > [data-control="ack"][aria-controls="head-ack-setter
 .why-card__handled > .handled-mark,
 .why-card__job > .rule-mark { margin-right: 0.35em; vertical-align: -0.08em; }
 .why-card__job { font-weight: 600; }
+
+/* **A node's Notes tab**, the place to act (ADR-0145 decision 1): at a desk two
+   columns — what fails, the line on what came before, what stands and the form on the
+   left, what came before on the right — and on a phone one, in that order, which is
+   Bootstrap's grid. Each part under a small label, the form framed as the one part
+   that acts. */
+.ls-tab__act > section + section { margin-top: 1.25rem; }
+.ls-tab__label {
+    margin: 0 0 0.45rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ls-muted);
+}
+.ls-tab__before {
+    padding: 0.55rem 0.8rem;
+    border: 1px solid var(--ls-line);
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+}
+.ls-tab__before > p { margin: 0; overflow-wrap: anywhere; }
+.ls-tab__before > p + p { margin-top: 0.3rem; }
+.ls-before__links { display: flex; flex-wrap: wrap; gap: 0.35rem 0.5rem; }
+.ls-before__link {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.05rem 0.6rem;
+    border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
+    border-radius: 999px;
+    font-size: 0.8rem;
+    text-decoration: none;
+    overflow-wrap: anywhere;
+}
+.ls-before__link:hover { border-color: currentColor; }
+.ls-tab__beneath { margin-top: 0.5rem; font-size: 0.875rem; }
+/* The block a door opened the tab at (ADR-0147 decision 3, `?at=`): ringed in its own
+   ink, its editor open for whoever may change it, and scrolled clear of the page's
+   sticky bar, as the line a page is asked at is. */
+.rule-block.is-at {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+    scroll-margin-top: calc(var(--ls-bar-height) + 1rem);
+}
+.ls-tab__form {
+    padding: 0.75rem 0.9rem 0.9rem;
+    border: 1px solid var(--ls-line);
+    border-radius: 0.5rem;
+}
+.ls-kind-form > .maintenance-editor-form__actions { margin-top: 0.5rem; }
+/* A package's button that files a ticket from the form (ADR-0148): the frame is ours,
+   the contents are the package's, as on a line and in a head — core emits the
+   `.notes-actions` span after the kind's own button and styles the `.notes-action` a
+   filler puts in it. Secondary beside the kind's own: the text's own ink on no fill,
+   a border in it, so it reads on the panel in every theme with no ink of its own. */
+.notes-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+}
+.notes-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25em;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+    border-radius: 0.25rem;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    text-decoration: none;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.notes-action:hover { border-color: currentColor; color: inherit; text-decoration: none; }
+.notes-action:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 1px;
+}
+.ls-file-hint { margin-top: 0.35rem; }
+/* What came before: a timeline, each entry's kind's mark in a ring on its line. */
+.ls-history { position: relative; margin: 0; padding: 0; }
+.ls-history::before {
+    content: "";
+    position: absolute;
+    left: calc(0.85rem - 0.5px);
+    top: 0.6rem;
+    bottom: 0.6rem;
+    width: 1px;
+    background: var(--ls-line);
+}
+.ls-entry {
+    position: relative;
+    display: flex;
+    gap: 0.75rem;
+    padding-bottom: 1.1rem;
+}
+.ls-entry:last-child { padding-bottom: 0; }
+.ls-entry__mark {
+    position: relative;
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 1.7rem;
+    height: 1.7rem;
+    border: 1px solid var(--ls-line);
+    border-radius: 50%;
+    background: var(--ls-canvas);
+}
+.ls-entry[data-kind="maintenance"] > .ls-entry__mark { color: var(--ls-tint-maintenance-ink); }
+.ls-entry__mark > svg { width: 13px; height: 13px; }
+.ls-entry__body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ls-entry__head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0.1rem 1rem;
+    margin: 0.2rem 0 0.15rem;
+}
+.ls-entry__on { color: var(--ls-muted); }
+.ls-entry__when { color: var(--ls-muted); font-size: 0.8rem; }
+.ls-entry__part-list { margin: 0.25rem 0 0; padding-left: 1.1rem; }
 /* *Handled* (ADR-0135 decision 8): one section per job, its mark and its words. */
 .handled-job__title { margin: 0 0 0.35rem; font-size: 1.05rem; font-weight: 600; }
 .handled-job__title > .rule-mark { margin-right: 0.35em; }
@@ -1942,17 +2627,13 @@ html.ls-script .node-icons > [data-control="ack"][aria-controls="head-ack-setter
 }
 .maintenance-expiry-help__table code { white-space: nowrap; }
 
-/* The per-line maintenance control shares one stable end rail with extension
-   actions: a pause mark at the line's end, present at rest, which never changes
-   the reason's geometry on hover. It opens its editor **beneath the line, in the
-   flow** (ADR-0104 decisions 3 and 4) — the panel it replaces hung from the rail
-   and floated over the lines below — so the disclosure stands after the line's
-   text and only its summary is placed up here: on the **seat** the rail keeps for
-   it, a margin as wide as the mark and a height the rail has even when no action
-   fills it, so no chip sits under the mark and no text runs into it. The box is
-   what the mark is placed in, because the line's own paddings differ with its
-   state and the rail sits inside all of them. Still a native disclosure, closed
-   at rest, so the audit fixture's 150 editors are 150 collapsed forms. */
+/* A line's seat shares one stable end rail with extension actions: ◇ or the mark of
+   what handles the line at its end, present at rest, which never changes the
+   reason's geometry on hover (ADR-0147 decision 1). It is placed on the **seat** the
+   rail keeps for it, a margin as wide as the mark and a height the rail has even when
+   no action fills it, so no chip sits under the mark and no text runs into it. The box
+   is what the seat is placed in, because the line's own paddings differ with its state
+   and the rail sits inside all of them. */
 .check-reason__box { position: relative; }
 .check-reason__rail {
     position: relative;
@@ -1968,9 +2649,6 @@ html.ls-script .node-icons > [data-control="ack"][aria-controls="head-ack-setter
     min-height: 1.2rem;
     margin-right: 1.75rem;
 }
-/* A line that fails now keeps a second seat, for the ringed check beside the pause
-   mark (ADR-0142). */
-.check-reason__rail--seats { margin-right: 3.35rem; }
 .check-reason__rail .reason-actions {
     float: none;
     margin-left: 0;
@@ -2504,39 +3182,6 @@ html.ls-script .node-icons > [data-control="ack"][aria-controls="head-ack-setter
 /* History's periods keep their measure; its readings take the page's width */
 .ls-history__periods { max-width: 980px; }
 
-/* A line's pause mark, on its seat in the rail (see `.check-reason__rail--seat`).
-   The chip shape is `.reason-action`'s — an action is an action — at a fixed width
-   so the seat can be kept for it; the mark stays lit while its editor is open. */
-.reason-pin > summary {
-    position: absolute;
-    top: 0;
-    right: 0;
-    display: inline-flex;
-    justify-content: center;
-    width: 1.5rem;
-    padding: 0;
-    list-style: none;
-    cursor: pointer;
-}
-.reason-pin > summary::-webkit-details-marker { display: none; }
-.reason-pin > summary::marker { content: ""; }
-.reason-pin[open] > .reason-pin__toggle { opacity: 1; }
-/* The ringed check's, on the seat before the pause mark's (ADR-0142). */
-.reason-ack > summary {
-    position: absolute;
-    top: 0;
-    right: 1.6rem;
-    display: inline-flex;
-    justify-content: center;
-    width: 1.5rem;
-    padding: 0;
-    list-style: none;
-    cursor: pointer;
-}
-.reason-ack > summary::-webkit-details-marker { display: none; }
-.reason-ack > summary::marker { content: ""; }
-.reason-ack[open] > .reason-ack__toggle { opacity: 1; }
-
 /* Slot actions on a reason line (ADR-0034). The frame is ours, the contents are a
    dependent package's: core emits the `.reason-actions` rail on every reason line
    and a filler puts `.reason-action` chips in it, so two extensions installed side
@@ -2678,7 +3323,7 @@ html.ls-script .node-icons > [data-control="ack"][aria-controls="head-ack-setter
     -webkit-mask-image: linear-gradient(to bottom, #000 72%, transparent);
             mask-image: linear-gradient(to bottom, #000 72%, transparent);
 }
-/* The lines *⌄ all N* opens (backlog #91) stand no taller than about half a window, or
+/* The lines *⌄ all N* opens (ADR-0127) stand no taller than about half a window, or
    than the budget where a deployment's is taller, and the rest scrolls inside the box:
    a viewer's click no longer stands a box a thousand lines tall. Nothing holds the
    wheel at either end, so a page scrolled past a box goes on past it. While the lines
@@ -2777,8 +3422,8 @@ html.ls-script .node-icons > [data-control="ack"][aria-controls="head-ack-setter
    at its own width. A level's runs share one column width, `--chip-w` on its
    `.tree-kids`: the server's estimate — each character of the widest name and the
    largest count at the theme's `--ls-chip-letter` of a `0`, 0.85 in the system's
-   faces and a whole one in cyberpunk's monospace (backlog #91's note, §2,
-   2026-10-18), and the chip's padding, border, cue and counts' margin as the rules
+   faces and a whole one in cyberpunk's monospace, and the chip's padding, border,
+   cue and counts' margin as the rules
    below size them — which the run's font, the chip's, makes the chip's own, and
    once `tree.js` has measured the level's names in that font, pixels. Each run
    fills its row with as many columns as fit; each
@@ -2789,8 +3434,8 @@ html.ls-script .node-icons > [data-control="ack"][aria-controls="head-ack-setter
    chip's glyphs and a leaf's total past its column's room do — a chip grows taller
    where it stands and never moves another sideways.
 
-   A run with room for one column only wraps as it comes instead (backlog #91's note,
-   §2, 2026-10-17): each chip at its own width, drawn as a column's chip is, sharing
+   A run with room for one column only wraps as it comes instead: each chip at its
+   own width, drawn as a column's chip is, sharing
    lines. What decides is the column as the browser draws it — the estimate before
    the script, what the script measured after — so the run is the container its
    chips ask, in their own font, and its line height is a column and its gap, which
@@ -2897,14 +3542,14 @@ body[data-ls-chip-runs="aligned"] .tree-chip > .tree-counts {
 :is(.status-card__head, .tree-box > .status-node__self) { border-radius: 4px; }
 :is(.status-card__head, .tree-box > .status-node__self) { cursor: pointer; }
 @media (hover: hover) {
-    :is(.status-card__head, .tree-box > .status-node__self):hover:not(:has(:is(.node-icons, .node-actions, .node-more, .node-actions-menu, .maintenance-pip):hover)) {
+    :is(.status-card__head, .tree-box > .status-node__self):hover:not(:has(:is(.node-icons, .node-actions, .node-more, .node-actions-menu, [data-door]):hover)) {
         outline: 1px solid color-mix(in srgb, currentColor var(--ls-toggle-hover-line), transparent);
         outline-offset: 3px;
         background-color: color-mix(in srgb, currentColor var(--ls-toggle-hover-wash), transparent);
         box-shadow: 0 0 0 4px color-mix(in srgb, currentColor var(--ls-toggle-hover-wash), transparent);
     }
 }
-:is(.status-card__head, .tree-box > .status-node__self):active:not(:has(:is(.node-icons, .node-actions, .node-more, .node-actions-menu, .maintenance-pip):active)) {
+:is(.status-card__head, .tree-box > .status-node__self):active:not(:has(:is(.node-icons, .node-actions, .node-more, .node-actions-menu, [data-door]):active)) {
     background-color: color-mix(in srgb, currentColor var(--ls-toggle-press-wash), transparent);
     box-shadow: 0 0 0 4px color-mix(in srgb, currentColor var(--ls-toggle-press-wash), transparent);
 }
@@ -3060,7 +3705,7 @@ html.ls-script:not(.ls-tree-ready) .tree-ok[data-fold-drawn][hidden] {
    toolbar's ends (below). */
 /* The head's controls, one toolbar (decision 3): the head's own icons — ↗ first, so
    that the button that opens the node's page is the first after the name on every
-   head, then the funnel, ▤ and ‖ — then the node's actions and ⋯, where the look
+   head, then the funnel, ▤ and ◇ — then the node's actions and ⋯, where the look
    `head_buttons` puts them, never wrapping, and centred on the row's line, so the
    squares stand on the name's line and the state's small words with them. One of them
    is the keyboard's stop into the toolbar, `tree.js` moving it with the arrow keys. */
@@ -3172,6 +3817,77 @@ html.ls-script:not(.ls-tree-ready) .tree-ok[data-fold-drawn][hidden] {
     border-radius: 50%;
     background: currentColor;
 }
+/* ◇, the node's door (ADR-0147 decisions 1 and 2): a head's square like the others
+   where nothing is handled at or beneath the node, and **lit** where something is — its
+   number beside the diamond, in the maintenance tint every surface that says *handled*
+   wears (the band's pill, the maintenance leaf chip), whose pair clears the text bar in
+   every theme whatever fill the head stands on. Wider by its number, never taller. */
+.node-icon.door.is-lit {
+    width: auto;
+    min-width: 1.5rem;
+    gap: 0.2rem;
+    padding: 0 0.3rem;
+    background: var(--ls-tint-maintenance);
+    color: var(--ls-tint-maintenance-ink);
+    border-color: color-mix(in srgb, var(--ls-tint-maintenance-ink) 60%, transparent);
+}
+.node-icon.door.is-lit:hover { border-color: var(--ls-tint-maintenance-ink); }
+.door__count {
+    font-size: 0.75rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+/* The kiosk's door, which draws no controls: ◇ and its number as a mark after the
+   state, in the same tint, where something is handled; a closed card is a chip in a
+   card's place, whose own ◇ counts what its counts do not show, and draws none. */
+.door-mark {
+    display: inline-flex;
+    align-items: center;
+    flex: none;
+    gap: 0.2em;
+    margin-left: 0.5em;
+    padding: 0 0.35em;
+    border-radius: 0.3rem;
+    background: var(--ls-tint-maintenance);
+    color: var(--ls-tint-maintenance-ink);
+    font-size: 0.8rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.door-mark > .handled-mark { width: 0.85em; height: 0.85em; }
+.status-card.is-closed > .status-card__head > .door-mark { display: none; }
+/* A lit ◇ in the state cluster, under the looks whose toolbar shows only under the
+   pointer (`state_door`, ADR-0147 decision 1): the kiosk's mark made a
+   door, at the state's start, where a card's pip stood, the gap after it. A closed
+   card draws it none, as it draws no controls: its counts say what is handled. */
+.state-door {
+    margin-left: 0;
+    margin-right: 0.45em;
+    vertical-align: 0.05em;
+    text-decoration: none;
+}
+.state-door:hover {
+    text-decoration: none;
+    box-shadow: inset 0 0 0 1px var(--ls-tint-maintenance-ink);
+}
+.state-door:focus-visible { outline: 2px solid var(--ls-tint-maintenance-ink); outline-offset: 1px; }
+.state-door > .icon-mark { width: 0.85em; height: 0.85em; }
+.status-card.is-closed > .status-card__head .state-door { display: none; }
+/* A head's mark is a door too (ADR-0147 decision 7): a link, which keeps the sign's
+   look and takes the ring every link takes on focus. */
+a.head-mark { text-decoration: none; }
+a.head-mark:hover { text-decoration: none; filter: brightness(1.08); }
+/* In a box, whose links take its ink (`.status-node a`), a head's mark and its lit ◇
+   keep the ink of their own tint, as a sign does: the box's ink on a tint of another
+   status falls far under the bar in the dark themes (`tests/sweep_contrast.py`). */
+.status-node a.ls-sign--ok { color: var(--ls-tint-ok-ink); }
+.status-node a.ls-sign--warn { color: var(--ls-tint-warn-ink); }
+.status-node a.ls-sign--error { color: var(--ls-tint-error-ink); }
+.status-node a.ls-sign--maintenance { color: var(--ls-tint-maintenance-ink); }
+.status-node a.ls-sign--undefined { color: var(--ls-tint-undefined-ink); }
+.status-node a.door-mark { color: var(--ls-tint-maintenance-ink); }
+a.head-mark:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
 /* the head's glyph: two thirds of its square — 16 of 24 pixels at the browser's own
    size, and in rem as the square is, so a browser set to a larger font grows both
    alike; the drawings fill ten to twelve of their sixteen units, so what shows is
@@ -3406,6 +4122,14 @@ html.ls-script .ls-band__modes[hidden] { display: inline-flex !important; }
     background-color: var(--ls-toggle-on);
     border-color: var(--ls-toggle-on);
 }
+/* *◇ details* (ADR-0147 decision 6): its label leads with the mark it is named by,
+   the handled ◇, at the label's own size. */
+.ls-band__details > .handled-mark {
+    width: 0.85em;
+    height: 0.85em;
+    margin-right: 0.2em;
+    vertical-align: -0.05em;
+}
 /* The tag a wall shows only what carries (ADR-0139 decision 5): a select beside the
    switches, as wide as its longest tag. */
 .status-filters__tag { width: auto; max-width: 14rem; }
@@ -3456,21 +4180,6 @@ html.ls-script .ls-band__modes[hidden] { display: inline-flex !important; }
     margin-top: 0.3rem;
     font-size: 0.8rem;
 }
-/* A block's note, opened from its mark on the wall (ADR-0135 decision 3): the
-   inspection card's look and place, the node's name, the block's sentence, the
-   note whole — scrolling past a height, clamped and never cut — who set it and
-   when, and the node's page. */
-.note-card { max-width: min(44ch, 92vw); }
-.note-card__sentence { margin-top: 0.25rem; }
-.note-card__sentence > .rule-mark { margin-right: 0.3em; }
-.note-card__note {
-    margin-top: 0.35rem;
-    max-height: min(50vh, 22rem);
-    overflow: auto;
-}
-.note-card__note > :last-child { margin-bottom: 0; }
-.note-card__record { margin: 0.35rem 0 0; font-size: 0.8rem; }
-
 /* keep an embedded image from overflowing the card */
 .inspect-card img { max-width: 100%; height: auto; }
 
@@ -3482,10 +4191,10 @@ html.ls-script .ls-band__modes[hidden] { display: inline-flex !important; }
    dims as above — a wall left with an editor open must not read as live — but for
    the card or the head that holds the open editor, which somebody is typing in. On
    a node's page the parts dim inside its frame: the head, the cards, the facts. */
-.poll-waiting > :not(.status-grid, .node-frame):not(:has(details.maintenance-editor-disclosure[open] .maintenance-editor-form, details.reason-pin[open] .maintenance-editor-form, details.reason-ack[open] .maintenance-editor-form)),
-.poll-waiting .node-frame__box > :not(.status-grid):not(:has(details.maintenance-editor-disclosure[open] .maintenance-editor-form, details.reason-pin[open] .maintenance-editor-form, details.reason-ack[open] .maintenance-editor-form)),
-.poll-waiting > .status-grid > :not(:has(details.maintenance-editor-disclosure[open] .maintenance-editor-form, details.reason-pin[open] .maintenance-editor-form, details.reason-ack[open] .maintenance-editor-form)),
-.poll-waiting .node-frame__box > .status-grid > :not(:has(details.maintenance-editor-disclosure[open] .maintenance-editor-form, details.reason-pin[open] .maintenance-editor-form, details.reason-ack[open] .maintenance-editor-form)) {
+.poll-waiting > :not(.status-grid, .node-frame):not(:has(details.maintenance-editor-disclosure[open] .maintenance-editor-form)),
+.poll-waiting .node-frame__box > :not(.status-grid):not(:has(details.maintenance-editor-disclosure[open] .maintenance-editor-form)),
+.poll-waiting > .status-grid > :not(:has(details.maintenance-editor-disclosure[open] .maintenance-editor-form)),
+.poll-waiting .node-frame__box > .status-grid > :not(:has(details.maintenance-editor-disclosure[open] .maintenance-editor-form)) {
     opacity: 0.45;
     transition: opacity 0.3s ease;
 }
@@ -3557,7 +4266,7 @@ html.ls-script:not(.ls-boxes-drawn) body[data-ls-boxes="packed"] #status-grid {
     color: var(--ls-muted);
 }
 /* The line beneath a group's heading: what the group changes, in a few words
-   (backlog #91). It wraps in its column's width, as a long choice does, so a long line
+   (ADR-0029). It wraps in its column's width, as a long choice does, so a long line
    takes a second row and never widens the menu. */
 .ls-menu__line {
     padding: 0 0.9rem 0.2rem;
@@ -3614,7 +4323,7 @@ html.ls-script:not(.ls-boxes-drawn) body[data-ls-boxes="packed"] #status-grid {
 /* The session's row, the menu's first: whom this browser is signed in as, and Log
    out as a button drawn from its ink, an edge of it around the word — the way out is
    done to a session, not to how the page looks, so it stands apart from the looks,
-   above them and in reach at once however short the window (backlog #91). Under the
+   above them and in reach at once however short the window (ADR-0029). Under the
    pointer it takes the rows' wash. */
 .ls-menu__who {
     display: flex;
@@ -3902,6 +4611,15 @@ body[data-ls-theme="cyberpunk"] .ls-strip:is(.s-error, .s-warn, .s-maintenance, 
                 inset 0 0 18px color-mix(in srgb, var(--ls-neon) 45%, transparent),
                 0 0 12px color-mix(in srgb, var(--ls-neon) 55%, transparent);
 }
+/* A tube with a rail (ADR-0143): the rail and its strip of the page first, over the
+   glass and its glow. */
+body[data-ls-theme="cyberpunk"] :is(.status-card, .status-node).has-rail:is(.s-error, .s-warn, .s-maintenance, .s-undefined):not(.dim),
+body[data-ls-theme="cyberpunk"] .status-card.has-rail.is-closed.dim:is(.s-error, .s-warn) {
+    box-shadow: inset -4px 0 0 var(--ls-rail), inset -6px 0 0 var(--ls-canvas),
+                0 0 0 1px var(--ls-neon),
+                inset 0 0 18px color-mix(in srgb, var(--ls-neon) 45%, transparent),
+                0 0 12px color-mix(in srgb, var(--ls-neon) 55%, transparent);
+}
 body[data-ls-theme="cyberpunk"] .status-card:is(.s-error, .s-warn, .s-maintenance, .s-undefined):not(.dim) > .status-card__head > .status-card__name,
 body[data-ls-theme="cyberpunk"] .status-card:is(.s-error, .s-warn, .s-maintenance, .s-undefined):not(.dim) > .status-card__head > .status-card__state,
 body[data-ls-theme="cyberpunk"] .status-card.is-closed.dim:is(.s-error, .s-warn) > .status-card__head > .status-card__name,
@@ -3913,13 +4631,8 @@ body[data-ls-theme="cyberpunk"] .ls-strip:is(.s-error, .s-warn, .s-maintenance, 
 body[data-ls-theme="cyberpunk"] .ls-strip:is(.s-error, .s-warn, .s-maintenance, .s-undefined) > .ls-strip__state {
     text-shadow: 0 0 2px var(--ls-neon), 0 0 8px var(--ls-neon), 0 0 16px var(--ls-neon);
 }
-/* Two marks painted from the vivid fills, which the glass turned dark: the pause pip
-   on a parent's head keeps an edge in maintenance's neon, and the warned triangle on a
-   measure's curve the warning's amber, its neon. */
-body[data-ls-theme="cyberpunk"] .maintenance-pip {
-    box-shadow: 0 0 0 1px var(--ls-tint-maintenance-ink),
-                0 0 6px var(--ls-tint-maintenance-ink);
-}
+/* A mark painted from the vivid fills, which the glass turned dark: the warned
+   triangle on a measure's curve keeps the warning's amber, its neon. */
 body[data-ls-theme="cyberpunk"] .ls-curve__warned { fill: var(--ls-tint-warn-ink); }
 /* A status a node's text names glows in its state's neon, the ink it is drawn in, as
    the theme's state words do: its word with their halo, its tint with a little light

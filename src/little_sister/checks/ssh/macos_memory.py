@@ -60,7 +60,6 @@ from little_sister.checks.ssh.metrics import (
     parse_metrics,
     reading,
     readings,
-    refuse_thresholds,
     unavailable,
 )
 from little_sister.grading import Graded
@@ -118,10 +117,12 @@ GRADINGS: dict[str, object] = {
         "warn": "1 GiB", "error": "2 GiB"},
 }
 
-#: What replaced each aspect of the retired `thresholds:` block, and the unit its
-#: level is written with; a process's levels moved into its own entry.
-RETIRED_THRESHOLDS = {"swap": ("max_swap", " MiB"),
-                      "compressor": ("max_compressor", "%")}
+#: The keys this type's file takes beside every check's, its gradings' and the
+#: connection's (ADR-0151), and what a watched process's entry takes beside its pair's
+#: keys: the retired ``thresholds:`` block, and a process's retired ``warn_mb`` and
+#: ``error_mb``, are keys their place does not take, refused as any other.
+CONFIG_KEYS = ("processes", "descriptions")
+PROCESS_KEYS = ("name", "pattern")
 
 PRESSURE_LABELS = {1: "normal", 2: "warning", 4: "critical"}
 
@@ -202,11 +203,22 @@ class MacosMemoryCheck(SshScriptCheck):
                  descriptions: dict[str, str] | None = None,
                  **kwargs: Any) -> None:
         super().__init__(subnode_defaults=SUBNODE_DEFAULTS, node_defaults=NODE_DEFAULTS,
-                         measure_defaults=MEASURES, gradings=GRADINGS, **kwargs)
+                         measure_defaults=MEASURES, gradings=GRADINGS,
+                         config_keys=CONFIG_KEYS, **kwargs)
         # Each watched process's levels stand in its own entry, the block its
         # resident memory is graded in, read here so that a level that does not fit
-        # stops the start naming the entry.
+        # stops the start naming the entry — and an entry takes its name, its pattern
+        # and its pair's keys and nothing else, so that a key it does not take stops
+        # the start too, naming what it takes (ADR-0151).
         block = self.grading_block("processes")
+        takes = (*PROCESS_KEYS,
+                 *(key for grading in block.gradings for key in grading.keys))
+        for index, (_, _, entry) in enumerate(processes, 1):
+            unknown = sorted(str(key) for key in entry if str(key) not in takes)
+            if unknown:
+                raise CheckError(
+                    f"unknown key(s) in processes[{index}]: {', '.join(unknown)} "
+                    f"(an entry takes: {', '.join(takes)})")
         self.processes = tuple(
             ProcessSpec(name, pattern, block.read(entry, f"processes[{index}]"))
             for index, (name, pattern, entry) in enumerate(processes, 1))
@@ -215,10 +227,6 @@ class MacosMemoryCheck(SshScriptCheck):
     @classmethod
     def _extra_from_config(cls, config: dict[str, Any],
                            base_dir: Path) -> dict[str, Any]:
-        refuse_thresholds(
-            config.get("thresholds"), RETIRED_THRESHOLDS,
-            also="— and a watched process's levels, thresholds.process, are "
-                 "max_rss_warn and max_rss_error in its own entry")
         return {
             **cls._connection_from_config(config, base_dir, DEFAULT_SCRIPT),
             "processes": _parse_processes(config.get("processes")),
@@ -478,7 +486,8 @@ def _parse_processes(
     """Parse ``processes:`` — a list of ``{name, pattern}`` entries, each with its
     own ``max_rss_warn`` and ``max_rss_error`` where it re-sets them. ``name`` (the
     leaf) and ``pattern`` (the command-line substring) are required, and the entry is
-    handed on whole, for the library to read its levels in (ADR-0131)."""
+    handed on whole, for the library to read its levels in (ADR-0131) and the check
+    to refuse a key it does not take (ADR-0151)."""
     if raw is None:
         return ()
     if not isinstance(raw, list):
@@ -497,14 +506,5 @@ def _parse_processes(
         if name in names:
             raise CheckError(f"processes[{i}]: duplicate name {name!r}")
         names.add(name)
-        retired = [key for key in ("warn_mb", "error_mb") if key in item]
-        if retired:
-            write = ", ".join(
-                f"max_rss_{key[:-3]}: {item[key]} MiB" for key in retired)
-            raise CheckError(
-                f"processes[{i}] {' and '.join(repr(key) for key in retired)} "
-                f"{'is' if len(retired) == 1 else 'are'} retired: a process's "
-                f"levels are a pair in its entry now, its level the last value that "
-                f"passes — write {write} (ADR-0131)")
         specs.append((name, pattern, item))
     return tuple(specs)

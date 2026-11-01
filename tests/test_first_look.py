@@ -1,6 +1,6 @@
 """Where a node's first look comes from (ADR-0128): the resolver, layer by layer and
-key by key, in the order §3.4 and §7.9 of the interactive wall's note give — and what
-the server draws of it (§7.5), the failure budget among it.
+key by key, in the order its decision 2 gives — and what the server draws of it, the
+failure budget among it.
 
 The viewer is the first layer and the browser's; these are the other five — a
 node's ``nodes.yaml`` entry, the file of the check that writes it, that check's
@@ -306,7 +306,7 @@ def _root(tree: StatusTree, path: str = "") -> StatusSnapshot:
 
 
 class WhatTheServerDrawsTests(TestCase):
-    """How each node starts as the page arrives (§7.5's *What the server draws*):
+    """How each node starts as the page arrives (:func:`first_look.draw`):
     closed where its parent's ``chips`` says, open where nobody spoke but for a big
     level (:class:`TheNetForABigLevelTests`), a ``depth=`` level closed — and, beside
     it, what the planner prices."""
@@ -333,8 +333,8 @@ class WhatTheServerDrawsTests(TestCase):
         self.assertEqual(drawn.priced, frozenset())
 
     def test_where_nobody_spoke_every_node_starts_open_its_healthy_shown(self) -> None:
-        # the built-in look (§3.4): a quiet leaf, a failing one, a claim and every
-        # branch open, and nothing folded
+        # the built-in look (ADR-0128 decision 2): a quiet leaf, a failing one, a
+        # claim and every branch open, and nothing folded
         self.tree.upsert("/c/host/raid", StatusCode.WARN, "degraded")
         drawn = self._draw()
         self.assertEqual((drawn.closed, drawn.priced, drawn.folded),
@@ -376,7 +376,7 @@ class WhatTheServerDrawsTests(TestCase):
 class TheNetForABigLevelTests(TestCase):
     """Where nobody spoke, a level whose children, opened, would draw more than
     :data:`BIG_LEVEL` boxes starts as chips, as ``chips: true`` would start it: the
-    net for the level nobody expected to be big (§3.4; §2, 2026-10-24). The boxes are
+    net for the level nobody expected to be big (ADR-0128 decision 8). The boxes are
     counted all the way down, the deeper levels deciding first, so a child counts what
     it draws once it has decided; no status counts, so the planner prices what it
     decides, and every statement wins over it."""
@@ -506,7 +506,7 @@ class TheNetForABigLevelTests(TestCase):
 
 class TheFailureBudgetTests(TestCase):
     """In each card the first three failures the first look hides open their way,
-    errors before warnings and in the card's order (§3.3, §7.9)."""
+    errors before warnings and in the card's order (ADR-0127 decision 5)."""
 
     def setUp(self) -> None:
         self.tree = StatusTree()

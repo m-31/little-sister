@@ -83,12 +83,12 @@ aggregation, without an event, and not in the JSON envelope. Refines
 
 A maintenance side-table written through to `var/state/pins.json` and replayed before
 the engine runs, keyed by `path` and by `(path, slug)`; a pin is held against its path
-and makes no node. Its times are instants in UTC, and a file of another shape or with a
-time without a zone is refused, never migrated. Every pin expires — a week by default,
-at least the slowest covered check's interval, at most a year — is swept by the
-scheduler, and is reaped at startup unless a check or the instance's own node covers it.
-An edit is a compare-and-set on `set_at`, keeps an expiry left as it was filled, and
-writes nothing where nothing changed. → [record](adr/0014-maintenance-persistence.md)
+and makes no node. Its times are instants in UTC: a file of another shape or with a time
+without a zone is refused, never migrated, and a maintenance entry of the shape before
+schedules is dropped as it is read. Maintenance lasts a week by default, never
+indefinitely: an entry is its schedule (ADR-0150), a window ending within a year of its
+set. The scheduler ends a pin past its end, the start reaps one no check covers, and an
+edit is a compare-and-set on `set_at`. → [record](adr/0014-maintenance-persistence.md)
 
 ### ADR-0015 — Check discovery: a union of config directories
 
@@ -128,8 +128,7 @@ its `description` where it has none — its tags and a link to its handbook, as
 server-rendered Markdown from a path-keyed map every refresh of the grid carries, and
 never its live state. It opens on a pause on a node's name where a browser's look says
 so — the library's look keeps it closed — is not offered on touch, stays on its node
-through the grid swaps, replaces the `title=` tooltips and needs no new route. A rule's
-note opens in a card of its look, on its machinery.
+through the grid swaps, replaces the `title=` tooltips and needs no new route.
 → [record](adr/0019-inspection-popover.md)
 
 ### ADR-0021 — Script resolution: packaged defaults with an override
@@ -248,11 +247,11 @@ check never retries. `retry_interval` is off by default.
 The library declares a closed roster of named slots with the context each hands over; a
 dependent package registers its own template (only as `ext/<package>/<name>`, additive,
 never shadowing) plus an optional context provider, which receives the names it declares
-and returns `None` for *nothing here*. A broken filler contributes nothing and the page
-renders. Slots: `reason.actions` (with the whole `line`) and `node.actions`, in the
-head's row of every open box and of a node's page's frame, `place` telling a card, a box
-and a frame apart; both hand over `written_out` and `details` for a draft.
-→ [record](adr/0034-template-slots-for-dependent-packages.md)
+and returns `None` for *nothing here*; a broken filler contributes nothing. Slots:
+`reason.actions` (with the whole `line`) and `node.actions` in an open head's row,
+`place` telling a card, a box and a frame apart, and `notes.actions` in a *Notes* tab's
+form, whose filler registers a draft function; each hands over `written_out`, `details`
+and `notes_url()`. → [record](adr/0034-template-slots-for-dependent-packages.md)
 
 ### ADR-0035 — A dependent package registers its own configuration aspect
 
@@ -270,8 +269,8 @@ content hash. A pin lives in the maintenance side-table under `(path, slug)`, jo
 the snapshot; absence suspends a pin and only expiry disposes of it; entries are virtual
 children, so a node whose members are all pinned has an own status of `MAINTENANCE` that
 counts and cancels nothing, and reads it whole only where nothing beneath it counts. An
-entry pin is set on its node's own page, a leaf's or a branch's, and is addressed by
-`?reason=<slug>`, never a path segment. → [record](adr/0036-addressable-reasons.md)
+entry pin is set on its node's *Notes* tab and is addressed by `?reason=<slug>`, never a
+path segment. → [record](adr/0036-addressable-reasons.md)
 
 ### ADR-0037 — Extension static assets: a filler may ship CSS and JS
 
@@ -929,13 +928,13 @@ A root appears once: its heading is its own row, the nodes beneath it indented.
 ### ADR-0104 — A pin is one block on what it holds, and it is edited there
 
 One block states a pin wherever one shows — who, until when and what is left, the note
-in full, *Edit* and *Clear* for an admin, on the wall its note behind a mark and *Edit*
-a pencil — and where it stands says what it covers: a node's frames its lines, a line's
-hangs beneath it, and a pin above a node is stated on its page too, without buttons. A
-pin is set and edited in place, on a node's page, *Handled* and the wall, whose refresh
-waits for an open editor; an edit shows the expiry it would keep, and one that changes
-nothing writes nothing. The block is a rule's: maintenance's, *seen*'s (ADR-0142), and
-without buttons a configured rule's (ADR-0137). → [record](adr/0104-a-pin-is-one-block-on-what-it-silences.md)
+in full, *Edit* and *Clear* for an admin; on the wall, under *◇ details*, a link to its
+node's drawer — and where it stands says what it covers. A new pin is set on its node's
+*Notes* tab, behind ◇, and one that stands is edited where its block stands, the refresh
+waiting while an editor or the drawer is open; an edit shows what it would keep, and one
+that changes nothing writes nothing. The block is a rule's: maintenance's, open or
+planned, *seen*'s, *silenced*'s and *done*'s, and without buttons a configured rule's.
+→ [record](adr/0104-a-pin-is-one-block-on-what-it-silences.md)
 
 ### ADR-0105 — A page is laid out at its screen's width, and is no wider
 
@@ -961,13 +960,13 @@ failed run also in the lane beneath. The API reads a series at the Series view's
 
 ### ADR-0107 — An event is a change of what a node shows
 
-The log records every change of what a node shows — a reading's, its pin's, a line's
-pin set or ended — and nothing for a line by itself. A change of the reading the node
-does not show is a row of its own, held back as `maintenance` — also where only some
-lines are pinned — or as `aggregation` where a configured rule counts its lines
-otherwise; a run that does both writes two rows. An event carries its cause and what
-the check reported, which the restart and the count of changes read. A restart replays
-nothing: the first reading is compared with what the log last showed and reported.
+The log records every change of what a node shows, and every set, edit and end of a pin
+or an acknowledgment, a line's included, whatever it does to its node; nothing else is
+written for a line by itself. A change of the reading the node does not show is a row of
+its own, held back as `maintenance`, or as `aggregation` where a configured rule counts
+its lines otherwise; a run that does both writes two rows. An event carries its cause,
+an end why it ended, and what the check reported. A restart replays nothing: the first
+reading is compared with what the log last showed and reported.
 → [record](adr/0107-an-event-is-a-change-of-what-a-node-shows.md)
 
 ### ADR-0108 — The wait before an escalation counts what a node shows
@@ -1216,13 +1215,13 @@ from the series. → [record](adr/0130-a-unit-has-a-period-of-its-own.md)
 ### ADR-0131 — A type declares what it grades, and the library grades it
 
 A type declares every value it grades — a map from a word to a code, a pair of levels
-over a number, a set of accepted values, a window over its kept records — with its
-default and the key a deployment writes, and the library reads, refuses, lists and
-applies it, handing the line its `reason`. A pair is `<name>_warn` and `_error` beside
-`<name>_reason`, `null` switching it off, passing at its level, `max_` above and `min_`
-below; a map folds its words and logs a key no word matches; a rule writes what its
-block grades; a window is handed to the seam cut at the reading, `since` first.
-→ [record](adr/0131-a-type-declares-what-it-grades-and-the-library-grades-it.md)
+over a number, a set of accepted values — with its default and the key a deployment
+writes, and the library reads, refuses, lists and applies it, handing the line its
+`reason`; a map that decides which bands a type writes stays the type's. A pair is
+`<name>_warn` and `_error` beside `<name>_reason`, `null` switching it off, passing at
+its level, `max_` above and `min_` below; a map folds its words and logs a key no word
+matches; a rule writes what its block grades; a window over the kept records is handed
+to the seam cut at the reading, `since` first. → [record](adr/0131-a-type-declares-what-it-grades-and-the-library-grades-it.md)
 
 ### ADR-0132 — A branch keeps the period of what it shows beside the log
 
@@ -1262,9 +1261,8 @@ while anyone does, and at once at a flip, a stop and an action, run between two 
 Every part keeps its true color under the mark of the rule acting on it — ‖ maintenance,
 a ringed check accepted, a bell struck through silenced, § a configured rule — and what
 it counts as shows one level up; maintenance alone paints blue, in words of its own. On
-the wall a block says its sentence, its note opening from a mark in a card, *Edit* a
-pencil and *Clear* in the editor, its edge dashed and its fill only where its rule
-paints. A closed chip says what is handled beneath it as ◇ and a total, a branch why it
+the wall a block says its sentence and opens its node's drawer (ADR-0147), its edge
+dashed and its fill only where its rule paints. A closed chip says what is handled beneath it as ◇ and a total, a branch why it
 has its color after Time, and every rule stands in one index, *Handled*, at `/handled`.
 → [record](adr/0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
 
@@ -1311,32 +1309,131 @@ the actions and the Events page, and the envelope carries `tags` (2.12.0).
 
 ### ADR-0140 — A node's notes stand on a tab of their own, and its hand-off carries the newest
 
-An admin writes a note of its own on a node or on one of its lines, changed while it is
-the newest; a pin's note joins the same notes as the pin is set. *Notes*, a tab after
-History with its count, lists them newest first with what the node showed then; a
-line leads there too, a node's Copy document carries the newest, and the page of a
-path no node stands at lists its notes. `reason` became `note` in the model, the form
-and `pins.json` at once; the notes are `var/state/notes.json`, retired on the tick.
+Whoever may write a note writes one of its own on a node or on one of its lines, changed
+while it is the newest; every pin's note joins the same notes as the pin is set and
+records how the pin ended. *Notes*, a tab after History with its count of entries, lists
+them newest first with what the node showed then; a line's ◇ leads there too, a node's
+Copy document carries the newest note with words, and the page of a path no node stands
+at lists its notes. `reason` became `note` in the model, the form and `pins.json` at
+once; the notes are `var/state/notes.json`, retired on the tick.
 → [record](adr/0140-a-nodes-notes-stand-on-a-tab-of-their-own.md)
 
 ### ADR-0141 — Every pin is one thing with a kind, in one file, and the envelope lists what handles a part
 
-Every pin a person sets is one thing with a kind — maintenance and *seen* so far — in
-one list, `var/state/pins.json`, beside its node's path or its line's, with an id of its
-own; `maintenance.json` is retired, a clean break that drops the pins standing at the
-upgrade. The envelope is at `schema_version` 3: `handled` lists every pin and every
-acting configured rule on a part, `contribution.rule` names the one that decided, and
-`maintenance` is gone. Each act has a route and a permission named for its kind,
-`Identity.may(<act>)`.
+Every pin a person sets is one thing with a kind — maintenance, *seen*, *silenced* and
+*done* — in one list, `var/state/pins.json`, beside its node's path or its line's, with
+an id of its own; `maintenance.json` is retired, a clean break that drops the pins
+standing at the upgrade. The envelope is at `schema_version` 3: `handled` lists every
+pin and every acting configured rule on a part, `contribution.rule` names the one that
+decided, and `maintenance` is gone. Each act has a route and a permission named for its
+kind, a note's `note` beside them, `Identity.may(<act>)`.
 → [record](adr/0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
 
 ### ADR-0142 — A failure marked seen counts as OK above until it changes
 
-A person who has looked into a failure marks it seen with the ringed check: a pin of the
-kind `seen` on a line or on a node's own failure, bound to the status it was set at and
-to its occurrence — the field a type names as `occurrence=`, else its reading's
-identity, else the failing stretch. Its part keeps its color and counts as OK above. It
-ends at a recovery, a worsening, a new occurrence, when its part is no longer reported,
-at an end it was given or by hand, each end a row saying why. A head's ✓ marks every
-failure at and beneath it, each its own.
+A person who has looked into a failure marks it seen on its node's *Notes* tab: a pin of
+the kind `seen` on a line or on a node's own failure, under the ringed check, bound to
+the status it was set at and to its occurrence — the field a type names as
+`occurrence=`, else its reading's identity, else the failing stretch. Its part keeps its
+color and counts as OK above. It ends at a recovery, a worsening, a new occurrence, when
+its part is no longer reported, at an end it was given or by hand, each end a row saying
+why. The head's act marks every failure at and beneath it, each its own.
 → [record](adr/0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md)
+
+### ADR-0143 — A handled part carries its job's mark, and a rail in the color it counts as
+
+A handled part keeps its true color, its tint and its place. A line carries its job's
+mark — seen's ringed check, a silence's bell struck through, a rule's §, a pin's ‖ — at
+its top right in the color it counts as, its words in its tooltip, a door to its node's
+drawer; a node carries it beside its head's state, on its own tint. Wherever a part
+counts as something other than it shows, damping and the shield included, a rail on its
+right edge says what, a box's on a strip of the page. The shield says *· reached through
+vpn* beside its state.
+→ [record](adr/0143-a-handled-part-carries-its-jobs-mark-and-a-rail-in-the-color-it-counts-as.md)
+
+### ADR-0144 — A failure silenced counts at its level above until its deadline
+
+A part that flaps is silenced on its node's *Notes* tab, *Silence* chosen — while it
+fails, or while it reads ok, from its next failure: a pin of the kind `silenced` with a
+level — counting as OK above, or at most as a warning — and a deadline, a week by
+default and thirty days at most, an extension saying what changed in a note of its own.
+Its part keeps its color through every recovery; beside a configured rule the stricter
+cap counts, and a rule's count reads a held part, seen or silenced, as it reads. It ends
+at its deadline, by hand or made seen.
+→ [record](adr/0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md)
+
+### ADR-0145 — A node's Notes tab is the place to act, and every pin leaves an entry that says how it ended
+
+A node's *Notes* tab holds what fails, a line on what came before, what stands and one
+form of kinds — *Note*, *Done*, *Seen*, *Silence*, *Maintenance* — beside the history of
+what came before, a note an act under its own permission, `note`. Every pin leaves an
+entry that records its kind and its end, one set without words a record; one act on many
+parts is one entry, kept on a branch it was made from too, and the Copy document hands
+over the newest note with words. Every line pin's set, edit and end is a row, and every
+end says why.
+→ [record](adr/0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)
+
+### ADR-0146 — An event marked done shows OK until its line reads anything else
+
+An event looked into and over is closed on its node's *Notes* tab, *Done* chosen: a pin
+of the kind `done` on a failing line whose failure has an occurrence of its own, bound
+to that failure and that event, with no end. Its line shows OK with the failure it
+closed beside it and counts as OK, the healthy fold taking it as that OK; it ends when
+its line reads anything else — another event, the same one recovered or worse, no line —
+or by hand, never by the clock, so the next failure alarms as new. A block's editor makes
+an acknowledgment done, and a done another kind, in one write.
+→ [record](adr/0146-an-event-marked-done-shows-ok-until-its-line-reads-anything-else.md)
+
+### ADR-0147 — One door, ◇, opens a node's Notes tab in a drawer over the waiting wall
+
+One door, ◇, stands where ‖ and ✓ stood — on every head, for everyone, lit in its state
+where the toolbar shows only under the pointer, and as a handled line's mark — lit with
+the number of parts handled behind it. It opens the node's *Notes* tab in a modal drawer
+over the wall, which waits: a write there is the tab's and closes it, a window set ahead
+shown at its block instead, and a close asks before it drops what was written; without
+script it is a link to the tab, on a phone a sheet. A browser's *◇ details*, off by
+default, takes the blocks off the wall, a handled part saying its color and its mark,
+and a block or a mark opens the drawer at its pin. → [record](adr/0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)
+
+### ADR-0148 — A ticket is drafted from a note's words by the package that fills the Notes tab's slot
+
+A node's *Notes* tab declares a slot, `notes.actions`, after the kind's own button in
+every kind's row and in a small form for whoever may set no kind. Its filler registers
+a draft function, which a route of the library's calls with the part chosen and what it
+reads, the words written out and the Notes tab's address, and sends the new tab to the
+http(s) address it returns, never to one the request carries. Every slot is handed
+`notes_url`; a package adds its tracker to `form-action`; the drawer takes no such
+submit for a write.
+→ [record](adr/0148-a-ticket-is-drafted-from-a-notes-words-by-the-package-that-fills-its-slot.md)
+
+### ADR-0149 — A deployment's holidays are named lists of the days nobody works, each complete for the years it states
+
+`config/holidays.yaml` holds the days nobody works as named lists — a region's public
+holidays, a company's own days off — each meaning that to every reader, maintenance's
+*not on holidays* first. A list is keyed by a name its reader keeps (`not_on: DE-BY`),
+with a `name` that reads after *not on*, the years it is complete for, stated and never
+inferred, and its days, each named; `default` names the list offered first. A mistake
+leaves its list unreadable, or outside the lists the file and every list, each a warning
+at the start that stops nothing; a later root's list wins whole. Lists from outside are
+kept open behind a seam, not built. → [record](adr/0149-a-deployments-holidays-are-named-lists-of-the-days-nobody-works.md)
+
+### ADR-0150 — A maintenance entry is its schedule, and holds while a window of it is open
+
+A maintenance entry keeps its schedule as RFC 5545 text, in a subset, beside `not_on`,
+the holiday list its rule leaves out, and the windows changed alone; one implementation
+on `zoneinfo` works out every window. An entry stands until its schedule ends and holds
+while a window is open, each opening and close a row of its node and counted once in its
+note; old entries are dropped. What is planned holds nothing and is listed apart, in one
+sentence. The page sets a window, ahead with *Starts*, or a series, a day's window added
+or left out on its month, and a window set where an entry stands joins it; a series'
+window open is two rows, *Extend* and *End now*, then *Edit* and *Clear*, which asks. → [record](adr/0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md)
+
+### ADR-0151 — A type states the keys its file takes, and any other stops the start
+
+A type hands `Check.__init__` the keys it takes at the top level of its file,
+`config_keys`, beside its gradings; the library adds every check's keys, one list held
+to its reader, and those its gradings are written under, and refuses at the start any
+other key at the top level, in a `subnodes:` entry or in a `children:` block, naming
+what the place takes. A retired key needs no code, and the library's refusals of its
+old spellings go. Stating is required of every type, so the check API epoch moves to 4
+and every package is released with the library. → [record](adr/0151-a-type-states-the-keys-its-file-takes-and-any-other-stops-the-start.md)

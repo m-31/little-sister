@@ -1,0 +1,59 @@
+# The deployment's holidays (ADR-0149) — the days nobody works, as named lists: a
+# region's public holidays, a company's own days off. Configuration only: no code.
+#
+# This file is an example and lists nothing as it stands (every line is commented out).
+# Maintenance that leaves a list's days out reads them — a maintenance window's *Not
+# on* — and the watch window and quiet hours read the same lists when they come: a list
+# means one thing, days nobody works, to every one of them.
+#
+# Each list is keyed by a name the deployment chooses — an ISO 3166-2 code by
+# convention for a region's public holidays, anything for a company's own. A reader
+# keeps the key, as a maintenance entry keeps `not_on: DE-BY`, so a list renamed here
+# is a list whatever named it names no more. A list writes three keys:
+#
+#   name       what reads after "not on" in a sentence: "holidays in Bavaria",
+#              "ACME's company holidays"
+#   complete   the years the list is complete for — stated, never inferred: a year
+#              written here is complete even with no day in it, and a day written in a
+#              year not written here makes that year no more complete. A reader that
+#              needs a year the list does not state has it missing and fails toward
+#              alarming, so add the next year's days, and the year, once a year
+#   dates      each day, YYYY-MM-DD, with its name, which a page marks it with
+#
+# `default` names the list an editor offers first; leave it out where there is one.
+#
+# What cannot be read does not apply, and the instance's own node, /little-sister,
+# names it at the start. In a list, any mistake — a day that is no date or carries a
+# time, a day written twice, a day or the list with no name, no year stated complete or
+# one that is no year, a key a list does not know — leaves that list unreadable whole,
+# since a day missing from it would put a window on that day; outside the lists, any
+# mistake leaves the file unreadable, and then no list can be read. A `default` that
+# names no list is named, and no list is offered first.
+#
+# Every configuration root's file is read, in path-list order: a list named in two
+# roots is the later root's, whole, and so is `default`. The file is read at the start.
+#
+# lists:
+#   DE-BY:
+#     name: holidays in Bavaria
+#     complete: [2026]
+#     dates:
+#       2026-01-01: New Year's Day
+#       2026-01-06: Epiphany
+#       2026-04-03: Good Friday
+#       2026-04-06: Easter Monday
+#       2026-05-01: Labor Day
+#       2026-05-14: Ascension Day
+#       2026-05-25: Whit Monday
+#       2026-06-04: Corpus Christi
+#       2026-10-03: German Unity Day
+#       2026-11-01: All Saints' Day
+#       2026-12-25: Christmas Day
+#       2026-12-26: Saint Stephen's Day
+#   acme:
+#     name: ACME's company holidays
+#     complete: [2026]
+#     dates:
+#       2026-12-24: Christmas Eve
+#       2026-12-31: New Year's Eve
+# default: DE-BY

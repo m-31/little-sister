@@ -1,7 +1,7 @@
 # ADR-0084 — A check may be reached through another
 
 - **Status:** Accepted
-- **Date:** 2026-10-04 (accepted 2026-09-19)
+- **Date:** 2026-11-01 (accepted 2026-09-19)
 - **Related:** [ADR-0032](0032-status-contribution-boundary.md) (the contribution
   boundary this is the third rule at, and rules 3, 5 and 6 which bind it),
   [ADR-0039](0039-status-rollup-semantics.md) (the roll-up, and its closed
@@ -13,7 +13,9 @@
   added to the snapshot is added to the envelope in the same change),
   [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md) (the freshness
   backstop this must not close), [ADR-0100](0100-system-is-two-views.md) (the
-  schedule of `/system`'s *Running* view, which carries the graph)
+  schedule of `/system`'s *Running* view, which carries the graph),
+  [ADR-0143](0143-a-handled-part-carries-its-jobs-mark-and-a-rail-in-the-color-it-counts-as.md)
+  (how a part that counts otherwise looks — decision 4 amended)
 - **Register:** [`../decisions.md`](../decisions.md)
 - **Contract:** [`../api/openapi.yaml`](../api/openapi.yaml) — `shielded_by`, from
   2.4.0.
@@ -89,6 +91,13 @@ A check that emits a subtree declares one dependency, and it belongs where the
 declaration was made. The children are withheld because their mount is, which is
 the roll-up doing its ordinary job — not a mark repeated on every node the check
 happened to write.
+
+While the shield is in force the mount says why beside its state — *· reached through
+vpn*, the dependency's name, with its path and the rest of the sentence in the tooltip —
+in the ink of damping's count, and its box draws a rail in the undefined ink down its
+right edge, the node counting nothing above
+([ADR-0143](0143-a-handled-part-carries-its-jobs-mark-and-a-rail-in-the-color-it-counts-as.md)
+decision 5).
 
 ### 5. Three ways a shield does not apply, and each is one invariant
 

@@ -48,7 +48,7 @@ class _RecordingStore:
 
 
 class DampingTests(TestCase):
-    """The confidence counter at the node boundary (backlog #38 B).
+    """The confidence counter at the node boundary (ADR-0083).
 
     The claim under test throughout: **the leaf is honest immediately and only the
     escalation waits.** A test that checked the node's own code went quiet would be
@@ -227,7 +227,7 @@ class DampingTests(TestCase):
 
 
 class ShieldingTests(TestCase):
-    """Dependency shielding (backlog #38 A).
+    """Dependency shielding (ADR-0084).
 
     The claim under test throughout: **the node that could not be reached keeps its
     own reading and stops reaching its parent, and the dependency raises the one
@@ -1754,9 +1754,10 @@ class MaintenancePersistenceTests(TestCase):
         tree = StatusTree(pin_store=_RecordingStore())
         tree.upsert("/db", StatusCode.OK)
         tree.set_maintenance("/db", "planned",
-                             expires_at=datetime.now(UTC) - timedelta(minutes=1))
+                             expires_at=datetime.now(UTC) + timedelta(minutes=1))
         self.assertEqual(tree.effective("/db"), StatusCode.MAINTENANCE)
-        self.assertEqual(tree.sweep_expired(), ["/db"])
+        self.assertEqual(
+            tree.sweep_expired(now=datetime.now(UTC) + timedelta(minutes=2)), ["/db"])
         self.assertEqual(tree.effective("/db"), StatusCode.OK)
         last = tree.recent_events()[-1]
         self.assertEqual((last.path, last.old, last.new, last.cause),
@@ -2090,9 +2091,9 @@ class EntryMaintenanceTests(TestCase):
     def test_expiry_disposes_of_an_entry_pin(self):
         self.tree.upsert("/wiz", StatusCode.ERROR, self._findings("a"))
         self.tree.set_entry_maintenance(
-            "/wiz", "a", "brief", expires_at=datetime.now(UTC) - timedelta(seconds=1))
+            "/wiz", "a", "brief", expires_at=datetime.now(UTC) + timedelta(minutes=1))
         self.assertEqual(self._snap().quiet_reasons, 1)
-        self.tree.sweep_expired()
+        self.tree.sweep_expired(now=datetime.now(UTC) + timedelta(minutes=2))
         self.assertIsNone(self.tree.entry_maintenance("/wiz", "a"))
         self.assertEqual(self._snap().own_code, StatusCode.ERROR)
 
@@ -2621,7 +2622,7 @@ class EventLogAsAStateFileTests(TestCase):
 
 
 class ContributionVocabularyTests(TestCase):
-    """What each node contributes to the wall's tree (ADR-0127, backlog #91 §7.9):
+    """What each node contributes to the wall's tree (ADR-0127):
     what a chip counts, what the healthy fold folds, and what a close's incident
     reads — one vocabulary beside ``own_counted``, so that the round on maintenance
     and aggregation changes them once."""

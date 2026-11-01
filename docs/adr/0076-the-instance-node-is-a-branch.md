@@ -82,7 +82,7 @@ were the package's, and the seam carried lines and nothing else.
    `current_reports()`, one report per contributor with its labels and its lines.
 
 4. **A contributor declares its node's labels at registration**, the way a check
-   type ships its subnode prose (C2): `register_contributor(name, lines, title=…,
+   type ships its subnode prose: `register_contributor(name, lines, title=…,
    about=…)`. The engine writes them fill-only on the tick (`upsert(title=,
    about=)`), so a deployment's `nodes.yaml` declaration for the path, seeded at
    startup, still wins (ADR-0012). The library's own contributors — `engine`,

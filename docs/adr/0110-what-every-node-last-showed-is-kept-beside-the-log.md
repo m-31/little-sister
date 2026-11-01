@@ -1,7 +1,7 @@
 # ADR-0110 — What every node last showed is kept beside the log, and a wait counts from it
 
 - **Status:** Accepted
-- **Date:** 2026-10-25 (accepted 2026-10-03)
+- **Date:** 2026-11-01 (accepted 2026-10-03)
 - **Related:** [ADR-0083](0083-a-node-may-wait-before-it-escalates.md) (the wait, whose
   consequence on restarts this corrects),
   [ADR-0094](0094-a-restart-is-no-transition.md) (a restart is no transition, which this
@@ -27,7 +27,9 @@
   second period an entry of a node above others keeps),
   [ADR-0134](0134-the-state-is-compressed-and-stamped.md) (the event log kept compressed),
   [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
-  (decision 2, maintenance's own words, in which a pin's period is said)
+  (decision 2, maintenance's own words, in which a pin's period is said),
+  [ADR-0150](0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md) (a window that opened unseen begins its period at its start —
+  decision 6 amended)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -175,7 +177,7 @@ for every node no check has written yet, and for one written already where the f
 says the node shows what it shows; otherwise that node keeps what this process saw of
 it.
 
-### 6. A pin the tree did not see set begins at its creation
+### 6. A pin the tree did not see set begins at its creation, a window it did not see open at its start
 
 A pin's period begins where the pin was set (ADR-0099 decision 6), and a pin set or
 edited while the instance runs writes its row at the store's own instant for that
@@ -185,6 +187,14 @@ not hold its period (ADR-0094 decision 2), or it arrives with an adopted store
 began. The store does: it keeps every pin's creation (ADR-0014). So the period begins
 at the pin's creation, what the node showed until then ends there, and the entry
 carries that instant with the cause of a pin's set.
+
+A maintenance entry holds while a window of its schedule is open
+([ADR-0150](0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md)
+decisions 1 and 6), and a window the tree did not see open — at a start, or with an
+adopted store — begins its node's period at the window's start, the entry carrying the
+cause of a window's opening, `pin-opened`. So does a one-off's window where its start
+lies ahead of its creation; one set to open at once begins at its creation, which its
+start is.
 
 An entry that says a pinned node's `MAINTENANCE` began later than its pin was created —
 the date of an earlier replay, or a bound — takes the creation as well when the pin is

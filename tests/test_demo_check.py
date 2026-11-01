@@ -51,7 +51,7 @@ from little_sister.status import (
 )
 from little_sister.titles import shown_title
 from little_sister.tree import StatusTree
-from tests.demo_check import SCENARIOS, DemoCheck
+from tests.demo_check import _HELD_WALL_CLOCK, SCENARIOS, DemoCheck
 from tests.demo_extension import REASON_BUDGET, review_action
 from tests.running import run_check, subprocess_env
 
@@ -550,8 +550,10 @@ class RunsScenarioTests(TestCase):
                 newest = [reading for reading in readings
                           if reading.subject == f"jobs/{child.name}"][-1]
                 line, = child.reason_entries
-                self.assertEqual((line.subject, line.data),
-                                 (newest.subject, dict(newest.record)))
+                # the run its event, which a done closes (ADR-0146)
+                self.assertEqual((line.subject, line.data, line.occurrence),
+                                 (newest.subject, dict(newest.record),
+                                  newest.identity))
 
     def test_three_job_names_say_how_each_listed_run_stood_and_cleanup_does_not(
             self):
@@ -710,6 +712,154 @@ class OffsetTests(TestCase):
     def test_what_is_no_duration_is_refused_where_the_check_is_built(self):
         with self.assertRaises(CheckError):
             self._first("soon")
+
+
+class HoldTests(TestCase):
+    """``LITTLE_SISTER_DEMO_HOLD`` — every scenario kept where the offset starts it, so
+    that every page shows the same wall however long after the start it is drawn: what
+    `tests/test_a11y_browser.py` scans, where a scan that read the scenarios wherever
+    they stood as its page loaded found the review queue counting as ok in one run and
+    waiting on a sixth review in the next."""
+
+    VARIABLE = "LITTLE_SISTER_DEMO_HOLD"
+    OFFSET = "LITTLE_SISTER_DEMO_OFFSET"
+    #: The machine's two clocks as the checks are built — the time since a start, and
+    #: the wall clock the `runs` scenario reads — and ten minutes on.
+    BUILT, WALL, LATER = 5000.0, 1_790_000_010.0, 600.0
+
+    def setUp(self) -> None:
+        self_report.runtime.forget()
+        self.addCleanup(self_report.runtime.forget)
+
+    def _demo(self, hold: str | None, offset: str | None = "36s") -> list[DemoCheck]:
+        """The demo's checks, built with the two variables saying ``hold`` and
+        ``offset`` — or unset."""
+        with (mock.patch.dict(os.environ),
+              mock.patch("tests.demo_check.time") as clock):
+            for name, said in ((self.VARIABLE, hold), (self.OFFSET, offset)):
+                os.environ.pop(name, None)
+                if said is not None:
+                    os.environ[name] = said
+            clock.monotonic.return_value = self.BUILT
+            checks = load_checks(_DEMO_CONFIG_DIR)
+        assert all(isinstance(check, DemoCheck) for check in checks)
+        return [check for check in checks if isinstance(check, DemoCheck)]
+
+    def _measured(self, check: DemoCheck, later: float) -> list[Measurement]:
+        """What ``check`` reads ``later`` seconds after it was built, on both clocks."""
+        with mock.patch("tests.demo_check.time") as clock:
+            clock.monotonic.return_value = self.BUILT + later
+            clock.time.return_value = self.WALL + later
+            readings = check.measure()
+        return [readings] if isinstance(readings, Measurement) else list(readings)
+
+    def _wall(self, checks: list[DemoCheck], later: float
+              ) -> dict[str, tuple[StatusCode, tuple[str, ...]]]:
+        """What every node of the demo shows after one run of its checks ``later``
+        seconds after they were built, on both clocks: its status and its lines."""
+        tree = StatusTree()
+        with mock.patch("tests.demo_check.time") as clock:
+            clock.monotonic.return_value = self.BUILT + later
+            clock.time.return_value = self.WALL + later
+            Engine(list(checks), tree).run_once()
+        shown: dict[str, tuple[StatusCode, tuple[str, ...]]] = {}
+        root = tree.snapshot("/")
+        assert root is not None
+        waiting = [root]
+        while waiting:
+            node = waiting.pop()
+            shown[node.path] = (node.code, tuple(line.slug for line in node.reasons))
+            waiting.extend(node.children)
+        return shown
+
+    def test_held_the_wall_is_the_same_however_long_after_the_start(self):
+        # drawn at once, 10.5 and 30 seconds on — however late a scan's first page
+        # comes — a cycle on, and ten minutes on
+        checks = self._demo("1")
+        first = self._wall(checks, 0.0)
+        self.assertGreater(len(first), 13)
+        for later in (10.5, 30.0, 90.0, self.LATER):
+            with self.subTest(later=later):
+                self.assertEqual(self._wall(checks, later), first)
+
+    def test_without_it_the_wall_moves_on(self):
+        # what the hold is for: the same demo, drawn ten minutes on, shows another wall
+        checks = self._demo(None)
+        self.assertNotEqual(self._wall(checks, self.LATER), self._wall(checks, 0.0))
+
+    def test_every_scenario_is_held_where_the_offset_starts_it(self):
+        # by its own period, as the offset starts it: past a shorter one it wraps
+        checks = {check.path: check for check in self._demo("1")}
+        for path, elapsed in (("/ci/pipelines", 36.0), ("/network/vpn", 16.0)):
+            with self.subTest(path=path):
+                reading, = self._measured(checks[path], self.LATER)
+                self.assertEqual(reading.record["elapsed_seconds"], elapsed)
+
+    def test_held_without_an_offset_a_scenario_stays_at_the_top(self):
+        pipelines, = (check for check in self._demo("1", offset=None)
+                      if check.path == "/ci/pipelines")
+        reading, = self._measured(pipelines, self.LATER)
+        self.assertEqual(reading.record["elapsed_seconds"], 0.0)
+
+    def test_held_the_site_answers_alike_and_never_hangs(self):
+        # 72 seconds on, where a demo started 36 seconds in and not held hangs a run
+        # for 45 seconds, and its node goes stale meanwhile
+        moving, = (check for check in self._demo(None)
+                   if check.path == "/services/web")
+        with mock.patch("tests.demo_check.time") as clock:
+            clock.monotonic.return_value = self.BUILT + 72.0
+            moving.measure()
+        clock.sleep.assert_called_once_with(45.0)
+        web, = (check for check in self._demo("1") if check.path == "/services/web")
+        answers = []
+        with mock.patch("tests.demo_check.time") as clock:
+            for later in (0.0, 72.0, self.LATER):
+                clock.monotonic.return_value = self.BUILT + later
+                answer = web.measure()
+                assert isinstance(answer, Measurement)
+                answers.append(answer.record)
+        clock.sleep.assert_not_called()
+        self.assertEqual(answers, [answers[0]] * 3)
+        self.assertEqual(answers[0]["status"], 200)
+
+    def test_held_the_runs_stand_at_one_instant_moved_on_by_the_offset(self):
+        # `runs` reads the wall clock, not the time since its check was built: held,
+        # it reads one instant, whatever the machine's says — the one a check that
+        # is not held reads at that instant moved on by the offset
+        jobs, = (check for check in self._demo("1") if check.path == "/ci/jobs")
+        read = [[(reading.identity, reading.record)
+                 for reading in self._measured(jobs, later)]
+                for later in (0.0, self.LATER)]
+        self.assertTrue(read[0])
+        self.assertEqual(read[1], read[0])
+        free = DemoCheck(path="/ci/jobs", scenario="runs", period=20.0)
+        with mock.patch("tests.demo_check.time") as clock:
+            clock.time.return_value = _HELD_WALL_CLOCK + 36.0
+            there = [(reading.identity, reading.record) for reading in free.measure()]
+        self.assertEqual(read[0], there)
+
+    def test_what_holds_it_and_what_does_not(self):
+        # anything but empty, `0`, `false` or `no` holds the scenarios; unset, nothing
+        # holds them
+        for said, held in (("1", True), ("true", True), ("yes", True), ("on", True),
+                           (None, False), ("", False), ("0", False),
+                           ("false", False), ("no", False)):
+            with self.subTest(said=said):
+                pipelines, = (check for check in self._demo(said)
+                              if check.path == "/ci/pipelines")
+                reading, = self._measured(pipelines, 50.0)
+                self.assertEqual(reading.record["elapsed_seconds"],
+                                 36.0 if held else 86.0)
+
+    def test_a_check_built_by_hand_is_not_held(self):
+        # the variable is read where a config is, as the offset's is: a check a test
+        # builds moves with the clock whatever the environment says
+        with mock.patch.dict(os.environ, {self.VARIABLE: "1"}), \
+                mock.patch("tests.demo_check.time") as clock:
+            clock.monotonic.return_value = self.BUILT
+            check = DemoCheck(path="/x", scenario="pipelines", period=90.0)
+        reading, = self._measured(check, 50.0)
+        self.assertEqual(reading.record["elapsed_seconds"], 50.0)
 
 
 class DemoServerTests(TestCase):
@@ -908,7 +1058,7 @@ class DemoFillerTests(TestCase):
 
 class DemoFirstLookTests(TestCase):
     """The demo starts as the canvas's panel *Where the first look comes from* drew it
-    (backlog #91 §7.5), each layer speaking once: the type proposes, its check's file
+    (ADR-0128 decision 2), each layer speaking once: the type proposes, its check's file
     takes back, `nodes.yaml` speaks for a container no check writes."""
 
     def setUp(self):

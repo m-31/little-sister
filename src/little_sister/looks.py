@@ -18,7 +18,7 @@ cookie in ``app.py``, the menu's groups (``_settings_menu.html``) and the attrib
 ``<body>`` (``_header.html``) — so that a look joins as an entry and not as code. The
 menu leads with the theme, the layout after it, and the other looks in this order,
 each group's heading followed by its line: what the group changes, in a few words —
-the page's help on its settings, beside the choice (backlog #91). The layout's line is
+the page's help on its settings, beside the choice (ADR-0029). The layout's line is
 the menu's own, since the layout is no look.
 """
 from __future__ import annotations
@@ -109,13 +109,13 @@ LOOKS: tuple[Look, ...] = (
           "after the name, the name opens the page",
           "on a line beneath", "at the end, the name opens the page"),
          "Where an open head keeps its buttons."),
-    # What the failure budget does with a failure the first look hides (backlog #91
-    # §3.3): `open`, the library's, opens its way, the first three in each card with the
-    # nodes on their paths, so that a first glance finds it; or `chips`, where it stays
-    # the chip it was, red, and the wall keeps its size — a kiosk's wish (ADR-0127
-    # decision 5). A switch set once is forgotten until the one failure a glance
-    # should show stays shut, and the line beneath its heading is what answers that:
-    # the default is the one to keep.
+    # What the failure budget does with a failure the first look hides: `open`, the
+    # library's, opens its way, the first three in each card with the nodes on their
+    # paths, so that a first glance finds it; or `chips`, where it stays the chip it
+    # was, red, and the wall keeps its size — a kiosk's wish (ADR-0127 decision 5). A
+    # switch set once is forgotten until the one failure a glance should show stays
+    # shut, and the line beneath its heading is what answers that: the default is the
+    # one to keep.
     Look("failures", ("open", "chips"), "open",
          "Failures", ("open their way", "stay chips"),
          "Keep them open, on a kiosk too: a new failure shows at a glance."),

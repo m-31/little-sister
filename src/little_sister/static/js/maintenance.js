@@ -1,9 +1,9 @@
 /* Maintenance click-popover (ADR-0019 machinery, ADR-0014 data).
  *
- * Two triggers open the same #maintenance-card popover, each cloning a hidden
- * <template class="maintenance-pop-src"> keyed by data-pop-for: a card's **pip**, the
- * ringed diamond (keyed to its card path -> that subtree's pins), and the strip
- * **pill** (keyed "__all__" -> the whole capped set, with a "+N more" to /handled).
+ * The band's **pill** opens the #maintenance-card popover, cloning the hidden
+ * <template class="maintenance-pop-src" data-pop-for="__all__"> beside it: the whole
+ * capped set, with a "+N more" to /handled. A card's own pip went with the door
+ * (ADR-0147 decision 2): ◇ on its head counts what is handled at and beneath it.
  * Bound once via event delegation on #status-grid, so it survives the ~10s grid
  * innerHTML swaps; positioned with Floating UI. Click the trigger again, click outside,
  * or Escape to close. A deliberate click, not a hover: an ambient reminder, opt-in
@@ -19,27 +19,16 @@
     if (!grid || !card || !window.FloatingUIDOM) { return; }
     var FUI = window.FloatingUIDOM;
 
-    var current = null;   // the pip/pill trigger the popover is currently open for
+    var current = null;   // the pill the popover is currently open for
     var cleanup = null;   // Floating UI autoUpdate teardown
 
-    // The popover source is a hidden <template> keyed by data-pop-for: a card pip is
-    // keyed to its card path (the pins under it), the strip pill to "__all__" (the
-    // whole capped set).
-    function sourceFor(trigger) {
-        var key;
-        if (trigger.classList.contains("maintenance-pill")) {
-            key = "__all__";
-        } else {
-            var head = trigger.closest("[data-path]");
-            if (!head) { return null; }
-            key = head.getAttribute("data-path");
-        }
-        var esc = (window.CSS && CSS.escape) ? CSS.escape(key) : key;
-        return grid.querySelector('.maintenance-pop-src[data-pop-for="' + esc + '"]');
+    // The popover's source: the hidden <template> the pill's set is drawn in.
+    function sourceFor() {
+        return grid.querySelector('.maintenance-pop-src[data-pop-for="__all__"]');
     }
 
-    function place(pip) {
-        FUI.computePosition(pip, card, {
+    function place(pill) {
+        FUI.computePosition(pill, card, {
             strategy: "fixed",
             placement: "bottom-end",
             middleware: [FUI.offset(6), FUI.flip(), FUI.shift({ padding: 8 })]
@@ -49,15 +38,15 @@
         });
     }
 
-    function open(pip) {
-        var src = sourceFor(pip);
+    function open(pill) {
+        var src = sourceFor();
         if (!src) { return; }
         card.innerHTML = src.innerHTML;
         card.hidden = false;
-        current = pip;
-        pip.setAttribute("aria-expanded", "true");
+        current = pill;
+        pill.setAttribute("aria-expanded", "true");
         if (cleanup) { cleanup(); }
-        cleanup = FUI.autoUpdate(pip, card, function () { place(pip); });
+        cleanup = FUI.autoUpdate(pill, card, function () { place(pill); });
     }
 
     function close() {
@@ -69,11 +58,10 @@
         if (cleanup) { cleanup(); cleanup = null; }
     }
 
-    // A pip click toggles its popover. stopPropagation keeps this click off the
-    // document-level "click outside closes" handler below (and off card navigation).
+    // A click on the pill toggles its popover. stopPropagation keeps this click off
+    // the document-level "click outside closes" handler below.
     grid.addEventListener("click", function (e) {
-        var trigger = e.target.closest
-            ? e.target.closest(".maintenance-pip, .maintenance-pill") : null;
+        var trigger = e.target.closest ? e.target.closest(".maintenance-pill") : null;
         if (!trigger) { return; }
         // The pill is a link to /handled; leave a modified click (new tab/window)
         // to the browser so the full page still opens.
@@ -96,8 +84,8 @@
         if (e.key === "Escape") { close(); }
     });
 
-    // The ~10s poll replaces #status-grid's contents; if the open pip is swapped out,
-    // drop the popover (its trigger is gone).
+    // The ~10s poll replaces #status-grid's contents; if the open pill is swapped
+    // out, drop the popover (its trigger is gone).
     new MutationObserver(function () {
         if (current && !grid.contains(current)) { close(); }
     }).observe(grid, { childList: true, subtree: true });

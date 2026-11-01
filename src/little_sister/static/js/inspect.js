@@ -52,7 +52,7 @@
     // node's own row, and its card would come up over the one above and stand there
     // while the note is typed. The editor stands in the node's box, after its row
     // (ADR-0127 decision 3), so the node is what is asked.
-    var EDITOR = "details.maintenance-editor-disclosure[open] form.maintenance-editor-form, details.reason-pin[open] form.maintenance-editor-form, details.reason-ack[open] form.maintenance-editor-form";
+    var EDITOR = "details.maintenance-editor-disclosure[open] form.maintenance-editor-form";
 
     // What each node's `about` opens with, as the fragment the grid holds says it.
     var META = {};

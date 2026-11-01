@@ -6,8 +6,8 @@ and AA and says what fails them — a name without a label, a control too small 
 an ink too faint on its fill. The demo's wall, a branch's page and the kiosk are
 scanned at a desk's width and on an emulated phone, in the library's theme, cyberpunk,
 and in the plain one the baseline was first taken in, and **every finding is held to a
-baseline**: what the scan found on the wall before the interactive wall was built
-(backlog #91, its note's §7.1 step 8), each entry a rule and the component it stands
+baseline**: what the scan found on the wall before the interactive wall was built,
+each entry a rule and the component it stands
 on, with the reason it stands. A finding outside the baseline fails the scan, so a
 change to the templates or the sheet that adds one is seen the day it is made; an entry
 that no scan finds any more fails it too, so the baseline shrinks as findings are mended
@@ -20,8 +20,13 @@ It is in the browser group, never in `dev`: the ordinary gate grows no browser.
 The demo runs in a child interpreter — its import registers a door, a check type and
 slot fillers and moves the process into the demo's directory, and its engine takes a
 lease there, none of which may reach this suite's process (`test_demo_check.py`) — and
-serves on a port of its own, its scenarios started 36 seconds in so the wall is not all
-green. Bootstrap comes from the copy Mode 4 vendors where there is one and from the CDN
+serves on a port of its own, its scenarios held 36 seconds in, so that the wall is not
+all green and is the same on every page, however long after the start a scan reaches
+it: read wherever its thirteen cycles stood as each page loaded, the wall depended on
+how fast the machine got there, and a scan that came late found the review queue
+waiting on a sixth review instead of counting as ok. Each page is scanned held still
+too, its refresh never answered, so that nothing is swapped in under the scan.
+Bootstrap comes from the copy Mode 4 vendors where there is one and from the CDN
 otherwise; with neither the scan reads an unstyled page, and fails. Skipped wherever
 Playwright, the scanner or a Chromium binary is unavailable
 (``docs/testing-the-gui.md``, Mode 5).
@@ -41,6 +46,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from little_sister.looks import LOOKS_BY_KEY
+from tests.browser_binary import chromium
 from tests.browser_looks import looks
 from tests.running import subprocess_env
 
@@ -52,10 +58,6 @@ except ImportError:  # pragma: no cover
     Axe = None  # type: ignore[assignment,misc]
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-
-#: A sandbox pins one browser build; a Playwright from the lock may expect another,
-#: so the one that is there is what runs (as ``tests/sweep_contrast.py`` does).
-_SANDBOX_CHROMIUM = Path("/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
 
 #: Bootstrap as ``tests/sweep_contrast.py`` vendors it (``docs/testing-the-gui.md``,
 #: Mode 4), where there is a copy; the CDN otherwise.
@@ -82,6 +84,13 @@ _TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]
 #: arrive a moment after the start.
 _CARDS = {"/status": 6, "/status/ci": 5}
 
+#: The page's refresh, as a request: its own address with `fragment=1`.
+_FRAGMENT = re.compile(r"[?&]fragment=1")
+#: A mark a scan puts on the page before it reads it, and whether it stands after: a
+#: refresh swaps the grid's children, and a swap takes the mark with it.
+_MARK = "document.querySelector('#status-grid > *').dataset.scanned = 'before'"
+_KEPT = "document.querySelector('#status-grid > [data-scanned]') !== null"
+
 #: The themes a scan reads each page in: the library's, which a browser that never
 #: chose draws (since 2026-10-18), and the plain one, the light palette the others
 #: are drawn from, which the baseline was first taken in.
@@ -96,7 +105,7 @@ _THEMES = ("cyberpunk", "plain")
 #: the reason the finding stands for now. A scan that finds a rule on a component not
 #: listed here fails; so does a baseline entry that no scan finds any more, which is
 #: how an entry leaves with the change that mends it. What is said of the stages is the
-#: plan of backlog #91; the brand's inks are the brand's own decision.
+#: plan of the interactive wall; the brand's inks are the brand's own decision.
 BASELINE: dict[tuple[str, str], str] = {
     ("html-has-lang", "html"):
         "the pages declare no language on <html>; one attribute in _header.html, to be "
@@ -126,6 +135,11 @@ BASELINE: dict[tuple[str, str], str] = {
     ("color-contrast", ".reason-action"):
         "a line's chip inks in currentColor at 60 % to 75 % opacity until hovered, "
         "which the scanner reads as its resting color",
+    ("color-contrast", "a"):
+        "a link in a line keeps Bootstrap's link ink, 3.6 to 4.2:1 on a light theme's "
+        "pale tints — 3.7:1 on the demo's healed review queue, whose card a rule turns "
+        "pale green — to be mended on its own, its links taking an ink measured on the "
+        "tints; the scanner reads it since a handled line's mark took its top right",
 }
 
 #: The entries that stand in the plain theme alone: a light canvas's pale tints and
@@ -136,6 +150,7 @@ PLAIN_ONLY = frozenset({
     ("color-contrast", ".status-word"),
     ("color-contrast", ".status-node__state"),
     ("color-contrast", "code"),
+    ("color-contrast", "a"),
 })
 
 
@@ -173,7 +188,10 @@ def _demo_environment(home: str) -> dict[str, str]:
     env.pop("LITTLE_SISTER_CONFIG_DIR", None)     # the demo names its own roots
     env.pop("LITTLE_SISTER_ENGINE", None)
     env["LITTLE_SISTER_DEMO_DIR"] = home
+    # 36 seconds into every scenario, and held there (`tests/demo_check.py`): every
+    # page scanned shows the same wall, whenever and however fast the scan reaches it
     env.setdefault("LITTLE_SISTER_DEMO_OFFSET", "36s")
+    env.setdefault("LITTLE_SISTER_DEMO_HOLD", "1")
     env["PYTHONPATH"] = os.pathsep.join(
         filter(None, (str(_REPO_ROOT), env.get("PYTHONPATH"))))
     return env
@@ -200,8 +218,7 @@ class AccessibilityScanTests(unittest.TestCase):
         try:
             cls.playwright = sync_playwright().start()
             cls.browser = cls.playwright.chromium.launch(
-                executable_path=(str(_SANDBOX_CHROMIUM) if _SANDBOX_CHROMIUM.is_file()
-                                 else None))
+                executable_path=chromium())
         except Exception as error:  # pragma: no cover - no browser here
             if cls.playwright is not None:
                 cls.playwright.stop()
@@ -264,22 +281,55 @@ class AccessibilityScanTests(unittest.TestCase):
         route.continue_()
 
     @classmethod
+    def _signed_in(cls, context: Any) -> Any:
+        """A page of ``context``, past the login."""
+        page = context.new_page()
+        page.goto(f"{cls.base}/login")
+        page.fill("#username", "pan")
+        page.fill("#password", "12345678")
+        with page.expect_navigation():
+            page.click("button[type=submit]")
+        return page
+
+    @classmethod
+    def _first_readings(cls) -> None:
+        """The engine's first readings, which arrive a moment after the start, waited
+        for once, on pages whose refresh brings them in: from then on every page is
+        drawn with its cards."""
+        context = cls.browser.new_context(**_DESK)
+        try:
+            context.route("https://cdn.jsdelivr.net/**", cls._vendored)
+            page = cls._signed_in(context)
+            for route, cards in _CARDS.items():
+                page.goto(f"{cls.base}{route}")
+                page.wait_for_function(
+                    "n => document.querySelectorAll('.status-card').length >= n",
+                    arg=cards, timeout=30_000)
+        finally:
+            context.close()
+
+    @classmethod
     def _scan_everything(cls) -> dict[tuple[str, str, int, str], dict[str, Any]]:
         """Twelve scans: the wall and a branch's page in the sidebar layout, and the
-        kiosk's wall, each at a desk's width and on the phone, in each theme."""
+        kiosk's wall, each at a desk's width and on the phone, in each theme.
+
+        **Each of a page held still, of a demo held still**: every request of the
+        page's refresh is kept on its way and never answered, so that no swap lands
+        while axe-core walks it — on a loaded machine a scan outlasts the ten-second
+        refresh — and the page's own timers, on which axe-core schedules its work, run
+        on; and the demo's scenarios stand where the offset starts them
+        (`_demo_environment`), so that the twelve pages show one wall. A scan that read
+        a swapped grid all the same fails, naming the page."""
         scans: dict[tuple[str, str, int, str], dict[str, Any]] = {}
+        cls._first_readings()
         for (width, drawn_in), theme in product(_WIDTHS.items(), _THEMES):
             for layout, routes in (("sidebar", ("/status", "/status/ci")),
                                    ("kiosk", ("/status",))):
                 context = cls.browser.new_context(**drawn_in)
                 try:
                     context.route("https://cdn.jsdelivr.net/**", cls._vendored)
-                    page = context.new_page()
-                    page.goto(f"{cls.base}/login")
-                    page.fill("#username", "pan")
-                    page.fill("#password", "12345678")
-                    with page.expect_navigation():
-                        page.click("button[type=submit]")
+                    context.route(_FRAGMENT, lambda route: None)
+                    page = cls._signed_in(context)
                     chosen = {"theme": theme}
                     if layout == "kiosk":
                         chosen["layout"] = "kiosk"
@@ -290,10 +340,15 @@ class AccessibilityScanTests(unittest.TestCase):
                             "n => document.querySelectorAll('.status-card').length"
                             " >= n", arg=_CARDS[route], timeout=30_000)
                         page.wait_for_timeout(300)        # the first paint settles
+                        page.evaluate(_MARK)
                         scans[(route, layout, width, theme)] = Axe().run(
                             page, options={"runOnly": {"type": "tag", "values": _TAGS},
                                            "resultTypes": ["violations", "incomplete"]},
                         ).response
+                        if not page.evaluate(_KEPT):
+                            raise AssertionError(
+                                f"{route} in the {layout} layout at {width} px in "
+                                f"{theme} was swapped while it was scanned")
                 finally:
                     context.close()
         return scans

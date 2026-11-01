@@ -7,8 +7,7 @@ room for behind ⋯, the state beneath where the name would be cut, *⌄ all N* 
 box's lines, and an admin's ‖ cloning the page's editor into the box; and in cyberpunk,
 the culprit a neon tube on every vivid surface.
 
-Stage 3's first two slices of backlog #91 — the tree's mechanics with today's look,
-and the head's row. Served
+The tree's mechanics with today's look, and the head's row. Served
 by a real server to headless Chromium on the page's own clock, as
 ``tests/test_tree_state_browser.py`` is; the server's clock is held where a test
 reads the time a render carries. Skipped wherever Playwright or a Chromium binary is
@@ -39,6 +38,7 @@ from little_sister.nodes import NodeMeta
 from little_sister.reasons import Entry
 from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.tree import StatusTree
+from tests.browser_binary import chromium
 from tests.browser_looks import looks
 from tests.browser_server import PageServer
 
@@ -52,7 +52,6 @@ try:  # pragma: no cover - environment probe: the scanner is the browser group's
 except ImportError:  # pragma: no cover
     Axe = None  # type: ignore[assignment,misc]
 
-_SANDBOX_CHROMIUM = Path("/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
 _BOOTSTRAP = (Path(__file__).resolve().parent.parent / "var" / "bootstrap"
               / "node_modules" / "bootstrap" / "dist")
 
@@ -152,8 +151,7 @@ class _BrowserCase(unittest.TestCase):
         try:
             cls.playwright = sync_playwright().start()
             cls.browser = cls.playwright.chromium.launch(
-                executable_path=(str(_SANDBOX_CHROMIUM) if _SANDBOX_CHROMIUM.is_file()
-                                 else None))
+                executable_path=chromium())
         except Exception as error:  # pragma: no cover - no browser here
             if cls.playwright is not None:
                 cls.playwright.stop()
@@ -293,6 +291,18 @@ class _BrowserCase(unittest.TestCase):
         page = page or self.page
         page.reload()
         page.wait_for_selector("#status-grid .status-card")
+
+    def _top(self, path: str) -> float:
+        """Where the node of ``path`` begins in the window."""
+        return self.page.evaluate(
+            "path => document.querySelector(`.tree-node[data-node=\"${path}\"]`)"
+            ".getBoundingClientRect().top", path)
+
+    def _cards(self) -> list[str]:
+        """The wall's cards, by their paths, in the order they stand."""
+        return self.page.evaluate(
+            "[...document.querySelectorAll('#status-grid .status-card')]"
+            ".map(card => card.dataset.node)")
 
     def _band(self, page: Any | None = None) -> list[tuple[str, str, str]]:
         """The band's three buttons: mode, pressed, and the count shown."""
@@ -942,17 +952,267 @@ class RefreshTests(_BrowserCase):
         calls = self.page.evaluate("window.__observers.map(o => o.calls)")
         self.assertTrue(all(count <= 1 for count in calls), calls)
 
-    def _cards(self) -> list[str]:
-        """The wall's cards, by their paths, in the order they stand."""
-        return self.page.evaluate(
-            "[...document.querySelectorAll('#status-grid .status-card')]"
-            ".map(card => card.dataset.node)")
 
-    def _top(self, path: str) -> float:
-        """Where the node of ``path`` begins in the window."""
-        return self.page.evaluate(
-            "path => document.querySelector(`.tree-node[data-node=\"${path}\"]`)"
-            ".getBoundingClientRect().top", path)
+#: The room `tree.js` keeps at the page's foot: its height, 0 where none stands.
+_ROOM = """() => {
+    const room = document.querySelector('.tree-room');
+    return room ? room.getBoundingClientRect().height : 0;
+}"""
+
+#: Where the page's content ends: the grid's foot, where the room stands. Not the
+#: page's height less the room: the rail beside the page is as tall as the window, and
+#: the page is never shorter than the rail.
+_CONTENT_END = """() => document.getElementById('status-grid')
+                          .getBoundingClientRect().bottom + scrollY"""
+
+#: Whether the window's bottom is the page's end.
+_AT_END = """() => Math.abs(scrollY + innerHeight
+                          - document.scrollingElement.scrollHeight) < 1"""
+
+
+class _PageEndCase(_BrowserCase):
+    """The window near the page's end, and what a click there keeps."""
+
+    def _to_end(self, above: int = 0) -> float:
+        """The window scrolled at once until its bottom stands ``above`` pixels above
+        the page's end; where it stands."""
+        return self.page.evaluate("""above => {
+            window.scrollTo({top: document.scrollingElement.scrollHeight
+                                  - innerHeight - above, behavior: 'instant'});
+            return scrollY;
+        }""", above)
+
+    def _scrolled(self) -> float:
+        return self.page.evaluate("scrollY")
+
+    def _room(self) -> float:
+        return self.page.evaluate(_ROOM)
+
+    def _content_end(self) -> float:
+        return self.page.evaluate(_CONTENT_END)
+
+    def _stands(self, act: Callable[[], None], anchor: str) -> float:
+        """Do ``act`` with the window at the page's end: the window stands where it
+        stood, and so does the node at ``anchor``, and what the act freed is the room
+        at the page's foot, whose end the window's bottom still is — read once frames
+        have passed, so a column the packing restacks, and every scroll's event, have
+        come. The room's height."""
+        scrolled = self._to_end()
+        self.assertGreater(scrolled, 0)
+        top = self._top(anchor)
+        end = self._content_end()
+        room = self._room()
+        act()
+        self.page.wait_for_timeout(100)        # real time: the page's clock is held
+        freed = end - self._content_end()
+        self.assertGreater(freed, 20)
+        self.assertAlmostEqual(self._scrolled(), scrolled, delta=0.5)
+        self.assertAlmostEqual(self._top(anchor), top, delta=0.5)
+        self.assertAlmostEqual(self._room(), room + freed, delta=1)
+        self.assertTrue(self.page.evaluate(_AT_END))
+        return self._room()
+
+    def _gives_way(self, by: float) -> None:
+        """Scroll up at once by ``by`` pixels, and wait for the scroll's event."""
+        room = self._room()
+        self.page.evaluate("by => window.scrollBy({top: -by, behavior: 'instant'})", by)
+        self.page.wait_for_function(
+            f"room => ({_ROOM})() <= Math.max(0, room - {by}) + 1", arg=room,
+            timeout=3000)
+
+
+class PageEndTests(_PageEndCase):
+    """A click near the page's end keeps the window where it stood (ADR-0127
+    decision 10): what a close, ▤, the funnel or *⌃ less* frees beneath the window
+    stays at the page's foot as room, which gives way as the window scrolls up
+    through it and as anything grows into it, stands through a refresh and is gone
+    on a reload; the band's *Close all* keeps the browser's way, and takes the room
+    with it."""
+
+    drawn_in: ClassVar[dict[str, Any]] = {
+        "viewport": {"width": 1000, "height": 330}, "reduced_motion": "reduce"}
+
+    def test_a_close_at_the_page_end_keeps_the_window_where_it_stood(self):
+        # A short window at a desk, scrolled to the page's end, the web tier's card the
+        # last: closing its roster, the card's last box, frees what the window stands
+        # in, and the browser would pull the window up by it, the card's head landing
+        # lower under the pointer
+        self._wall()
+        self.assertEqual(self._cards()[-1], _WEB)
+        room = self._stands(self._head(_ROSTER).locator(".status-node__state").click,
+                            _WEB)
+        self.assertEqual(self._state(_ROSTER), "closed")
+        # a second close, the card's, from the keyboard's Space on its name, adds what
+        # it frees
+        name = self._head(_WEB).locator('[data-control="toggle"]')
+
+        def space() -> None:
+            name.evaluate("name => name.focus({preventScroll: true})")
+            self.page.keyboard.press(" ")
+
+        more = self._stands(space, _WEB)
+        self.assertEqual(self._state(_WEB), "closed")
+        self.assertGreater(more, room)
+        # the room gives way as the window scrolls up through it, a pixel for a
+        # pixel, the window's bottom the page's end still
+        scrolled = self._scrolled()
+        self._gives_way(30)
+        self.assertAlmostEqual(self._room(), more - 30, delta=1)
+        self.assertTrue(self.page.evaluate(_AT_END))
+        # past it, it is gone, and the page ends where its content does
+        self._gives_way(more)
+        self.assertEqual(self.page.locator(".tree-room").count(), 0)
+        self.assertAlmostEqual(self._to_end(), scrolled - more, delta=1)
+
+    def test_an_open_at_the_page_end_takes_the_room_back(self):
+        self._wall()
+        self._stands(self._head(_ROSTER).locator(".status-node__state").click, _WEB)
+        scrolled = self._scrolled()
+        self._chip(_ROSTER).click()
+        self.assertEqual(self._state(_ROSTER), "open")
+        self.assertEqual(self._room(), 0)
+        self.assertAlmostEqual(self._scrolled(), scrolled, delta=0.5)
+        self.assertTrue(self.page.evaluate(_AT_END))
+
+    def test_chips_at_the_page_end_keeps_the_window(self):
+        self._wall()
+        chips = self._icon(_WEB, "chips")
+        self._stands(chips.click, _WEB)
+        self.assertEqual(chips.get_attribute("aria-pressed"), "true")
+
+    def test_chips_above_the_last_card_keeps_the_window_where_boxes_are_packed(self):
+        # Packed, the web tier's card stands beneath the deep chain's, the taller of
+        # the two columns once its flaky leaf says twelve lines: folding the deep
+        # chain's boxes moves it up only as the column restacks, in the frame after
+        # the click, and the page read is the page that frame paints
+        self.context.add_cookies([looks(self.base, boxes="packed")])
+        self.tree.upsert(_FLAKY, StatusCode.ERROR,
+                         [f"flaky reading {number}" for number in range(12)])
+        self.page.set_viewport_size({"width": 1000, "height": 760})
+        self._wall()
+        bottom = "path => document.querySelector(`.tree-node[data-node=\"${path}\"]`)" \
+                 ".getBoundingClientRect().bottom + scrollY"
+        self.assertAlmostEqual(self.page.evaluate(bottom, _WEB), self._content_end(),
+                               delta=30)
+        self.assertGreater(self.page.evaluate(bottom, _WEB),
+                           self.page.evaluate(bottom, _NAS))
+        chips = self._icon(_DEEP, "chips")
+        self._stands(chips.click, _DEEP)
+        self.assertEqual(chips.get_attribute("aria-pressed"), "true")
+
+    def test_the_funnel_at_the_page_end_keeps_the_window(self):
+        # and *✓ +N ok* shows the healthy again, which grow back into the room
+        self._wall()
+        self._stands(self._icon(_WEB, "ok").click, _WEB)
+        self.assertFalse(self._node(_ROSTER).is_visible())
+        scrolled = self._scrolled()
+        self._node(_WEB).locator(".tree-ok:not([hidden])").first.click()
+        self.assertTrue(self._node(_ROSTER).is_visible())
+        self.assertEqual(self._room(), 0)
+        self.assertAlmostEqual(self._scrolled(), scrolled, delta=0.5)
+
+    def test_less_at_the_page_end_keeps_the_window(self):
+        # lines a box shows in full scroll inside it past about half the window: a
+        # window tall enough that folding them frees what it stands in
+        self.tree.upsert(_FLAKY, StatusCode.ERROR,
+                         [f"flaky reading {number}" for number in range(12)])
+        self.page.set_viewport_size({"width": 1000, "height": 700})
+        self._wall()
+        more = self.page.locator(
+            f'.reason-block[data-reason-node="{_FLAKY}"] + .reason-more')
+        more.click()
+        self.assertEqual(more.inner_text().strip(), "\u2303 less")
+        self._stands(more.click, _WEB)
+        self.assertEqual(more.inner_text().strip(), "\u2304 all 12")
+
+    def test_the_room_stands_through_a_refresh_and_goes_with_a_reload(self):
+        self._wall()
+        room = self._stands(self._head(_ROSTER).locator(".status-node__state").click,
+                            _WEB)
+        scrolled = self._scrolled()
+        top = self._top(_WEB)
+        self._swap()
+        self.assertAlmostEqual(self._scrolled(), scrolled, delta=0.5)
+        self.assertAlmostEqual(self._top(_WEB), top, delta=0.5)
+        self.assertAlmostEqual(self._room(), room, delta=1)
+        # a refresh that grows a node in the window: the room gives way to what grew,
+        # and the window stands
+        self.tree.upsert(_DNS, StatusCode.WARN, ["slow", "slower", "slowest"])
+        end = self._content_end()
+        self._swap()
+        grew = self._content_end() - end
+        self.assertGreater(grew, 10)
+        self.assertLess(grew, room)
+        self.assertAlmostEqual(self._scrolled(), scrolled, delta=0.5)
+        self.assertAlmostEqual(self._room(), room - grew, delta=1)
+        self.assertTrue(self.page.evaluate(_AT_END))
+        # a reload draws the page anew: the roster closed by the map, and no room
+        self._reload()
+        self.assertEqual(self._state(_ROSTER), "closed")
+        self.assertEqual(self._room(), 0)
+
+    def test_close_all_keeps_the_browsers_way(self):
+        # Close all at the page's end lets the browser pull the window up, and takes
+        # the room an earlier click left with it: kept at the foot of a long wall, it
+        # would leave a blank screen
+        self._wall()
+        self._stands(self._head(_ROSTER).locator(".status-node__state").click, _WEB)
+        scrolled = self._scrolled()
+        close_all = self.page.locator('.ls-band__mode[data-mode="closed"]')
+        close_all.evaluate("button => button.click()")      # where the window stands
+        self.assertEqual(self._state(_WEB), "closed")
+        self.assertEqual(self._room(), 0)
+        self.assertLess(self._scrolled(), scrolled)
+        self.assertTrue(self.page.evaluate(_AT_END))
+
+
+class PageEndKioskTests(_PageEndCase):
+    """On the kiosk the room goes with what five minutes without input forget."""
+
+    drawn_in: ClassVar[dict[str, Any]] = PageEndTests.drawn_in
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.context.add_cookies([{"name": "ls_prefs", "url": self.base,
+                                   "value": "layout=kiosk"}])
+
+    def test_the_first_look_comes_back_without_the_room(self):
+        # no refresh lands in the five minutes, whose swap would fit the room to what
+        # the window needs: what the kiosk forgets takes the room with it
+        self._wall()
+        self._stands(self._head(_ROSTER).locator(".status-node__state").click, _WEB)
+        self.page.route(_FRAGMENT, lambda route: route.abort())
+        self.page.clock.run_for(5 * 60_000 + 1000)
+        self.assertEqual(self._state(_ROSTER), "open")
+        self.assertEqual(self._room(), 0)
+
+
+class PageEndPhoneTests(_PageEndCase):
+    """On a phone, a tap that closes a card 150 pixels above the page's end keeps
+    the card's head under the finger, where the browser would bring up what stood
+    beneath."""
+
+    drawn_in: ClassVar[dict[str, Any]] = {
+        "viewport": {"width": 375, "height": 667}, "device_scale_factor": 2,
+        "is_mobile": True, "has_touch": True, "reduced_motion": "reduce"}
+
+    def test_a_tap_above_the_page_end_keeps_the_head_under_the_finger(self):
+        self._wall()
+        name = self._head(_WEB).locator(".status-card__name")
+        scrolled = self._to_end(above=150)
+        self.assertGreater(scrolled, 0)
+        box = name.bounding_box()
+        x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+        end = self._content_end()
+        self.page.touchscreen.tap(x, y)
+        self.assertEqual(self._state(_WEB), "closed")
+        freed = end - self._content_end()
+        self.assertGreater(freed, 150)
+        self.assertAlmostEqual(self._scrolled(), scrolled, delta=0.5)
+        self.assertAlmostEqual(self._room(), freed - 150, delta=1)
+        self.assertEqual(self.page.evaluate(
+            "([x, y]) => document.elementFromPoint(x, y).closest('.tree-node')"
+            ".dataset.node", [x, y]), _WEB)
 
 
 class IncidentTests(_BrowserCase):
@@ -1162,7 +1422,7 @@ _PAGE_LINES = ".node-frame .viewed-head .own-lines > .check-reason .check-reason
 
 
 class PageFrameTests(_BrowserCase):
-    """A node's page draws its node in a frame, always open (backlog #91 §3.5): its
+    """A node's page draws its node in a frame, always open (ADR-0127 decision 8): its
     ▤ folds the page's cards and its funnel the healthy ones and its own healthy
     lines, by the node's own entries in the tab's map — the ones its box carries on
     the wall — and a leaf's page, which is not polled, keeps its fold the same way."""
@@ -1310,14 +1570,14 @@ class PageFrameTests(_BrowserCase):
         stops = self._head(_WEB).evaluate("""row => Array.from(row.querySelectorAll(
             '.node-controls a, .node-controls button')).filter(c => !c.hidden)
             .map(c => [c.dataset.control || c.textContent.trim(), c.tabIndex])""")
-        # ‖ and ✓ among them for an admin, once the script shows the buttons that
-        # open the editors the head keeps — ✓ where something fails, as here
-        self.assertEqual(stops, [["ok", 0], ["chips", -1], ["pin", -1], ["ack", -1]])
+        # ◇ the last of them, for every reader, where nothing at or beneath the node
+        # is handled and so it is plain (ADR-0147 decision 1)
+        self.assertEqual(stops, [["ok", 0], ["chips", -1], ["door", -1]])
 
 
 #: What a page draws of what `tree.js` shows: the band's meta and its three buttons,
-#: and on a node's page the setter beneath its head, the head's ‖ and the head's box —
-#: each its box in whole pixels, or None where it is not drawn.
+#: and on a node's page the head's ◇ and the head's box — each its box in whole
+#: pixels, or None where it is not drawn.
 _FIRST_PAINT = """() => {
     const box = el => {
       if (!el || !el.getClientRects().length) { return null; }
@@ -1327,9 +1587,8 @@ _FIRST_PAINT = """() => {
     return {
       meta: box(document.querySelector('.ls-band__meta')),
       modes: box(document.querySelector('.ls-band__modes')),
-      setter: box(document.querySelector('.viewed-head > .rule-setter')),
-      pin: box(document.querySelector(
-          '.viewed-head .node-icons > [data-control="pin"]')),
+      door: box(document.querySelector(
+          '.viewed-head .node-icons > [data-control="door"]')),
       head: box(document.querySelector('.viewed-head')),
     };
 }"""
@@ -1338,10 +1597,10 @@ _FIRST_PAINT = """() => {
 class FirstPaintTests(_BrowserCase):
     """What `tree.js` shows stands from the first paint, so the page does not move
     when it runs: `tree-pending.js`, in the head, puts `ls-script` on <html>, under
-    which the band's three buttons take their room and a node's page carries ‖ in its
-    head's row where *Set maintenance* would stand beneath it — read here with
-    `tree.js` held back, as a page stands before it runs. Without script neither is
-    drawn: no buttons, and the setter beneath the head."""
+    which the band's three buttons take their room — read here with `tree.js` held
+    back, as a page stands before it runs — and a node's page carries ◇ in its head's
+    row, a link with script or without (ADR-0147 decision 1). Without script the band
+    draws no buttons."""
 
     def _drawn(self, url: str, held: bool = False,
                script: bool = True) -> dict[str, Any]:
@@ -1364,19 +1623,17 @@ class FirstPaintTests(_BrowserCase):
         self.assertEqual(held["modes"], drawn["modes"])
         self.assertEqual(held["meta"], drawn["meta"])
 
-    def test_a_pages_head_carries_its_pin_mark_before_the_script_runs(self):
+    def test_a_pages_head_carries_its_door_before_the_script_runs(self):
         held = self._drawn("/status/web", held=True)
         drawn = self._drawn("/status/web")
-        self.assertIsNone(held["setter"])
-        self.assertIsNotNone(held["pin"])
-        self.assertEqual(held["pin"], drawn["pin"])
+        self.assertIsNotNone(held["door"])
+        self.assertEqual(held["door"], drawn["door"])
         self.assertEqual(held["head"], drawn["head"])
 
-    def test_without_script_neither_is_drawn(self):
+    def test_without_script_the_band_draws_no_buttons_and_the_door_stands(self):
         bare = self._drawn("/status/web", script=False)
         self.assertIsNone(bare["modes"])
-        self.assertIsNone(bare["pin"])
-        self.assertIsNotNone(bare["setter"])
+        self.assertIsNotNone(bare["door"])
 
     # --- a fold the configuration sets (ADR-0128) ---
 
@@ -2268,13 +2525,14 @@ class HeadRowTests(_HeadRowCase):
 
     def test_the_pointer_on_a_heads_own_controls_draws_no_outline(self):
         # a click on them toggles nothing, so the row does not offer itself there:
-        # on an icon, in the gap between two, on an action, on a card's pip of the
-        # maintenance beneath it, on ⋯ and in its menu
+        # on an icon, in the gap between two, on an action, on a card's ◇ lit beside
+        # its state with the maintenance beneath it (ADR-0147 decision 1), on ⋯ and in
+        # its menu
         self.tree.set_maintenance(_FLAKY, "planned", set_by="pan",
                                   expires_at=_NOON + timedelta(days=1))
         self._wall()
-        self._point_at(self._head(_WEB).locator(".maintenance-pip"))
-        self.assertEqual(self._look(_WEB)["outline"], "none", "the pip")
+        self._point_at(self._head(_WEB).locator(".state-door"))
+        self.assertEqual(self._look(_WEB)["outline"], "none", "the lit door")
         for path in (_WEB, _DNS):                          # a card's head, a box's
             head = self._head(path)
             head.scroll_into_view_if_needed()
@@ -2554,8 +2812,9 @@ class HeadRowTests(_HeadRowCase):
         page.keyboard.press("Tab")
         self.assertEqual(self._focused(), "page")
         self.assertEqual(toolbar.locator('[tabindex="0"]').count(), 1)
-        # the head's icons, then the node's actions
-        for control in ("ok", "chips", "pin", "ack", "File", "Mute"):
+        # the head's icons, ◇ last of them (ADR-0147 decision 1), then the node's
+        # actions
+        for control in ("ok", "chips", "door", "File", "Mute"):
             page.keyboard.press("ArrowRight")
             self.assertEqual(self._focused(), control)
         page.keyboard.press("End")
@@ -2568,7 +2827,7 @@ class HeadRowTests(_HeadRowCase):
         self.assertEqual(self._focused(), "page")
         for _ in range(3):
             page.keyboard.press("ArrowRight")
-        self.assertEqual(self._focused(), "pin")
+        self.assertEqual(self._focused(), "door")
         page.keyboard.press("Tab")
         self.assertEqual(page.evaluate(
             "document.activeElement.closest('.tree-node').dataset.node"), _API)
@@ -2577,14 +2836,14 @@ class HeadRowTests(_HeadRowCase):
         # Shift+Tab comes back to the stop the arrows left, and the stop is kept
         # by node through a swap and given back with the focus
         page.keyboard.press("Shift+Tab")
-        self.assertEqual(self._focused(), "pin")
+        self.assertEqual(self._focused(), "door")
         self._swap()
-        self.assertEqual(self._focused(), "pin")
+        self.assertEqual(self._focused(), "door")
         self.assertEqual(toolbar.locator('[tabindex="0"]').get_attribute("data-control"),
-                         "pin")
+                         "door")
         self._head(_WEB).locator(".status-card__name").focus()
         page.keyboard.press("Tab")
-        self.assertEqual(self._focused(), "pin")
+        self.assertEqual(self._focused(), "door")
         # a focus on a second action keeps that one through a swap
         self._head(_DNS).locator(".node-actions > a").nth(1).focus()
         self._swap()
@@ -2626,7 +2885,7 @@ class HeadRowTests(_HeadRowCase):
             '.status-node__self [data-control="lines"]').count(), 0)
         # after the lines in the tab order: Tab from the end of the head's toolbar
         # passes the lines, which carry no control here, and lands on it
-        self._icon(probe, "pin").focus()
+        self._icon(probe, "door").focus()
         page.keyboard.press("Tab")
         self.assertEqual(self._focused(), "lines")
         self.assertTrue(button.evaluate("b => b === document.activeElement"))
@@ -2779,32 +3038,26 @@ class HeadRowTests(_HeadRowCase):
                 "wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]}}).response
         self.assertEqual([violation["id"] for violation in found["violations"]], [])
 
-    def test_an_admins_pin_mark_clones_the_editor_into_the_box_and_holds_the_swap(self):
+    def test_a_door_opens_the_drawer_and_the_swap_waits_for_it(self):
+        # ◇ opens the node's Notes tab in the drawer over the wall (ADR-0147 decisions
+        # 3 and 4); the refresh waits while it is open, and goes on once it closes
         self._wall()
         page = self.page
-        mark = self._icon(_DNS, "pin")
-        self.assertEqual(mark.get_attribute("href"), f"/status{_DNS}")
-        mark.click()
-        page.wait_for_function("document.activeElement.name === 'note'")
-        box = self._node(_DNS).locator(":scope > .tree-hold > .tree-box")
-        clone = box.locator(":scope > details.pin-setter")
-        self.assertEqual(clone.count(), 1)
-        self.assertEqual(clone.locator("input[name=path]").input_value(), _DNS)
-        self.assertEqual(clone.locator(".rule-block__scope").inner_text().strip(),
-                         "Maintenance for dns.")
-        self.assertEqual(page.locator("template#pin-editor").count(), 1)
-        # the refresh waits while it is open
+        door = self._icon(_DNS, "door")
+        self.assertEqual(door.get_attribute("href"), f"/notes{_DNS}")
+        door.click()
+        page.wait_for_function("document.getElementById('ls-drawer').open")
         before = len(self.fragments)
         page.clock.run_for(10_000)
         page.wait_for_timeout(200)
         self.assertEqual(len(self.fragments), before)
-        self.assertIn("paused while editing",
-                      page.locator("#status-updated").inner_text())
-        # Cancel takes the clone away and gives ‖ the focus; the refresh goes on
-        clone.locator(".maintenance-editor-cancel").click()
-        page.wait_for_function(
-            "document.querySelector('#status-grid details.pin-setter') === null")
-        self.assertEqual(self._focused(), "pin")
+        # said in the drawer's head, the stamp as it is at rest (ADR-0147 decision 4)
+        self.assertTrue(page.locator(".ls-drawer__paused").is_visible())
+        self.assertNotIn("paused", page.locator("#status-updated").inner_text())
+        # ✕ closes it and gives ◇ the focus; the refresh goes on
+        page.locator(".ls-drawer__close").click()
+        page.wait_for_function("!document.getElementById('ls-drawer').open")
+        self.assertEqual(self._focused(), "door")
         self._swap()
 
 
@@ -2870,7 +3123,7 @@ _PLAN_WRITES = """() => {
 
 
 class RefreshRowTests(_HeadRowCase):
-    """The refresh reads a row only where it changed (backlog #91 §7.4): a row the
+    """The refresh reads a row only where it changed: a row the
     server drew the same, at the same width, is drawn from what was read of it — and
     every row is read at the width the planner gives its card."""
 
@@ -4266,7 +4519,7 @@ class ChipRunTests(_BrowserCase):
 
     def test_before_the_script_the_estimate_stands_near_what_it_measures(self):
         # The server counts a name's and a count's characters at 0.85 of the chip's
-        # `0` and the chip's chrome at its size (backlog #91's note, §2, 2026-10-17):
+        # `0` and the chip's chrome at its size (ADR-0127 decision 12):
         # in the container's fonts within a few pixels of what the script measures,
         # and on the whole nearer than every character a `0` and the chrome four
         # more, as it was — not on every level, a level of wide letters among them.
@@ -4350,8 +4603,8 @@ _ONE_COLUMN = """branch => {
 
 
 class OneColumnRunTests(_BrowserCase):
-    """A run with room for one of its level's columns only wraps as it comes (backlog
-    #91's note, §2, 2026-10-17): its chips at their own widths, drawn as a column's
+    """A run with room for one of its level's columns only wraps as it comes
+    (ADR-0127 decision 12): its chips at their own widths, drawn as a column's
     chips are, sharing lines, where a level with room for two keeps its columns
     (ADR-0127 decision 12). What decides is the column as the browser draws it — the
     server's estimate before the script and without it, what the script measured
@@ -4489,7 +4742,7 @@ _CURSORS = """() => Array.from(document.querySelectorAll(
 
 
 class HoverCardTests(_BrowserCase):
-    """The hover card (ADR-0019 decision 3, backlog #91 §3.1): on a pause of about two
+    """The hover card (ADR-0019 decision 3): on a pause of about two
     thirds of a second on a node's name alone — a chip, the name in an open head —
     and on the keyboard's focus at once; never over the rest of a head's row, while a
     click is under way or just after one, or under the look `inspection_card: off`.

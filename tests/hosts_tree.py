@@ -1,15 +1,15 @@
 """The hosts tree: a second deployment's wall, its names replaced.
 
 ``tests/fixtures/hosts_tree.json`` is a household's wall as its test instance drew it
-on 2026-10-21 (backlog #91's note, §7.5) — for each node a check wrote its path, its
+on 2026-10-21 — for each node a check wrote its path, its
 code and the lengths of its lines, the containers implied, in the shape of
 ``tests/fixtures/anonymized_tree.json``. Two cards: ``/computer``, nine hosts that the
 library's own types write — ``host-metrics`` on each, ``macos-memory`` beside it on one
 Mac, ``qnap-metrics`` beside it on the NAS — with a heartbeat file and a website among
 them; and ``/system``, an ``aws`` check, a ``github`` check and its API budget. 101
 nodes and 86 lines, most a host's five leaves of one short line each. It is the wall
-the library's host types are measured on when they declare their big levels (the
-note's §7.5, the third slice), as the anonymized tree is the wall of the family's
+the library's host types are measured on when they declare their big levels,
+as the anonymized tree is the wall of the family's
 packages.
 
 Every name that was the deployment's own has a generic one of the same length, so a
@@ -17,7 +17,7 @@ head and a chip stand as wide as they did; a level's own names — ``cpu``, ``di
 ``ssh``, the services of ``aws`` — are the types' and stay. Every line is made-up text
 of the recorded length in the shape its type writes, and every title and *about* the
 deployment wrote is made-up text of its length too, so the wall's cost is measured on
-the deployment's shape without a word of its own (R13). What the shapes do not record
+the deployment's shape without a word of its own. What the shapes do not record
 is filled in as the deployment has it: the checks' mounts and how often each runs, the
 titles and *abouts* its files and its ``nodes.yaml`` give, the ``aws`` rosters'
 ``show_when_quiet`` and their members — and what the packages and the library say of

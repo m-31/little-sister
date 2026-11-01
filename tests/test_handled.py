@@ -4,10 +4,9 @@ What the record adds on the rules built today, read off the pages: a closed chip
 ringed diamond and its number where a rule handles something its counts do not show
 (decision 6), the band's pill in the same short form (decision 6), a branch's *why*
 card after Time and what its Copy document writes of it (decision 7), and the note's
-card on the wall's page (decision 3). The block's own form on the wall is
-`tests/test_wall_pins.py`'s, *Handled* is `tests/test_maintenance_page.py`'s, and the
-chip's arithmetic `tests/test_tree.py`'s. What a browser does with the note's mark is
-`tests/test_pin_browser.py`'s.
+card gone from the wall's page with its mark (decision 3, as ADR-0147 decision 7
+amends it). The block's own form on the wall is `tests/test_wall_pins.py`'s, *Handled*
+is `tests/test_maintenance_page.py`'s, and the chip's arithmetic `tests/test_tree.py`'s.
 """
 from __future__ import annotations
 
@@ -23,7 +22,7 @@ from little_sister.pins import Pin
 from little_sister.reasons import Entry
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
-from tests.page_tree import Element, parse
+from tests.page_tree import Element, css_rules_naming, parse
 
 LEFT = timedelta(days=1, hours=23, minutes=30)
 
@@ -281,15 +280,22 @@ class CopyTests(_HandledCase):
         self.assertNotIn("Handled beneath it", self._source("/site"))
 
 
-class NoteCardTests(_HandledCase):
-    """Decision 3: the note's card stands outside the grid the refresh swaps, and
-    its script beside it."""
+class NoteCardGoneTests(_HandledCase):
+    """Decision 3, as ADR-0147 decision 7 amends it: a note is read in the drawer, and
+    the note's card goes with its mark — the card, its script and its styles."""
 
-    def test_the_page_carries_the_card_and_its_script(self):
+    def test_the_page_carries_no_card_and_no_script_of_one(self):
+        self._pin_lab()
+        self.client.set_cookie("handled_details", "1")
         body = self.client.get("/status").get_data(as_text=True)
-        page = parse(body)
-        card = page.one("note-card")
-        self.assertEqual(card.attrs.get("role"), "dialog")
-        self.assertTrue(card.has("inspect-card"))
-        self.assertFalse(card.within(page.one("status-grid")))
-        self.assertIn("js/note-card.js", body)
+        self.assertIn("rule-block--door", body)
+        for gone in ("note-card", "rule-note-mark", "rule-note-src"):
+            self.assertNotIn(gone, body)
+        self.assertEqual(self.client.get("/static/js/note-card.js").status_code, 404)
+
+    def test_the_stylesheet_keeps_nothing_of_it(self):
+        css = self.client.get("/static/css/overview.css").get_data(as_text=True)
+        for gone in (".note-card", ".rule-note-mark", ".block-button",
+                     ".rule-block__clear-now"):
+            with self.subTest(gone=gone):
+                self.assertEqual(css_rules_naming(css, gone), [])

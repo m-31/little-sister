@@ -7,7 +7,7 @@ hosts tree's host types are the library's own and propose their levels themselve
 interactive wall's flip a level nobody speaks for starts open, so a tree drawn without
 their proposals is a wall no deployment of theirs draws. This states each proposal in
 ``nodes.yaml``'s form, on the paths it resolves to, as the versions that come out with
-the flip declare them (backlog #91's note, §7.5, the family's declarations):
+the flip declare them:
 
 - github 0.1.13: ``actions`` its repositories and each repository's workflows as
   chips (its ADR-0019), and its three banded aspects' bands as chips, a band's box

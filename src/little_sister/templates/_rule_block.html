@@ -8,11 +8,12 @@
     stays a read state (ADR-0014 decision 16); the stylesheet is what makes the
     open editor stand in for the note and the buttons.
 
-    **On the wall the block is lighter** (ADR-0135 decisions 3 to 5): its mark and
-    its sentence, the note behind a mark of its own that opens it in a card, an
-    admin's *Edit* a pencil and *Clear* in the editor, in words. A node's page and
-    the *Handled* page state it whole. Every block's edge is dashed — nothing else
-    on the wall has one — and only a rule that paints its node fills its block.
+    **On the wall the block is the button** (ADR-0147 decision 7, `wall_block`): its
+    mark and its sentence, one link to its node's *Notes* tab at it, where its note,
+    *Edit* and *Clear* stand in the drawer — and only while *◇ details* is on
+    (decision 6). A node's page and the *Handled* page state it whole. Every block's
+    edge is dashed — nothing else on the wall has one — and only a rule that paints
+    its node fills its block.
 
     **The kind is data** (decision 8): `data-rule` on the block picks its tint in
     the stylesheet, `rule_mark` draws its mark, and a rule an admin set is the one
@@ -25,19 +26,24 @@
     unique on a page that may carry hundreds of them. Imported `with context`, for the
     deployment's default window and its timezone that the fields print.
 
-    **A block on the wall or in a branch's head stands in what the refresh swaps**
-    (decision 7), so the refresh waits while one of these editors is open: what
-    `poll.js` looks for is an open disclosure around a
-    `form.maintenance-editor-form`, which is the shape both macros below write. -#}
-{% from '_maintenance_fields.html' import maintenance_fields with context %}
+    **A block in a branch's head stands in what the refresh swaps** (decision 7), so
+    the refresh waits while one of these editors is open: what `poll.js` looks for is
+    an open disclosure around a `form.maintenance-editor-form`, which is the shape
+    both macros below write. Each such form opens on a line that says the pause where
+    its cause is, *updates paused*, which the stylesheet shows while the form's editor
+    stands open in what `poll.js` swaps — the stamp keeps its width (ADR-0147 decision
+    4). -#}
+{% from '_maintenance_fields.html' import maintenance_fields, schedule_fields, silence_fields, done_fields with context %}
 
-{#- The kind's mark: maintenance pauses, as the wall's pin control draws it, a
+{#- The kind's mark: maintenance pauses, ‖, a
     failure accepted — *seen* — is a ringed check (ADR-0135 decision 2, ADR-0142), and
     a configured rule is §, which says where a rule is written rather than what it
-    does (ADR-0135 decision 1, ADR-0137), drawn as a path to the cues' height. The
-    bell struck through comes with *silenced*. -#}
+    does (ADR-0135 decision 1, ADR-0137), drawn as a path to the cues' height. A
+    failure silenced is a bell struck through (ADR-0143 decision 2, ADR-0144). -#}
 {% macro rule_mark(kind) -%}
-{%- if kind in ('seen', 'done') -%}
+{%- if kind == 'silenced' -%}
+<svg class="rule-mark" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><path d="M8 2.4C5.9 2.4 4.7 4.1 4.7 6.2v3L3.4 11.3h9.2l-1.3-2.1v-3C11.3 4.1 10.1 2.4 8 2.4Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M6.5 12.9a1.6 1.6 0 0 0 3 0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M2.3 2.3 13.7 13.7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+{%- elif kind in ('seen', 'done') -%}
 <svg class="rule-mark" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><rect x="2.2" y="2.2" width="11.6" height="11.6" rx="2.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M5 8.3 7.2 10.5 11.2 5.8" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
 {%- elif kind == 'maintenance' -%}
 <svg class="rule-mark" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="currentColor"/></svg>
@@ -45,52 +51,74 @@
 <svg class="rule-mark" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><path d="M10.6 4.1C10.2 3 9.2 2.4 8 2.4 6.6 2.4 5.6 3.2 5.6 4.3c0 1.2 1.1 1.7 2.5 2.2 1.5.5 2.6 1.1 2.6 2.4 0 .9-.6 1.6-1.5 1.9M6.9 6.1C6 6.4 5.3 7.1 5.3 8c0 1.3 1.1 1.9 2.6 2.4 1.4.5 2.5 1 2.5 2.2 0 1.1-1 1.9-2.4 1.9-1.2 0-2.2-.6-2.6-1.7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
 {%- endif -%}
 {%- endmacro %}
-{#- What is handled beneath a closed node, and the index of it (ADR-0135 decisions 6
-    and 8): a ringed diamond, in `currentColor` as the marks are; decorative, its
-    words in the tooltip and the accessible name of what carries it. -#}
+{#- What is handled beneath a closed node, the index of it (ADR-0135 decisions 6 and
+    8) and the kiosk's door (ADR-0147 decision 1): a ringed diamond, in `currentColor`
+    as the marks are; decorative, its words in the tooltip and the accessible name of
+    what carries it. -#}
 {% macro handled_mark() -%}
 <svg class="handled-mark" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><path d="M8 1.8 14.2 8 8 14.2 1.8 8Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/></svg>
 {%- endmacro %}
-{#- The marks of a block's own buttons on the wall (ADR-0135 decisions 3 and 4): a
-    speech bubble that opens the note, a pencil that opens the editor. Decorative;
-    each button's words are its title and its hidden text. -#}
+{#- A note's mark, a speech bubble: the *Notes* tab's own kind, *Note*, in its form's
+    choice. Decorative; the choice's word says it. -#}
 {% macro note_mark() -%}
 <svg class="block-mark" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M3 3h10a1.2 1.2 0 0 1 1.2 1.2v6A1.2 1.2 0 0 1 13 11.4H8.2L5 13.9v-2.5H3a1.2 1.2 0 0 1-1.2-1.2v-6A1.2 1.2 0 0 1 3 3Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M4.9 6.2h6.2M4.9 8.6h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-{%- endmacro %}
-{% macro pencil_mark() -%}
-<svg class="block-mark" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M10.6 2.9a1.5 1.5 0 0 1 2.1 0l.4.4a1.5 1.5 0 0 1 0 2.1l-7.6 7.6-3.1.6.6-3.1Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M9.3 4.2l2.5 2.5" stroke="currentColor" stroke-width="1.4"/></svg>
 {%- endmacro %}
 {#- The marks of a head's own buttons (ADR-0127 decision 3), drawn from
     `currentColor` as the rule mark is, so they hold on every surface in every
     theme: ↗ for the node's page, the healthy fold's funnel, ▤ for the children
-    as chips, ‖ for an admin's pin still to be set, the ringed check for what fails
-    there to be marked seen (ADR-0142), and ⋯ for the node's actions that did not fit
-    the head's row. Decorative; each button's `aria-label` says
-    what it does. A page draws the shapes once, `icon_sprite`, outside the grid the
-    refresh swaps, and each mark refers to its shape — three buttons on every open
-    head would otherwise carry a kilobyte of paths each in every fragment. -#}
+    as chips, ◇ for the node's door to its *Notes* tab (ADR-0147), and ⋯ for the
+    node's actions that did not fit the head's row. Decorative; each button's
+    `aria-label` says what it does. A page draws the shapes once, `icon_sprite`,
+    outside the grid the refresh swaps, and each mark refers to its shape — three
+    buttons on every open head would otherwise carry a kilobyte of paths each in
+    every fragment. -#}
 {% macro icon_sprite() -%}
-<svg class="icon-sprite" width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute"><symbol id="ls-icon-page" viewBox="0 0 16 16"><path d="M6 3H3v10h10v-3M9 3h4v4M13 3 7.5 8.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ls-icon-funnel" viewBox="0 0 16 16"><path d="M2 3h12l-4.6 5.4v4.1L6.6 14V8.4Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol><symbol id="ls-icon-chips" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="3.2" rx="1.6" fill="currentColor"/><rect x="2" y="9.8" width="5.2" height="3.2" rx="1.6" fill="currentColor"/><rect x="8.8" y="9.8" width="5.2" height="3.2" rx="1.6" fill="currentColor"/></symbol><symbol id="ls-icon-pin" viewBox="0 0 16 16"><rect x="4" y="3.5" width="2.7" height="9" rx="0.7" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="9.3" y="3.5" width="2.7" height="9" rx="0.7" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol><symbol id="ls-icon-ack" viewBox="0 0 16 16"><rect x="2.2" y="2.2" width="11.6" height="11.6" rx="2.6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M5 8.3 7.2 10.5 11.2 5.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ls-icon-more" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.6" fill="currentColor"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/><circle cx="12.5" cy="8" r="1.6" fill="currentColor"/></symbol></svg>
+<svg class="icon-sprite" width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute"><symbol id="ls-icon-page" viewBox="0 0 16 16"><path d="M6 3H3v10h10v-3M9 3h4v4M13 3 7.5 8.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ls-icon-funnel" viewBox="0 0 16 16"><path d="M2 3h12l-4.6 5.4v4.1L6.6 14V8.4Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol><symbol id="ls-icon-chips" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="3.2" rx="1.6" fill="currentColor"/><rect x="2" y="9.8" width="5.2" height="3.2" rx="1.6" fill="currentColor"/><rect x="8.8" y="9.8" width="5.2" height="3.2" rx="1.6" fill="currentColor"/></symbol><symbol id="ls-icon-door" viewBox="0 0 16 16"><path d="M8 1.8 14.2 8 8 14.2 1.8 8Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/></symbol><symbol id="ls-icon-more" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.6" fill="currentColor"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/><circle cx="12.5" cy="8" r="1.6" fill="currentColor"/></symbol></svg>
 {%- endmacro %}
 {% macro icon_mark(kind) -%}
 <svg class="icon-mark" aria-hidden="true"><use href="#ls-icon-{{ kind }}"/></svg>
 {%- endmacro %}
-{#- The page's one editor of a pin still to be set (ADR-0104 decision 3, ADR-0127
-    decision 3): an admin's ‖ in a head's icons clones it into the node's box, where
-    the block will stand — `tree.js` fills in the node's path and what the pin would
-    cover, and opens it — so that no fragment carries an editor, where one in every
-    head would be some 850 KB in every swap of an admin's tab. It is the pause mark's
-    disclosure as it was, so the open clone is what `poll.js` waits for and what
-    `maintenance-edit.js` closes with Cancel and Escape; its summary, which only a
-    page without script would show, never shows, since without script there is no
-    clone and ‖ is a link to the node's page. Drawn by `status.html` **outside**
-    `#status-grid`, once, where the refresh never reaches it, and only for an admin
-    off the kiosk. A pinned node has no ‖, its block carrying *Edit* and *Clear*.
-    The sentence names what the pin covers: a node with others beneath it says so,
-    whether or not the page shows them, which `data-beneath` on its ‖ says from the
-    unfiltered tree; `next` is the page's own address, where the write comes back. -#}
-{% macro pin_editor(next) -%}
-<template id="pin-editor"><details class="maintenance-editor-disclosure pin-setter"><summary class="pin-control visually-hidden">Set maintenance</summary>{{ pin_new('node', '', '', '', 'pin-editor', what=('<span class="pin-editor__what">this node</span>' | safe), next=next) }}</details></template>
+{#- **One door, ◇** (ADR-0147 decisions 1 and 2): a link to a node's *Notes* tab,
+    where every kind is set and a standing pin changed, for every reader — whoever
+    may set nothing (`may` false) reading what it opens, its words saying so. On a
+    head it is lit with the number of parts handled at and beneath the node, `door`
+    (`tree.DoorCount`), whose words are its tooltip and its accessible name, and plain
+    where nothing is; the tab opens at its top. A line's door, `slug`, stands in the
+    line's seat for whoever may set something on it, opens the tab's form on that
+    line and is never lit: where something handles the line, its mark is its door
+    (`line_mark`). `cls` is the control's look, a head's square or a line's seat. A
+    mark that is a door says so with `data-door` (`line_mark`, `head_marks`), ◇ with
+    `data-control="door"` — and a lit ◇ that stands in the state cluster with the
+    marks, as it does under the looks whose toolbar shows only under the pointer
+    (`state_door`), with both (`mark`). -#}
+{% macro door_link(path, name, door=none, slug='', cls='node-icon', may=false, mark=false) -%}
+{%- set lit = door.count if door else 0 -%}
+{%- set words = door.words if door else '' -%}
+{%- if slug -%}
+{%- set href = url_for('notes', path=path | url_branch, reason=slug) ~ '#add-note' -%}
+{%- set title = 'Handle this line' -%}
+{%- set label = 'handle this line of ' ~ name -%}
+{%- else -%}
+{%- set href = url_for('notes', path=path | url_branch) -%}
+{%- set title = ('Handle it' if may else 'Notes') ~ (' — ' ~ words if words else '') -%}
+{%- set label = ('handle ' if may else 'the notes of ') ~ name ~ (' — ' ~ words if words else '') -%}
+{%- endif -%}
+<a class="{{ cls }} door{{ ' is-lit' if lit }}" data-control="door"{% if mark %} data-door{% endif %} href="{{ href }}" title="{{ title }}" aria-label="{{ label }}">{{ icon_mark('door') }}{% if lit %}<span class="door__count">{{ lit }}</span>{% endif %}</a>
+{%- endmacro %}
+{#- The door on the kiosk, which draws no controls (ADR-0147 decision 1): ◇ lit with
+    its number where something is handled at or beneath the node, a mark and no
+    button, its words its tooltip and its hidden text; nothing where nothing is. -#}
+{% macro door_mark(door=none) -%}
+{%- if door and door.count -%}
+<span class="door-mark" title="{{ door.words[:1] | upper }}{{ door.words[1:] }}">{{ handled_mark() }}{{ door.count }}<span class="visually-hidden"> — {{ door.words }}</span></span>
+{%- endif -%}
+{%- endmacro %}
+{#- The line at the top of an editor's form that says the page waits for it, *updates
+    paused* (ADR-0147 decision 4): the stylesheet shows it while the editor stands
+    open in what `poll.js` swaps, in the frame it opens in, and never on a page that
+    nothing refreshes. -#}
+{% macro paused_line() -%}
+<p class="ls-paused">updates paused</p>
 {%- endmacro %}
 {#- An instant in the block's words, each word of it kept whole: the date and the
     time of day, or whatever the deployment's `time_format` writes between spaces. A
@@ -106,9 +134,9 @@
 
 {#- Who pinned it, and who changed it last where that is somebody else's write:
     the block's sentence names only the last. An acknowledgment was marked, in its
-    kind's word (ADR-0142). -#}
+    kind's word (ADR-0142), and a silence silenced (ADR-0144). -#}
 {% macro pin_record(entry) -%}
-{% if entry.kind == 'maintenance' %}Pinned{% else %}Marked {{ entry.kind }}{% endif %} by <strong>{{ entry.created_by or 'unknown' }}</strong> {{ instant(entry.created_at) }}.
+{% if entry.kind == 'maintenance' %}Pinned{% elif entry.kind == 'silenced' %}Silenced{% else %}Marked {{ entry.kind }}{% endif %} by <strong>{{ entry.created_by or 'unknown' }}</strong> {{ instant(entry.created_at) }}.
 {%- if entry.set_at != entry.created_at %} Last changed by <strong>{{ entry.set_by or 'unknown' }}</strong> {{ instant(entry.set_at) }}.{% endif %}
 {%- endmacro %}
 
@@ -127,8 +155,8 @@
     page of many blocks is a page of many Edits. A card on the wall is the third
     place: its head names the node already, so the sentence opens with what was
     done to it (`bare`) — *In maintenance by* — and says nothing twice. `wall` is
-    every block the wall draws, a box's and a line's beside a card's: its note
-    waits behind its mark, and its buttons are marks.
+    every block the wall draws, a box's beside a card's: the button that opens the
+    drawer at it (`wall_block`), its note and its buttons the drawer's.
 
     The stored placeholder `maintenance` is the absence of a note, not a note
     somebody wrote, so it is neither shown nor offered as the source to edit; a
@@ -142,69 +170,52 @@
     pin is edited where it stands (ADR-0104 decision 2).
 
     **An acknowledgment is the same block in its kind's words** (ADR-0142 decision
-    6, ADR-0104 decision 8): `data-rule` its kind, which takes no fill, its mark the
-    ringed check, its sentence `ack_said`, its record *Marked seen by*, and its
-    editor posting to the route its kind is named for, with an end it may be given
-    rather than an expiry.
+    6, ADR-0144, ADR-0104 decision 8): `data-rule` its kind, which takes no fill, its
+    mark the ringed check or the bell struck through, its sentence `ack_said`, its
+    record *Marked seen by* or *Silenced by*, and its editor the ringed check's,
+    `ack_forms`, where the kind may change — to *done* as well, where the part is a
+    line whose failure is an event that fails now, its occurrence `event` (ADR-0146).
     Its note's mark is keyed by its kind beside its part, so that a part's
-    maintenance and its *seen* each open their own. -#}
+    maintenance and its acknowledgment each open their own.
+
+    `at` is the block a *Notes* tab was asked at, `?at=` its kind on the line
+    `?reason=` names (ADR-0147 decision 3): a mark's door lands there, so the block
+    carries the page's one anchor `at`, and its editor stands open for whoever may
+    change it. `ran` is what has run of a series, which its note counts and a *Notes*
+    tab hands in (`notes_tab.Ran`, ADR-0150): its schedule's row ends in it — *· 3
+    windows ran, the last closed by hand, by pan*. -#}
 {% macro pin_block(entry, scope, path, slug, prefix, editable, also=false, tag='div',
                    subject='', record=false, next='', of='', bare=false,
-                   source='', wall=false) -%}
+                   source='', wall=false, fails=true, event='', at=false,
+                   ran=none) -%}
+{%- if wall -%}
+{{ wall_block(entry, scope, path, slug, bare=bare, source=source) }}
+{%- else -%}
 {%- set kept_kind = entry.kind == 'maintenance' -%}
+{%- set series = kept_kind and entry.schedule is not none and not entry.schedule.is_one_off -%}
+{%- set opened = entry | series_open if series else none -%}
+{%- set ends = entry | ends -%}
 {%- set note = entry.note if entry.note != 'maintenance' or not kept_kind else '' -%}
-{%- set kept = entry.expires_at | expiry_input -%}
-{%- set named %} this {{ scope }}'s {{ entry.kind }}{% if of %}, {{ of }}{% endif %}{% endset -%}
-<{{ tag }} class="rule-block rule-block--{{ scope }}{{ ' rule-block--wall' if wall }}" data-rule="{{ entry.kind }}">
+{%- set named %} this {{ scope }}'s {{ 'schedule' if series else entry.kind }}{% if of %}, {{ of }}{% endif %}{% endset -%}
+{%- set window_named %} this {{ scope }}'s window{% if of %}, {{ of }}{% endif %}{% endset -%}
+<{{ tag }}{% if at %} id="at"{% endif %} class="rule-block rule-block--{{ scope }}{{ ' rule-block--series' if series }}{{ ' is-at' if at }}" data-rule="{{ entry.kind }}">
     <div class="rule-block__head">
-        <span class="rule-block__what" id="{{ prefix }}-what">{{ rule_mark(entry.kind) }}{% if not kept_kind %}{{ ack_said(entry, scope, subject, bare, path) }}{% else %}{% if bare %}In maintenance{% else %}{% if subject %}{{ subject }}{% else %}<strong>This {{ scope }}</strong>{% endif %} is {% if also %}also in maintenance on its own{% else %}in maintenance{% endif %}{% endif %}{% if source %} from <a href="{{ url_for('status', branch=source | url_branch) if source | url_branch else url_for('status') }}"><strong>{{ source }}</strong></a>{% endif %} by <strong>{{ entry.set_by or 'an admin' }}</strong> until {{ instant(entry.expires_at) }} <span class="text-nowrap">· {{ entry.expires_at | time_left }}</span>{% endif %}</span>
-        {%- if wall and note %}
-        {#- The note's mark (ADR-0135 decision 3): a link to the page that states the
-            block whole, which `note-card.js` makes the button that opens the note in
-            a card. Its key names the pin; the box it stands in names the rest. -#}
-        {%- set page = url_for('status', branch=path | url_branch, reason=slug) ~ '#pinned-reason' if slug else (url_for('status', branch=path | url_branch) if path | url_branch else url_for('status')) %}
-        <a class="block-button rule-note-mark" href="{{ page }}" title="Note" aria-describedby="{{ prefix }}-what" data-note-key="{{ path }}|{{ slug }}{% if not kept_kind %}|{{ entry.kind }}{% endif %}">{{ note_mark() }}<span class="visually-hidden">Note</span></a>
-        {%- endif %}
-        {%- if editable %}
-        <details class="maintenance-editor-disclosure rule-block__edit">
-            {%- if wall %}
-            <summary class="block-button" title="Edit" aria-describedby="{{ prefix }}-what">{{ pencil_mark() }}<span class="visually-hidden">Edit{{ named }}</span></summary>
-            {%- else %}
+        <span class="rule-block__what" id="{{ prefix }}-what">{{ rule_mark(entry.kind) }}{% if not kept_kind %}{{ ack_said(entry, scope, subject, bare, path) }}{% else %}{% if bare %}In maintenance{% else %}{% if subject %}{{ subject }}{% else %}<strong>This {{ scope }}</strong>{% endif %} is {% if also %}also in maintenance on its own{% else %}in maintenance{% endif %}{% endif %}{% if source %} from <a href="{{ url_for('status', branch=source | url_branch) if source | url_branch else url_for('status') }}"><strong>{{ source }}</strong></a>{% endif %} {{ window_by(entry, opened, ends) }}{% endif %}</span>
+        {%- if editable and series and opened %}
+        {{ extend_form(entry, opened, path, slug, prefix, window_named, next) }}
+        {{ end_form(entry, opened, path, slug, prefix, window_named, next) }}
+        {%- elif editable and not series %}
+        {%- if kept_kind %}
+        {{ entry_edit(entry, path, slug, prefix, named, next, prefix ~ '-what', at) }}
+        {%- else %}
+        <details class="maintenance-editor-disclosure rule-block__edit"{% if at %} open{% endif %}>
             <summary class="rule-button" aria-describedby="{{ prefix }}-what">Edit<span class="visually-hidden">{{ named }}</span></summary>
-            {%- endif %}
-            <form method="post" action="{{ url_for(entry.kind) }}"
-                  class="maintenance-editor-form rule-block__editor">
-                <p class="rule-block__record">{{ pin_record(entry) }}</p>
-                <input type="hidden" name="path" value="{{ path }}">
-                {%- if slug %}
-                <input type="hidden" name="slug" value="{{ slug }}">
-                {%- endif %}
-                {%- if not wall %}
-                <input type="hidden" name="action" value="set">
-                {%- endif %}
-                <input type="hidden" name="set_at" value="{{ entry.token }}">
-                {%- if next %}
-                <input type="hidden" name="next" value="{{ next }}">
-                {%- endif %}
-                {{ maintenance_fields(note, kept, prefix, maintenance_default,
-                                      maintenance_timezone, true, kept,
-                                      ending=not kept_kind) }}
-                <div class="maintenance-editor-form__actions">
-                    <button class="btn btn-sm btn-primary" type="submit"{% if wall %} name="action" value="set"{% endif %}>Save changes</button>
-                    <button class="btn btn-sm btn-link maintenance-editor-cancel"
-                            type="reset">Cancel</button>
-                    {%- if wall %}
-                    {#- On the wall *Clear* stands here, in words (ADR-0135 decision
-                        4): the one act on a block that cannot wait for a second look,
-                        behind the pencil rather than a glyph of its own. The first
-                        submit button is the one Enter presses, so a typed field saves. -#}
-                    <button class="btn btn-sm rule-block__clear-now" type="submit" name="action" value="clear" formnovalidate>Clear<span class="visually-hidden">{{ named }}</span></button>
-                    {%- endif %}
-                </div>
-            </form>
+            {{ ack_forms(scope, path, slug, prefix, entry=entry, next=next,
+                         fails=fails, event=event) }}
         </details>
-        {%- if not wall %}
-        <form method="post" action="{{ url_for(entry.kind) }}" class="rule-block__clear">
+        {%- endif %}
+        <form method="post" action="{{ url_for(entry.kind) }}" class="rule-block__clear"{{ in_frame() }}>
+            {{- panel_field() }}
             <input type="hidden" name="path" value="{{ path }}">
             {%- if slug %}
             <input type="hidden" name="slug" value="{{ slug }}">
@@ -217,19 +228,273 @@
             <button class="rule-button" type="submit" aria-describedby="{{ prefix }}-what">Clear<span class="visually-hidden">{{ named }}</span></button>
         </form>
         {%- endif %}
+    </div>
+    {%- if series %}
+    {#- the schedule, its second row (#35's note, decision 5): its sentence and the
+        next start after this window, or *its last window*, with *Edit*, which shapes
+        the windows to come, and *Clear*, which asks -#}
+    <div class="rule-block__head rule-block__head--schedule">
+        <span class="rule-block__schedule" id="{{ prefix }}-schedule">{{ entry | sentence }}{% if opened and opened.next %} <span class="text-nowrap">· next {{ instant(opened.next.start) }}</span>{% elif opened and opened.last %} <span class="text-nowrap">· its last window</span>{% endif %}{% if opened and opened.shut %} <span class="rule-block__why">· {{ opened.shut | shut_said }}</span>{% endif %}{{ windows_ran(ran) }}</span>
+        {%- if editable %}
+        {{ entry_edit(entry, path, slug, prefix, named, next, prefix ~ '-schedule', at) }}
+        {{ clear_asking(entry, path, slug, prefix, named, next, 'this one and those to come', prefix ~ '-schedule') }}
         {%- endif %}
     </div>
-    {%- if note and not wall %}
+    {%- endif %}
+    {%- if note %}
     <div class="rule-block__note maintenance-explanation md-body">{{ note | markdown(node=path) }}</div>
-    {%- elif note %}
-    {#- On the wall the note waits for its mark, whole, as the card shows it — the
-        note and who set it — so that nothing is fetched to open it. -#}
-    <template class="rule-note-src"><div class="note-card__note md-body">{{ note | markdown(node=path) }}</div><p class="note-card__record">{{ pin_record(entry) }}</p></template>
     {%- endif %}
     {%- if record %}
     <p class="rule-block__record">{{ pin_record(entry) }}</p>
     {%- endif %}
 </{{ tag }}>
+{%- endif -%}
+{%- endmacro %}
+
+{#- What has run of a series that stands, at the end of its row (ADR-0150): how many
+    of its windows closed, and how the last closed — *· 3 windows ran, the last closed
+    by hand, by pan* — where a *Notes* tab hands it in (`notes_tab.Ran`). -#}
+{% macro windows_ran(ran) -%}
+{%- if ran %} <span class="rule-block__ran">· {{ ran.windows }} ran, the last closed{% if ran.how %} {{ ran.how }}{% endif %}{% if ran.by %}, by <strong>{{ ran.by }}</strong>{% endif %}</span>{% endif -%}
+{%- endmacro %}
+
+{#- Who has a maintenance window open, until when, and what is left (ADR-0104 decision
+    1): the pin's last writer, or for a series the one who set it — whose schedule
+    the window is — and, where the window open was extended, who extended it (#35's
+    note, decision 5): *by anna until 2026-11-01 07:00, extended by lex · 1h 20m
+    left*. The time left is the window's alone; the schedule's end stands in its
+    sentence and never counts down. -#}
+{% macro window_by(entry, opened, ends) -%}
+{%- set series = opened is not none or (entry.schedule is not none and not entry.schedule.is_one_off) -%}
+by <strong>{{ (entry.created_by if series else entry.set_by) or 'an admin' }}</strong> until {{ instant(ends) }}{% if opened is not none and opened.extended_by %}, extended by <strong>{{ opened.extended_by }}</strong>{% endif %} <span class="text-nowrap">· {{ ends | time_left }}</span>
+{%- endmacro %}
+
+{#- A maintenance entry's editor in its block (ADR-0104 decision 4; ADR-0150, landing
+    4): the browser's own disclosure, *Edit*, holding the entry's editor with every
+    field filled (`schedule_fields`, `app._editor_of`) — a one-off's, a series', and
+    one planned — and *Save changes*. A series' shapes the windows to come: the window
+    open now keeps its end, which only *Extend* and *End now* change. `described` is
+    the row it stands in, the block's sentence or its schedule's. -#}
+{% macro entry_edit(entry, path, slug, prefix, named, next, described, at=false) -%}
+<details class="maintenance-editor-disclosure rule-block__edit"{% if at and entry.schedule.is_one_off %} open{% endif %}>
+    <summary class="rule-button" aria-describedby="{{ described }}">Edit<span class="visually-hidden">{{ named }}</span></summary>
+    <form method="post" action="{{ url_for('maintenance') }}"
+          class="maintenance-editor-form rule-block__editor ls-schedule-form"{{ in_frame() }}>
+        {{ paused_line() }}
+        <p class="rule-block__record">{{ pin_record(entry) }}</p>
+        {{- panel_field() }}
+        <input type="hidden" name="path" value="{{ path }}">
+        {%- if slug %}
+        <input type="hidden" name="slug" value="{{ slug }}">
+        {%- endif %}
+        <input type="hidden" name="action" value="set">
+        <input type="hidden" name="set_at" value="{{ entry.token }}">
+        {%- if next %}
+        <input type="hidden" name="next" value="{{ next }}">
+        {%- endif %}
+        {{ schedule_fields(editor_of(entry), prefix, maintenance_default,
+                           maintenance_timezone, true) }}
+        <div class="maintenance-editor-form__actions">
+            <button class="btn btn-sm btn-primary" type="submit">Save changes</button>
+            <button class="btn btn-sm btn-link maintenance-editor-cancel"
+                    type="reset">Cancel</button>
+        </div>
+    </form>
+</details>
+{%- endmacro %}
+
+{#- *Extend*, on a series' first row (#35's note, decision 5): the browser's own
+    disclosure, holding its presets — 30 minutes and 1, 2 and 4 hours, counted from the
+    window's end — as buttons, an *Until* read as the end field is, from now, and the
+    optional words why, which the Notes history keeps. It never shortens: an *Until*
+    before the window's end is refused, naming *End now*. The window is named by its
+    start, so that one that closed before the form arrived is refused rather than
+    reopened. The form's first button is a hidden one that reads *Until*, so that
+    Enter in a field does not press a preset. -#}
+{% macro extend_form(entry, opened, path, slug, prefix, window_named, next) -%}
+<details class="maintenance-editor-disclosure rule-block__extend">
+    <summary class="rule-button" aria-describedby="{{ prefix }}-what">Extend<span class="visually-hidden">{{ window_named }}</span></summary>
+    <form method="post" action="{{ url_for('maintenance') }}"
+          class="maintenance-editor-form rule-block__window-form"{{ in_frame() }}>
+        {{ paused_line() }}
+        {{- panel_field() }}
+        <button class="ls-default-submit" type="submit" tabindex="-1" aria-hidden="true"></button>
+        <input type="hidden" name="path" value="{{ path }}">
+        {%- if slug %}
+        <input type="hidden" name="slug" value="{{ slug }}">
+        {%- endif %}
+        <input type="hidden" name="action" value="extend">
+        <input type="hidden" name="set_at" value="{{ entry.token }}">
+        <input type="hidden" name="window" value="{{ opened.window.start | stamp }}">
+        {%- if next %}
+        <input type="hidden" name="next" value="{{ next }}">
+        {%- endif %}
+        <p class="rule-block__presets"><span>By, from its end at {{ instant(opened.window.end) }}:</span>
+            {%- for seconds, word in ((1800, '30 minutes'), (3600, '1 hour'), (7200, '2 hours'), (14400, '4 hours')) %}
+            <button class="btn btn-sm btn-outline-primary rule-block__preset" type="submit" name="preset" value="{{ seconds }}">{{ word }}</button>
+            {%- endfor %}</p>
+        <div class="mb-2">
+            <label class="form-label" for="{{ prefix }}-extend-until">Until</label>
+            <input class="form-control form-control-sm" id="{{ prefix }}-extend-until" name="until"
+                   placeholder="e.g. 07:00 — later than its end" aria-describedby="{{ prefix }}-extend-said">
+            <div class="form-text" id="{{ prefix }}-extend-said">Read as the end field is, from now, and later than this window's end. To end it sooner, use End now.</div>
+        </div>
+        <div class="mb-2">
+            <label class="form-label" for="{{ prefix }}-extend-note">Note</label>
+            <textarea class="form-control form-control-sm" id="{{ prefix }}-extend-note" name="note" rows="2"
+                      placeholder="why longer? — optional"></textarea>
+            <div class="form-text">Kept in the Notes, beside the schedule's own.</div>
+        </div>
+        <div class="maintenance-editor-form__actions">
+            <button class="btn btn-sm btn-primary" type="submit">Extend until then</button>
+            <button class="btn btn-sm btn-link maintenance-editor-cancel" type="reset">Cancel</button>
+        </div>
+    </form>
+</details>
+{%- endmacro %}
+
+{#- *End now*, on a series' first row (#35's note, decisions 3 and 5): the browser's
+    own disclosure, holding the optional words why and *End this window*. It closes
+    the window open now, *window closed · by hand*, the schedule's windows to come
+    standing; on its schedule's last window it is the entry's end, *maintenance ended ·
+    by hand*, which the form says. -#}
+{% macro end_form(entry, opened, path, slug, prefix, window_named, next) -%}
+<details class="maintenance-editor-disclosure rule-block__end">
+    <summary class="rule-button" aria-describedby="{{ prefix }}-what">End now<span class="visually-hidden">{{ window_named }}</span></summary>
+    <form method="post" action="{{ url_for('maintenance') }}"
+          class="maintenance-editor-form rule-block__window-form"{{ in_frame() }}>
+        {{ paused_line() }}
+        {{- panel_field() }}
+        <input type="hidden" name="path" value="{{ path }}">
+        {%- if slug %}
+        <input type="hidden" name="slug" value="{{ slug }}">
+        {%- endif %}
+        <input type="hidden" name="action" value="end">
+        <input type="hidden" name="set_at" value="{{ entry.token }}">
+        <input type="hidden" name="window" value="{{ opened.window.start | stamp }}">
+        {%- if next %}
+        <input type="hidden" name="next" value="{{ next }}">
+        {%- endif %}
+        <p class="rule-block__question">{% if opened.last %}It is its schedule's last window: ending it ends the schedule.{% else %}It ends this window now; the schedule's windows to come stay.{% endif %}</p>
+        <div class="mb-2">
+            <label class="form-label" for="{{ prefix }}-end-note">Note</label>
+            <textarea class="form-control form-control-sm" id="{{ prefix }}-end-note" name="note" rows="2"
+                      placeholder="why sooner? — optional"></textarea>
+        </div>
+        <div class="maintenance-editor-form__actions">
+            <button class="btn btn-sm btn-outline-danger" type="submit">End this window</button>
+            <button class="btn btn-sm btn-link maintenance-editor-cancel" type="reset">Keep it</button>
+        </div>
+    </form>
+</details>
+{%- endmacro %}
+
+{#- **A series' Clear asks first** (ADR-0150, decision 5 of #35's note): it reaches
+    into the windows to come, which only the schedule's editor puts back, so it is
+    the browser's own disclosure — *This ends every window of the schedule*, `which`
+    the windows it ends — with *Clear the schedule* and *Keep it*, which closes it
+    with script, as the summary does without. A one-off's Clear asks nothing: its one
+    window is all it has. `described` is the row it stands in. -#}
+{% macro clear_asking(entry, path, slug, prefix, named, next, which, described='') -%}
+<details class="maintenance-editor-disclosure rule-block__clear rule-block__ask">
+    <summary class="rule-button" aria-describedby="{{ described or prefix ~ '-what' }}">Clear<span class="visually-hidden">{{ named }}</span></summary>
+    <form method="post" action="{{ url_for('maintenance') }}" class="maintenance-editor-form rule-block__ask-form"{{ in_frame() }}>
+        {{ paused_line() }}
+        {{- panel_field() }}
+        <p class="rule-block__question">This ends every window of the schedule, {{ which }}.</p>
+        <input type="hidden" name="path" value="{{ path }}">
+        {%- if slug %}
+        <input type="hidden" name="slug" value="{{ slug }}">
+        {%- endif %}
+        <input type="hidden" name="action" value="clear">
+        <input type="hidden" name="set_at" value="{{ entry.token }}">
+        {%- if next %}
+        <input type="hidden" name="next" value="{{ next }}">
+        {%- endif %}
+        <button class="btn btn-sm btn-outline-danger" type="submit">Clear the schedule</button>
+        <button class="btn btn-sm btn-link maintenance-editor-cancel" type="button">Keep it</button>
+    </form>
+</details>
+{%- endmacro %}
+
+{#- **A maintenance entry planned** (ADR-0150): one that stands and holds nothing now
+    — a window set ahead, or a series between two of its windows — drawn without the
+    tint, since it holds nothing, under *Planned* wherever it is listed, and never
+    among what stands. Its sentence is the entry's one (`sentence`), then when it
+    starts: a one-off's *· starts in 6d*, after its *until …*, and a series' *· next …
+    · in 6d*, whose countdown follows the start it names. Where no window is to open,
+    or its windows stop from a day, its holiday list's words say why (`planned_why`),
+    and where its list cannot be read at all, the words lead to the instance's line
+    that says so. Its *Edit* is the entry's editor, every field filled (`entry_edit`):
+    a one-off's *Starts* and end each kept exactly while unchanged, and a series' its
+    rule, *Until*, *Not on* and its zone (ADR-0150, landing 4). A one-off's *Clear*
+    asks nothing, and a series' asks (`clear_asking`). `subject` names the part where
+    the block stands away from it; `at` is the block a *Notes* tab was asked at — a
+    planned line's door, or the answer to a set that planned it — which takes the
+    focus with its editor closed, so that its sentence is read at once with *Edit* and
+    *Clear* beside it. `ran` is what has run of a series between two of its windows,
+    which a *Notes* tab hands in, at the end of its sentence (`windows_ran`). -#}
+{% macro planned_block(planned, scope, path, slug, prefix, editable, tag='div',
+                       subject='', record=false, next='', of='', at=false,
+                       ran=none) -%}
+{%- set entry = planned.pin -%}
+{%- set once = entry.schedule.is_one_off -%}
+{%- set upcoming = planned.next -%}
+{%- set why = planned | planned_why -%}
+{%- set note = entry.note if entry.note != 'maintenance' else '' -%}
+{%- set named %} this {{ scope }}'s {{ 'window' if once else 'schedule' }}{% if of %}, {{ of }}{% endif %}{% endset -%}
+<{{ tag }}{% if at %} id="at" tabindex="-1" autofocus{% endif %} class="rule-block rule-block--{{ scope }} rule-block--planned{{ ' is-at' if at }}" data-rule="maintenance" data-planned>
+    <div class="rule-block__head">
+        <span class="rule-block__what" id="{{ prefix }}-what">{{ rule_mark('maintenance') }}{% if subject %}{{ subject }} · {% endif %}{{ entry | sentence }}{% if upcoming %} {% if once %}<span class="text-nowrap">· starts in {{ upcoming.start | starts_in }}</span>{% else %}<span class="text-nowrap">· next {{ instant(upcoming.start) }}</span> <span class="text-nowrap">· in {{ upcoming.start | starts_in }}</span>{% endif %}{% endif %}{% if why %} <span class="rule-block__why">· {% if planned.shut and planned.shut.why_not %}<a href="{{ planned.shut | shut_line }}">{{ why }}</a>{% else %}{{ why }}{% endif %}</span>{% endif %}{{ windows_ran(ran) }}</span>
+        {%- if editable %}
+        {{ entry_edit(entry, path, slug, prefix, named, next, prefix ~ '-what') }}
+        {%- endif %}
+        {%- if editable and once %}
+        <form method="post" action="{{ url_for('maintenance') }}" class="rule-block__clear"{{ in_frame() }}>
+            {{- panel_field() }}
+            <input type="hidden" name="path" value="{{ path }}">
+            {%- if slug %}
+            <input type="hidden" name="slug" value="{{ slug }}">
+            {%- endif %}
+            <input type="hidden" name="action" value="clear">
+            <input type="hidden" name="set_at" value="{{ entry.token }}">
+            {%- if next %}
+            <input type="hidden" name="next" value="{{ next }}">
+            {%- endif %}
+            <button class="rule-button" type="submit" aria-describedby="{{ prefix }}-what">Clear<span class="visually-hidden">{{ named }}</span></button>
+        </form>
+        {%- elif editable %}
+        {{ clear_asking(entry, path, slug, prefix, named, next, 'those to come') }}
+        {%- endif %}
+    </div>
+    {%- if note %}
+    <div class="rule-block__note maintenance-explanation md-body">{{ note | markdown(node=path) }}</div>
+    {%- endif %}
+    {%- if record %}
+    <p class="rule-block__record">{{ pin_record(entry) }}</p>
+    {%- endif %}
+</{{ tag }}>
+{%- endmacro %}
+
+{#- **A block on the wall is the button that opens the drawer at it** (ADR-0147
+    decision 7): one link to the *Notes* tab of the node its pin stands on, at that
+    pin — `?at=` its kind, `?reason=` its line — the drawer with script, the tab
+    without; a door as every mark is (`data-door`). Its sentence is its name, so that
+    what a screen reader hears is what the block says and what a click opens is what
+    it describes, and it ends in a chevron. The note, *Edit* and *Clear* are the
+    drawer's, where the block stands whole. The source of a pin set above is named in
+    it and not linked: the drawer it opens is that node's, whose head names it and
+    links to its page. On the kiosk, which has nothing to be clicked, it is its
+    sentence alone. It stands on the wall only while *◇ details* is on (decision 6):
+    the route leaves it out of what it draws otherwise (`handled_details`). -#}
+{% macro wall_block(entry, scope, path, slug, bare=false, source='') -%}
+{%- set kept_kind = entry.kind == 'maintenance' -%}
+{%- set door = layout != 'kiosk' and path | url_branch -%}
+{%- set href = url_for('notes', path=path | url_branch, reason=slug, at=entry.kind) if slug else url_for('notes', path=path | url_branch, at=entry.kind) -%}
+<{{ 'a' if door else 'div' }} class="rule-block rule-block--{{ scope }} rule-block--wall{{ ' rule-block--door' if door }}" data-rule="{{ entry.kind }}"{% if door %} data-door href="{{ href }}#at"{% endif %}>
+    <span class="rule-block__what">{{ rule_mark(entry.kind) }}{% if not kept_kind %}{{ ack_said(entry, scope, '', bare, path) }}{% else %}{% if bare %}In maintenance{% else %}<strong>This {{ scope }}</strong> is in maintenance{% endif %}{% if source %} from <strong>{{ source }}</strong>{% endif %} {{ window_by(entry, entry | series_open, entry | ends) }}{% endif %}</span>
+    {%- if door %}<span class="rule-block__chevron" aria-hidden="true">&#x203A;</span>{% endif %}
+</{{ 'a' if door else 'div' }}>
 {%- endmacro %}
 
 {#- Where a configured rule is written and since when it stands (ADR-0137): who set
@@ -249,45 +514,44 @@ Configured in <code>{{ rule.file }}</code> since {{ rule.since.isoformat() }}.
     `place` is `node` — what the node passes up — `lines`, `children`, or
     `counted`, how its parent counts it among its children (`parent` names that
     node). On the wall (`wall`) the block stands only while its rule changes a
-    count, its note behind its mark as a pin's is, and the sentence names no node,
-    the box's head doing so; on a node's page and in *Handled* it stands always,
+    count, the button that opens the drawer at it as a pin's is, and the sentence
+    names no node, the box's head doing so; on a node's page and in *Handled* it
+    stands always,
     whole, `this` naming the node, and says *changes nothing now* where its rule
     does not act. `others` are the rules written for the same place that the first
     one written decides over (ADR-0137 decision 3). In *Handled* (`index`) the
-    sentence names the part the rule picks by its path, and no one part's count. -#}
+    sentence names the part the rule picks by its path, and no one part's count.
+    `here` is the block a *Notes* tab was asked at, as a pin's `at` is. -#}
 {% macro config_block(at, place, path, prefix, wall=false, this='', tag='div',
-                      parent='', others=(), index=false) -%}
+                      parent='', others=(), index=false, here=false) -%}
 {%- set said = rule_said(at.rule, place, failing=none if index else at.failing, this=this, path=at.rule.selector if index else '', parent=parent) -%}
-<{{ tag }} class="rule-block rule-block--{{ 'line' if place == 'lines' and not this and not wall else 'node' }}{{ ' rule-block--wall' if wall }}{{ ' rule-block--idle' if not at.changes }}" data-rule="aggregation" data-rule-name="{{ at.rule.name }}">
+{%- if wall -%}
+{#- On the wall a configured rule's block is the button that opens the drawer at it,
+    as a person's is (ADR-0147 decision 7): one link to its node's *Notes* tab at its
+    block under what stands (`?at=rule`, the rule by its key, `?rule=`), its sentence
+    its name, a chevron at its end; its note is the drawer's. -#}
+{%- set door = layout != 'kiosk' and path | url_branch -%}
+<{{ 'a' if door else 'div' }} class="rule-block rule-block--node rule-block--wall{{ ' rule-block--door' if door }}{{ ' rule-block--idle' if not at.changes }}" data-rule="aggregation" data-rule-name="{{ at.rule.name }}"{% if door %} data-door href="{{ url_for('notes', path=path | url_branch, at='rule', rule=at.rule.key) }}#at"{% endif %}>
+    <span class="rule-block__what">{{ rule_mark('aggregation') }}{{ said | markdown_inline(node=path) }}{% if not at.changes %} <span class="text-nowrap">· changes nothing now</span>{% endif %}</span>
+    {%- if door %}<span class="rule-block__chevron" aria-hidden="true">&#x203A;</span>{% endif %}
+</{{ 'a' if door else 'div' }}>
+{%- else -%}
+<{{ tag }}{% if here %} id="at"{% endif %} class="rule-block rule-block--{{ 'line' if place == 'lines' and not this else 'node' }}{{ ' rule-block--idle' if not at.changes }}{{ ' is-at' if here }}" data-rule="aggregation" data-rule-name="{{ at.rule.name }}">
     <div class="rule-block__head">
         <span class="rule-block__what" id="{{ prefix }}-what">{{ rule_mark('aggregation') }}{{ said | markdown_inline(node=path) }}{% if not at.changes %} <span class="text-nowrap">· changes nothing now</span>{% endif %}</span>
-        {%- if wall %}
-        {%- set page = url_for('status', branch=path | url_branch) if path | url_branch else url_for('status') %}
-        <a class="block-button rule-note-mark" href="{{ page }}" title="Note" aria-describedby="{{ prefix }}-what" data-note-key="rule:{{ at.rule.key }}|{{ place }}">{{ note_mark() }}<span class="visually-hidden">Note</span></a>
-        {%- endif %}
     </div>
-    {%- if wall %}
-    <template class="rule-note-src"><div class="note-card__note md-body">{{ at.rule.note | markdown(node=path) }}</div><p class="note-card__record">{{ config_record(at.rule) }}</p></template>
-    {%- else %}
     <div class="rule-block__note md-body">{{ at.rule.note | markdown(node=path) }}</div>
     <p class="rule-block__record">{{ config_record(at.rule) }}{% if others %} Written for this place too, and decided over by it as the first written: {% for other in others %}<strong>{{ other.name }}</strong> in <code>{{ other.file }}</code>{{ ', ' if not loop.last }}{% endfor %}.{% endif %}</p>
-    {%- endif %}
 </{{ tag }}>
-{%- endmacro %}
-
-{#- A configured rule's mark on a line it changes the count of (ADR-0137): the line
-    keeps its true color, and the mark says what it counts as and by which rule, in
-    its title and its hidden text. -#}
-{% macro line_rule_mark(at) -%}
-{%- set said %}counts as {{ at.counts.name.lower() if at.counts else 'nothing' }} by the rule {{ at.rule.name }}{% endset -%}
-<span class="line-rule" title="{{ said[:1] | upper }}{{ said[1:] }}">{{ rule_mark('aggregation') }}<span class="visually-hidden">{{ said }}: </span></span>
+{%- endif -%}
 {%- endmacro %}
 
 {#- The pins set on nodes above this one, each a block where it acts: outermost
     first, as the path reads, and without buttons (ADR-0104 decision 2).
     `above` is the view's list of (path, pin); `tag` is `li` where the blocks are
     rows of a node's rule list, `bare` is a card's sentence, whose head names the
-    node already, and `wall` the wall's lighter block. -#}
+    node already, and `wall` the wall's block, the button that opens the drawer of
+    the node the pin stands on. -#}
 {% macro pins_above_stated(above, prefix, tag='div', bare=false, wall=false) -%}
 {%- for source, entry in above %}
 {{ pin_block(entry, 'node', source | url_branch, '', prefix ~ loop.index, false,
@@ -295,91 +559,174 @@ Configured in <code>{{ rule.file }}</code> since {{ rule.since.isoformat() }}.
 {%- endfor %}
 {%- endmacro %}
 
-{#- The editor of a pin still to be set, standing where its block will (decision
-    3). Its first sentence says what the pin covers — `covers` is the caller's,
-    which knows the node — and the form claims nothing is pinned: an empty token,
-    and an empty expiry, which is the configured default.
-
-    On a node's own page *this node* is the page's node. A card on the wall is one
-    of many, so there the sentence names what it covers outright (`what`): *hemulen
-    and everything beneath it*. `next` is the page a set comes back to, where that
-    is not the node's own. `notes` is where a note on what the pin would cover is
-    written instead, a line's Notes view with the line chosen (ADR-0140 decision
-    3), and empty where the editor offers none. -#}
-{% macro pin_new(scope, covers, path, slug, prefix, what='', next='', notes='') -%}
-<div class="rule-block rule-block--{{ scope }} rule-block--new" data-rule="maintenance">
-    <p class="rule-block__scope">{{ rule_mark('maintenance') }}<strong>Maintenance for {% if what %}{{ what }}{% else %}this {{ scope }}{% if scope == 'line' %} only{% endif %}{% endif %}.</strong>{% if covers %} {{ covers }}{% endif %}</p>
-    <form method="post" action="{{ url_for('maintenance') }}"
-          class="maintenance-editor-form rule-block__editor">
-        <input type="hidden" name="path" value="{{ path }}">
-        {%- if slug %}
-        <input type="hidden" name="slug" value="{{ slug }}">
-        {%- endif %}
-        <input type="hidden" name="action" value="set">
-        <input type="hidden" name="set_at" value="">
-        {%- if next %}
-        <input type="hidden" name="next" value="{{ next }}">
-        {%- endif %}
-        {{ maintenance_fields('', '', prefix, maintenance_default,
-                              maintenance_timezone, true) }}
-        <div class="maintenance-editor-form__actions">
-            <button class="btn btn-sm btn-primary" type="submit">Set maintenance</button>
-            <button class="btn btn-sm btn-link maintenance-editor-cancel"
-                    type="reset">Cancel</button>
-        </div>
-    </form>
-    {%- if notes %}
-    <p class="rule-block__notes small mt-2 mb-0">Or <a class="link-primary text-decoration-underline" href="{{ notes }}">write a note on this {{ scope }}</a>: it is kept with the node's notes and silences nothing.</p>
-    {%- endif %}
-</div>
-{%- endmacro %}
-
-{#- **What a person accepted** (ADR-0142): today *seen*, a failure accepted as it
-    stands — its part keeping its true color under a ringed check and counting as ok
-    above until it changes. Its block is `pin_block`, in its kind's words; what
-    follows is what it says, its mark on a line, and the ringed check's own editor,
-    which posts to `POST /pins/seen`: the note, and an end it may be given
-    (`maintenance_fields`'s `ending`). -#}
+{#- **What a person accepted, closed or silenced**: *seen* (ADR-0142), a failure
+    accepted as it stands — its part keeping its true color under a ringed check and
+    counting as ok above until it changes — *done* (ADR-0146), an event looked into and
+    over, its line showing ok with the failure it closed beside it under the same
+    ringed check until it reads anything else, and a silence (ADR-0144), a failure that
+    flaps, its part keeping its true color under a bell struck through and counting as
+    ok, or at most as a warning, above through every recovery until its deadline. Its
+    block is `pin_block`, in its kind's words; what follows is what it says, its mark on
+    a line, and the ringed check's own editor, which posts to `POST /pins/seen` or
+    `POST /pins/silenced` — and a block's to `POST /pins/done` as well. -#}
 
 {#- What it says, after its mark: who marked it, at which failure, and what ends it
     — *until it changes*, and its end and what is left where it was given one. The
-    failure is a status placeholder, drawn as its sign (ADR-0133 decision 5). On the
-    wall (`bare`) the box's head names the node, and the sentence opens with the act;
-    on a page `subject` opens it as the place says it, *This node* or *This line*
-    by default. -#}
+    failure is a status placeholder, drawn as its sign (ADR-0133 decision 5). A
+    silence says who silenced it, what it counts as — the level's sign, *at most*
+    where it holds at a warning — and its deadline and what is left. On the wall
+    (`bare`) the box's head names the node, and the sentence opens with the act; on a
+    page `subject` opens it as the place says it, *This node* or *This line* by
+    default. A done says who marked it done, the failure it closed, and that it stands
+    until its line reads anything else. -#}
 {% macro ack_said(entry, scope, subject='', bare=false, path='') -%}
+{%- if entry.kind == 'done' -%}
+{%- if bare %}Done{% else %}{% if subject %}{{ subject }}{% else %}<strong>This {{ scope }}</strong>{% endif %} is marked done{% endif %} by <strong>{{ entry.set_by or 'an admin' }}</strong>
+{%- if entry.status %}, closing {{ ('{' ~ entry.status.name.lower() ~ '}') | markdown_inline(node=path) }}{% endif %} <span class="text-nowrap">· until it reads anything else</span>
+{%- elif entry.kind == 'silenced' -%}
+{%- if bare %}Silenced{% else %}{% if subject %}{{ subject }}{% else %}<strong>This {{ scope }}</strong>{% endif %} is silenced{% endif %} by <strong>{{ entry.set_by or 'an admin' }}</strong>, counting as {{ ('{' ~ entry.level.name.lower() ~ '}') | markdown_inline(node=path) }}{% if entry.level.name == 'WARN' %} at most{% endif %} until {{ instant(entry.expires_at) }} <span class="text-nowrap">· {{ entry.expires_at | time_left }}</span>
+{%- else -%}
 {%- if bare %}{{ entry.kind | capitalize }}{% else %}{% if subject %}{{ subject }}{% else %}<strong>This {{ scope }}</strong>{% endif %} is marked {{ entry.kind }}{% endif %} by <strong>{{ entry.set_by or 'an admin' }}</strong>
 {%- if entry.status %} at {{ ('{' ~ entry.status.name.lower() ~ '}') | markdown_inline(node=path) }}{% endif %} <span class="text-nowrap">· until it changes</span>
 {%- if entry.expires_at %} or {{ instant(entry.expires_at) }} <span class="text-nowrap">· {{ entry.expires_at | time_left }}</span>{% endif -%}
+{%- endif -%}
 {%- endmacro %}
 
-{#- The ringed check's mark on a line a person accepted, before its words: the line
-    keeps its true color, and the mark says by whom and what ends it, in its title
-    and its hidden text. -#}
-{% macro line_ack_mark(line) -%}
-{%- set entry = line.acknowledgment -%}
-{%- set said %}{{ entry.kind }} by {{ entry.set_by or 'an admin' }}, until it changes{% endset -%}
-<span class="line-ack" title="{{ said[:1] | upper }}{{ said[1:] }}">{{ rule_mark(entry.kind) }}<span class="visually-hidden">{{ said }}: </span></span>
+{#- A handled line's mark (ADR-0143): the mark of the job acting on it — the ringed
+    check of a person's acceptance, § of a configured rule while it changes the
+    line's count, ‖ of a pin — standing at the line's top right, where the room is
+    kept for it. It is drawn in the color of what the line counts as instead, `rail`,
+    the state its rail is drawn in, and a pinned line's in maintenance's ink, a pin
+    counting nothing, which is what maintenance counts. Its words are its title and
+    its hidden text: who, until when, and what the line counts as — a chip's way
+    (ADR-0135 decision 1), the line keeping its width. **It is the line's door**
+    (ADR-0147 decision 7): a link to its node's *Notes* tab at what handles the line,
+    `?reason=` its slug and `?at=` the job, where the block says it in words and is
+    changed — so that a touch screen, which shows no title, reaches them — its own
+    box the 24-pixel target, the glyph in its middle. On the kiosk,
+    which has nothing to be clicked, it is the mark alone. `seated` is a node's page's
+    seat, the line's one, for whoever may set something there: the mark stands where
+    the button that set it stood, a plain ◇ standing there where nothing handles the
+    line (ADR-0143 decision 7). A line with no tint of its
+    own stands on its box's fill, which a box's vivid status paints, and its glyph on
+    its own tint (`on-fill`), as a status sign is. A silenced line counts as its rail
+    says, or as it reads where it has none — an amber silence on a line that reads a
+    warning, or one that recovered (ADR-0144). A line marked done shows ok and counts
+    as ok, and its mark stands in ok's green with no rail beside it (ADR-0146). -#}
+{% macro line_mark(node, line, rail, link=true, seated=false) -%}
+{%- if line.quiet -%}
+{%- set kind, entry, ink, job = 'maintenance', line.maintenance, 'maintenance', 'line-pin' -%}
+{%- set said %}in maintenance by {{ entry.set_by or 'an admin' }} until {{ entry | ends | localtime }}{% endset -%}
+{%- elif line.accepted and line.acknowledgment.kind == 'done' -%}
+{%- set kind, entry, ink, job = 'done', line.acknowledgment, 'ok', 'line-ack' -%}
+{%- set said %}done by {{ entry.set_by or 'an admin' }}, closing {{ 'an error' if entry.status and entry.status.name == 'ERROR' else 'a warning' }} · counts as ok{% endset -%}
+{%- elif line.accepted and line.acknowledgment.kind == 'silenced' -%}
+{%- set reads = line.code if line.code is not none else node.reported_code -%}
+{%- set kind, entry, ink, job = 'silenced', line.acknowledgment, rail or reads.name.lower(), 'line-ack' -%}
+{%- set said %}silenced by {{ entry.set_by or 'an admin' }} until {{ entry.expires_at | localtime }} · counts as {{ ink }}{% endset -%}
+{%- elif line.accepted -%}
+{%- set kind, entry, ink, job = line.acknowledgment.kind, line.acknowledgment, rail or 'ok', 'line-ack' -%}
+{%- set said %}{{ entry.kind }} by {{ entry.set_by or 'an admin' }}, until it changes{% if entry.expires_at %} or {{ entry.expires_at | localtime }}{% endif %} · counts as {{ ink }}{% endset -%}
+{%- else -%}
+{%- set kind, ink, job = 'aggregation', rail or 'nothing', 'line-rule' -%}
+{%- set said %}counts as {{ line.rule.counts.name.lower() if line.rule.counts else 'nothing' }} by the rule {{ line.rule.rule.name }}{% endset -%}
+{%- endif -%}
+{%- set tag = 'a' if link and layout != 'kiosk' else 'span' -%}
+<{{ tag }} class="line-mark {{ job }} mark-{{ ink }}{{ ' on-fill' if line.code is none and not line.quiet and not (line.accepted and line.acknowledgment.kind == 'done') }}{{ ' is-seated' if seated }}"{% if tag == 'a' %} data-door href="{{ url_for('notes', path=node.path | url_branch, reason=line.slug, at='rule' if kind == 'aggregation' else kind) }}#at"{% endif %} title="{{ said[:1] | upper }}{{ said[1:] }}"><span class="line-mark__glyph">{{ rule_mark(kind) }}</span><span class="visually-hidden">{{ said }}</span></{{ tag }}>
 {%- endmacro %}
 
-{#- The editor of what a ringed check marks seen, standing where its block will
-    (ADR-0142, ADR-0104 decision 3): one part — a node's own failure, or one of its
-    lines (`slug`) — or, from a head, every failure at and beneath its node as it
-    stands, each its own (`digest`, the parts' digest the route compares; `parts`,
-    where the page knows them, listed). `what` names what it marks; the form claims
-    nothing is marked yet, an empty token. -#}
+{#- Whether a line carries a mark (`line_mark`): a pin, a person's acceptance, or a
+    configured rule while it changes the line's count. -#}
+{% macro line_marked(line) -%}
+{%- if line.quiet or line.accepted or (line.rule and line.rule.changes) %}marked{% endif -%}
+{%- endmacro %}
+
+{#- The editor of what a ringed check marks seen or silences (ADR-0142, ADR-0144), as
+    a refused act comes back in it (`seen_refused.html`, `silenced_refused.html`) — a
+    new one is set on the *Notes* tab's form (ADR-0147 decision 1): one part — a
+    node's own failure, or one of its lines (`slug`) — or every failure at and beneath
+    a node as it stands, each its own (`digest`, the parts' digest the route compares;
+    `parts`, where the page knows them, listed). `what` names what it acts on; its
+    forms claim nothing is acknowledged yet, an empty token (`ack_forms`). -#}
 {% macro ack_new(scope, path, slug, prefix, what='', digest='', parts=(), next='') -%}
 <div class="rule-block rule-block--{{ scope }} rule-block--new" data-rule="seen">
-    <p class="rule-block__scope">{{ rule_mark('seen') }}<strong>Mark seen {% if what %}{{ what }}{% elif scope == 'line' %}this line{% else %}this node's own failure{% endif %}.</strong> {% if digest %}Each keeps its color, counts as ok above and ends by itself as it changes; a failure that comes later alarms.{% else %}It keeps its color and counts as ok above until it recovers, gets worse, fails anew or is no longer reported.{% endif %}</p>
-    {%- if parts %}
-    <ul class="ack-parts small">
-        {%- for part in parts %}
-        <li>{% if part.slug %}{{ part.said | markdown_inline(node=part.path) }} — <a href="{{ url_for('status', branch=part.path | url_branch, reason=part.slug) }}#pinned-reason">{{ part.path }}</a>{% else %}<a href="{{ url_for('status', branch=part.path | url_branch) }}">{{ part.path }}</a>, its own failure{% endif %}</li>
+    <p class="rule-block__scope">{{ rule_mark('seen') }}<strong>Mark seen or silence {% if what %}{{ what }}{% elif scope == 'line' %}this line{% else %}this node's own failure{% endif %}.</strong></p>
+    {{ ack_parts(parts) }}
+    {{ ack_forms(scope, path, slug, prefix, digest=digest, next=next) }}
+</div>
+{%- endmacro %}
+
+{#- The failing parts a head's ringed check acts on, each its own (ADR-0142 decision
+    5), as its editor lists them and as a refusal of its set lists them again: a line
+    by its text, linked to it on its node, and a node by its path, its own failure.
+    Nothing where there are none. -#}
+{% macro ack_parts(parts) -%}
+{%- if parts %}
+<ul class="ack-parts small">
+    {%- for part in parts %}
+    <li>{% if part.slug %}{{ part.said | markdown_inline(node=part.path) }} — <a href="{{ url_for('status', branch=part.path | url_branch, reason=part.slug) }}#pinned-reason">{{ part.path }}</a>{% else %}<a href="{{ url_for('status', branch=part.path | url_branch) }}">{{ part.path }}</a>, its own failure{% endif %}</li>
+    {%- endfor %}
+</ul>
+{%- endif %}
+{%- endmacro %}
+
+{#- The ringed check's forms (ADR-0142, ADR-0144): one editor offering what a failing
+    part takes, *Seen* and *Silence*, each the form of its own act on the route of its
+    own name — a seen's note and the end it may be given, a silence's note, its level
+    and its deadline. The choice above them shows the form of the kind chosen and the
+    stylesheet hides the other, so that the form Enter submits is the one in view; a
+    browser that cannot tell shows both, each whole, and no choice. A new editor
+    (`entry` none) chooses *Seen*. A block's editor (`entry`) chooses the kind that
+    stands: its own form saves changes, and the other's makes it the other kind — the
+    one ended and the other set in its place, in one write. `digest` is a head's, the
+    parts it lists, each its own. Where the part fails no longer (`fails`
+    false) — a silence that held through a recovery — the other kind, which takes a
+    part that fails now, is not offered: the standing kind's form stands alone, with
+    no choice above it.
+
+    **A block's editor offers *Done* as well** (ADR-0146) where its part takes one: a
+    line whose failure is an event, `event` its occurrence, that fails now — never a
+    node's own failure, nor a head's act. The new act keeps *Seen* and *Silence*: a new
+    done is set on the Notes tab. A done's own block chooses *Done*, its form its note
+    alone, and offers *Seen* and *Silence* beside it, its line reading the failure it
+    closed for as long as it stands. -#}
+{% macro ack_forms(scope, path, slug, prefix, entry=none, digest='', next='',
+                   fails=true, event='') -%}
+{%- set chosen = entry.kind if entry else 'seen' -%}
+{%- if entry is none -%}
+{%- set kinds = ('seen', 'silenced') -%}
+{%- elif fails -%}
+{%- set kinds = (('done',) if event and scope == 'line' else ()) + ('seen', 'silenced') -%}
+{%- else -%}
+{%- set kinds = (entry.kind,) -%}
+{%- endif -%}
+{%- if chosen not in kinds -%}
+{%- set kinds = (chosen,) + kinds -%}
+{%- endif -%}
+{%- set note = entry.note if entry else '' -%}
+{%- set kept = entry.expires_at | expiry_input if entry else '' -%}
+{%- set level = entry.level.name.lower() if entry and entry.level else 'ok' -%}
+<div class="ack-choice">
+    {%- if kinds | length > 1 %}
+    <div class="ack-kinds" role="radiogroup" aria-label="{{ 'Done, seen or silence' if 'done' in kinds else 'Seen or silence' }}">
+        {%- for kind, word in (('done', 'Done'), ('seen', 'Seen'), ('silenced', 'Silence')) if kind in kinds %}
+        <label class="ack-kind"><input type="radio" name="{{ prefix }}-kind" value="{{ kind }}"{% if kind == chosen %} checked{% endif %}>{{ rule_mark(kind) }}{{ word }}</label>
         {%- endfor %}
-    </ul>
+    </div>
     {%- endif %}
-    <form method="post" action="{{ url_for('seen') }}"
-          class="maintenance-editor-form rule-block__editor">
+    {%- for kind in kinds %}
+    {%- set standing = entry is not none and entry.kind == kind %}
+    {%- set does = ack_does(kind, digest, entry) | trim %}
+    <form method="post" action="{{ url_for(kind) }}"
+          class="maintenance-editor-form rule-block__editor ack-form" data-kind="{{ kind }}"{{ in_frame() }}>
+        {{ paused_line() }}
+        {{- panel_field() }}
+        {%- if entry %}
+        <p class="rule-block__record">{{ pin_record(entry) }}</p>
+        {%- endif %}
+        {%- if does %}
+        <p class="ack-form__does">{{ does }}</p>
+        {%- endif %}
         <input type="hidden" name="path" value="{{ path }}">
         {%- if slug %}
         <input type="hidden" name="slug" value="{{ slug }}">
@@ -388,27 +735,46 @@ Configured in <code>{{ rule.file }}</code> since {{ rule.since.isoformat() }}.
         <input type="hidden" name="parts" value="{{ digest }}">
         {%- endif %}
         <input type="hidden" name="action" value="set">
-        <input type="hidden" name="set_at" value="">
+        <input type="hidden" name="set_at" value="{{ entry.token if entry else '' }}">
         {%- if next %}
         <input type="hidden" name="next" value="{{ next }}">
         {%- endif %}
-        {{ maintenance_fields('', '', prefix, maintenance_default,
-                              maintenance_timezone, true, ending=true) }}
+        {%- if kind == 'seen' %}
+        {{ maintenance_fields(note, kept if standing else '', prefix, maintenance_default,
+                              maintenance_timezone, true, kept if standing else '',
+                              ending=true) }}
+        {%- elif kind == 'done' %}
+        {{ done_fields(note, prefix, true, event) }}
+        {%- else %}
+        {{ silence_fields(note, kept if standing else '', level, prefix,
+                          silence_default, maintenance_timezone, true,
+                          kept if standing else '', changing=standing) }}
+        {%- endif %}
         <div class="maintenance-editor-form__actions">
-            <button class="btn btn-sm btn-primary" type="submit">Mark seen</button>
+            <button class="btn btn-sm btn-primary" type="submit">{% if standing %}Save changes{% elif kind == 'seen' %}Mark seen{% elif kind == 'done' %}Mark done{% else %}Silence{% endif %}</button>
             <button class="btn btn-sm btn-link maintenance-editor-cancel"
                     type="reset">Cancel</button>
         </div>
     </form>
+    {%- endfor %}
 </div>
 {%- endmacro %}
 
-{#- The page's one editor of what a head's ringed check marks (ADR-0142), as
-    `pin_editor` is ‖'s: the ringed check in a head's icons clones it into the node's
-    box — `tree.js` fills in the node's path, the digest of the parts its control
-    carries and what they are — and opens it, so that no fragment carries one per
-    head. Drawn by `status.html` outside `#status-grid`, once, for whoever may mark a
-    failure seen, off the kiosk. -#}
-{% macro ack_editor(next) -%}
-<template id="ack-editor"><details class="maintenance-editor-disclosure ack-setter"><summary class="ack-control visually-hidden">Mark seen</summary>{{ ack_new('node', '', '', 'ack-editor', what=('<span class="ack-editor__what">what fails here</span>' | safe), digest='-', next=next) }}</details></template>
+{#- What a ringed check's form does, in a sentence above its fields: a new one's,
+    one part's or each of a head's parts'; in a block's editor, the other kind's,
+    which ends the one standing and sets itself in its place — and nothing for the
+    kind that stands, whose block says it. -#}
+{% macro ack_does(kind, digest='', entry=none) -%}
+{%- if entry is not none and entry.kind != kind -%}
+{%- set ends = {'seen': 'the seen', 'silenced': 'the silence', 'done': 'the done'}.get(entry.kind, 'it') -%}
+{%- if kind == 'seen' %}Marked seen instead, {{ ends }} ends and a seen stands in its place: it keeps its color and counts as ok above until it recovers, gets worse, fails anew or is no longer reported.
+{%- elif kind == 'done' %}Marked done instead, {{ ends }} ends and a done stands in its place: the line shows ok with the failure it closed beside it, and counts as ok above, until it reads anything else.
+{%- else %}Silenced instead, {{ ends }} ends and a silence stands in its place: it keeps its color and counts above as chosen through every recovery, until its deadline.{% endif -%}
+{%- elif entry is none -%}
+{%- if kind == 'seen' -%}
+{%- if digest %}Each keeps its color, counts as ok above and ends by itself as it changes; a failure that comes later alarms.{% else %}It keeps its color and counts as ok above until it recovers, gets worse, fails anew or is no longer reported.{% endif -%}
+{%- else -%}
+{%- if digest %}Each keeps its color and counts above as chosen through every recovery, until the deadline; a failure that comes later alarms.{% else %}It keeps its color and counts above as chosen through every recovery, until its deadline.{% endif -%}
+{%- endif -%}
+{%- endif -%}
 {%- endmacro %}

@@ -30,6 +30,12 @@ import zlib
 from pathlib import Path
 from typing import Any
 
+# Run as a script, this file is no part of the `tests` package: the repository's root
+# goes on the path, as `tests/sweep_contrast.py` puts it, for the browser every browser
+# file launches.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from tests.browser_binary import chromium
+
 ROOT = Path(__file__).resolve().parent.parent
 BRAND = ROOT / "src" / "little_sister" / "brand"
 STATIC = ROOT / "src" / "little_sister" / "static"
@@ -51,10 +57,6 @@ TILES = (("apple-touch-icon.png", 180), ("android-chrome-192x192.png", 192),
 
 #: The ``tEXt`` keyword under which an image names the SVG it was rendered from
 SOURCE_KEY = b"little-sister drawing"
-
-#: A sandbox pins one browser build; a venv-installed Playwright may expect a
-#: different one, so it is pointed at what is there.
-SANDBOX_CHROMIUM = Path("/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
 
 
 def drawing(small: bool) -> tuple[str, tuple[float, float, float, float]]:
@@ -194,9 +196,8 @@ def render_all(page: Any) -> dict[str, bytes]:
 
 
 def launch(playwright: Any) -> Any:
-    """Chromium, as this machine has it."""
-    return playwright.chromium.launch(
-        executable_path=str(SANDBOX_CHROMIUM) if SANDBOX_CHROMIUM.is_file() else None)
+    """Chromium, as this machine has it (``tests/browser_binary.py``)."""
+    return playwright.chromium.launch(executable_path=chromium())
 
 
 def main() -> int:

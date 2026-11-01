@@ -132,14 +132,32 @@ def test_a_plugin_built_for_the_shape_before_the_split_refuses_by_number() -> No
     say both numbers, because *which* build to install is the only question the
     reader has.
     """
-    assert API_VERSION == 3, (
-        "this test is about the v2-to-v3 step; if the epoch moved again, keep this "
-        "case and add the new one beside it")
+    assert API_VERSION > 2, (
+        "this test is about the shape before the v2-to-v3 step; the epoch has moved "
+        "again since, and the case stays beside the new one")
     with pytest.raises(CheckError) as refusal:
         require_api(2, by="little_sister_example")
 
     message = str(refusal.value)
-    assert "v2" in message and "v3" in message
+    assert "v2" in message and f"v{API_VERSION}" in message
+    assert "older than" in message
+
+
+def test_a_plugin_built_before_a_type_stated_its_keys_refuses_by_number() -> None:
+    """The case ADR-0151 owes an answer to, written with the numbers.
+
+    Epoch 3 is the shape where a type stated nothing of what its file takes. Such a
+    type would have every key of its own refused at load under epoch 4, so it refuses
+    at **import** instead, naming both numbers.
+    """
+    assert API_VERSION == 4, (
+        "this test is about the v3-to-v4 step; if the epoch moved again, keep this "
+        "case and add the new one beside it")
+    with pytest.raises(CheckError) as refusal:
+        require_api(3, by="little_sister_example")
+
+    message = str(refusal.value)
+    assert "v3" in message and "v4" in message
     assert "older than" in message
 
 

@@ -12,11 +12,13 @@ A **slot** is the seam between the two. The library declares a named place in it
 templates and the exact context it hands over there (:data:`SLOTS` is the whole
 roster); a dependent package registers a **template of its own** for that name, plus
 an optional **context provider** — a function that turns the slot's context into the
-values its template needs. The split is the point: **data is computed in Python, HTML
-is authored in Jinja**, rendered by little-sister's own environment with autoescaping
-on. A deployment never builds an HTML string, so the untrusted halves of the context
-(a reason line is assembled from captured output, ADR-0018) are escaped by the same
-machinery that escapes them everywhere else.
+values its template needs — and, for the one slot in a form, a **draft function**,
+which a route of the library's calls with what the form sent (ADR-0148). The split is
+the point: **data is computed in Python, HTML is authored in Jinja**, rendered by
+little-sister's own environment with autoescaping on. A deployment never builds an
+HTML string, so the untrusted halves of the context (a reason line is assembled from
+captured output, ADR-0018) are escaped by the same machinery that escapes them
+everywhere else.
 
 Three properties keep the seam safe to upgrade into:
 
@@ -98,12 +100,17 @@ class Slot:
     name: str
     context: tuple[str, ...]
     where: str
+    #: Whether a filler registers a **draft function** beside its template, which a
+    #: route of the library's calls with what the form the slot stands in sent
+    #: (ADR-0148): a slot in a form, whose button posts it. Such a slot takes no
+    #: filler without one, and no other slot takes one.
+    drafts: bool = False
 
 
 #: Every slot the library declares. Deliberately a short, closed roster — an
 #: undeclared slot is a typo, not a new seam.
 #:
-#: The two differ in their **subject**, which is what decides where a deployment's
+#: The first two differ in their **subject**, which is what decides where a deployment's
 #: action belongs (ADR-0036): where a node's reasons are individually addressable
 #: *members*, an action is about one of them and goes on the line; where they are
 #: *prose* — a failure message and its stack trace are one condition in several
@@ -138,17 +145,31 @@ class Slot:
 #: way, a link in the short form to the handbook of the node it is given on. Outside a
 #: request there is no base to write an address from, and a short form stays as
 #: written.
+#:
+#: Every slot hands over the address of the node's *Notes* tab as a third function,
+#: ``notes_url()``, absolute, since a draft is read outside the instance — empty
+#: outside a request, as a short form stays, and on the root, which has no tab — so
+#: that a filler names no endpoint of ours to link back with (ADR-0148).
+#:
+#: The third slot, ``notes.actions``, stands in a node's *Notes* tab, the place to act
+#: (ADR-0145): after the kind's own button in every kind's row of its form, and in the
+#: small form a reader who may set no kind is given. Its subject is what the form is
+#: about — the part chosen under *On*, and the words, which exist only once they are
+#: typed — so its filler's button submits the form, to the route ``draft_action``
+#: names, in a new tab, and names its package; the route calls the **draft function**
+#: the package registered beside its template, and sends the tab to the address it
+#: returns (ADR-0148).
 SLOTS: Mapping[str, Slot] = {
     "reason.actions": Slot(
         name="reason.actions",
         context=("node", "reason", "line", "index", "surface", "written_out",
-                 "details"),
+                 "details", "notes_url"),
         where="beside one rendered reason line — every reason of every node, on "
               "the dashboard grid and on the leaf detail page",
     ),
     "node.actions": Slot(
         name="node.actions",
-        context=("node", "surface", "place", "written_out", "details"),
+        context=("node", "surface", "place", "written_out", "details", "notes_url"),
         where="in the head's row of every node the dashboard grid draws, open or "
               "closed — a card head, each nested box under it — and on a node's page, "
               "a branch's or a leaf's, in the frame head of the node itself; an "
@@ -158,7 +179,37 @@ SLOTS: Mapping[str, Slot] = {
               "box is in the page hidden until found, so the filler is called for "
               "every node at every render",
     ),
+    "notes.actions": Slot(
+        name="notes.actions",
+        context=("node", "kind", "draft_action", "written_out", "details",
+                 "notes_url"),
+        where="in a node's Notes tab: in the row of every kind's form, after the "
+              "kind's own button, and in the small form a reader who may set no kind "
+              "is given, after `On`; `kind` names the form's kind, empty in the "
+              "reader's. A filler's button submits that form — the part chosen under "
+              "`On`, and its words where it has any — to `draft_action` in a new tab, "
+              "naming its package as `draft`, whose draft function the route calls",
+        drafts=True,
+    ),
 }
+
+
+@dataclass(frozen=True)
+class DraftPart:
+    """One part a draft is about, as the route hands it to a draft function
+    (ADR-0148): the node at ``path``, its line ``slug`` — empty for the node itself —
+    and what it reads, ``lines``, each written out for its own node as the Copy
+    document writes a text: a line's own text, or for the node itself every line it
+    reports."""
+    path: str
+    slug: str
+    lines: tuple[str, ...]
+
+
+#: A filler's draft function (ADR-0148): it receives what a draft is written with as
+#: keyword arguments — handed the names it declares, as a provider is — and returns the
+#: http(s) address the new tab is sent to, or ``None`` to say it has nothing to draft.
+DraftFunction = Callable[..., str | None]
 
 #: A filler's optional context provider: it receives the slot's context as keyword
 #: arguments and returns the extra names its template wants — or ``None`` to say
@@ -184,6 +235,9 @@ class Filler:
     template: str
     context: ContextProvider | None = None
     builtin: bool = False
+    #: The draft function of a slot that drafts (ADR-0148), which the library's
+    #: route calls; ``None`` on every other slot.
+    draft: DraftFunction | None = None
 
     @property
     def source(self) -> str:
@@ -224,10 +278,13 @@ _assets: list[Asset] = []
 
 def register(slot: str, package: str, template: str,
              context: ContextProvider | None = None,
-             builtin: bool = False) -> None:
+             builtin: bool = False, *, draft: DraftFunction | None = None) -> None:
     """Fill ``slot`` with ``template`` from ``package``'s ``templates/`` directory.
 
-    ``context`` is the optional provider described on :data:`ContextProvider`.
+    ``context`` is the optional provider described on :data:`ContextProvider`, and
+    ``draft`` the draft function of a slot in a form (:attr:`Slot.drafts`,
+    ADR-0148), which that slot requires and every other slot refuses: a button with
+    nothing behind it, or a function nothing calls, is a mistake worth a line.
 
     Every refusal here is a **warning and a skip**, never an exception: a mistyped
     slot name or a template that did not ship must cost the deployment its button,
@@ -242,6 +299,20 @@ def register(slot: str, package: str, template: str,
                   f"— known slots: {', '.join(sorted(SLOTS))} (ADR-0034); nothing "
                   f"of it is shown"))
         return
+    if known.drafts and draft is None:
+        self_report.startup.note(
+            slug("slot", package, slot, template),
+            plain(f"{package} registers {template!r} for {known.name!r} with no draft "
+                  f"function, so its button would have nothing to do (ADR-0148); "
+                  f"nothing of it is shown"))
+        return
+    if draft is not None and not known.drafts:
+        self_report.startup.note(
+            slug("slot", package, slot, template),
+            plain(f"{package} hands {known.name!r} a draft function, which nothing "
+                  f"calls there — only a slot in a form drafts (ADR-0148); nothing of "
+                  f"it is shown"))
+        return
     if not _template_exists(package, template):
         self_report.startup.note(
             slug("slot", package, slot, template),
@@ -250,7 +321,7 @@ def register(slot: str, package: str, template: str,
                   f"is shown"))
         return
     filler = Filler(slot=known.name, package=package, template=template,
-                    context=context, builtin=builtin)
+                    context=context, builtin=builtin, draft=draft)
     registered = _registry.setdefault(known.name, [])
     if any(other.source == filler.source for other in registered):
         logger.info("slots: %s already fills %r with %r — ignoring the repeat",
@@ -328,6 +399,46 @@ def read_asset(asset: Asset) -> bytes:
 def fillers(slot: str) -> tuple[Filler, ...]:
     """Everything registered for ``slot``, in registration order."""
     return tuple(_registry.get(slot, ()))
+
+
+def draft_of(package: str) -> DraftFunction | None:
+    """The draft function ``package`` registered for a slot that drafts (ADR-0148),
+    or ``None`` where it registered none — which is what a button that names a
+    package nothing registered for is answered with."""
+    return next((filler.draft for fillers_ in _registry.values()
+                 for filler in fillers_
+                 if filler.package == package and filler.draft is not None), None)
+
+
+class DraftFailed(Exception):
+    """A draft function raised (ADR-0148): logged and held on the instance's own node
+    as a provider's failure is, and answered with a page that says so rather than with
+    a draft."""
+
+
+def call_draft(package: str, function: DraftFunction,
+               context: Mapping[str, object]) -> object:
+    """Call ``package``'s draft function with the part of ``context`` it asks for —
+    the names it declares, or all of them where it declares ``**kwargs`` — as a
+    provider is called (:func:`_accepted`), so that what a draft is handed may grow
+    without breaking one written before it grew (ADR-0148). What it returns is the
+    caller's to check: an address the route sends a browser to.
+
+    :raises DraftFailed: the function raised — contained here as a filler's failure
+        is (:func:`_render_one`): logged with the package named, and held on the
+        instance's own node while it recurs.
+    """
+    try:
+        return function(**_accepted(function, context))
+    except Exception as error:
+        # Held, not standing: it happens per press and stops when the package is
+        # fixed, as a provider's failure does.
+        logger.exception("slots: the draft function of %s failed", package)
+        self_report.runtime.see(
+            slug("draft", package),
+            plain(f"the draft function of {package} raised ({error!r}) — its button "
+                  f"drafts nothing (ADR-0148)"), log=False)
+        raise DraftFailed(package) from error
 
 
 def all_fillers() -> tuple[Filler, ...]:
@@ -459,7 +570,7 @@ class ExtensionLoader(BaseLoader):
                       for filler in fillers_)
 
 
-def _accepted(provider: ContextProvider,
+def _accepted(provider: Callable[..., object],
               context: Mapping[str, object]) -> dict[str, object]:
     """The part of ``context`` this provider is willing to receive.
 

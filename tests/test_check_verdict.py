@@ -70,7 +70,7 @@ class _Graded(Check):
     def __init__(self, *, blocks: Mapping[str, Any] | None = None,
                  **kwargs: Any) -> None:
         super().__init__(gradings=GRADINGS, line_forms=FORMS, line_fields=FIELDS,
-                         **kwargs)
+                         config_keys=("ec2", "lambda"), **kwargs)
         blocks = blocks or {}
         ec2 = blocks.get("ec2") or {}
         self.ec2 = self.grading_block("ec2").read(ec2, "ec2")

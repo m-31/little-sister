@@ -19,6 +19,7 @@ from little_sister.tree import StatusTree
 from tests.demo_extension import (
     action,
     always,
+    draft_issue,
     echoes,
     explodes,
     node_action,
@@ -30,6 +31,7 @@ DEMO = "tests.demo_extension"
 TEMPLATE = "reason_action.html"
 SECOND = "reason_action_two.html"
 NODE_TEMPLATE = "node_action.html"
+NOTES_TEMPLATE = "notes_action.html"
 
 
 class RegistrationTests(TestCase):
@@ -76,6 +78,22 @@ class RegistrationTests(TestCase):
     def test_a_filler_needs_no_provider(self):
         slots.register("reason.actions", DEMO, SECOND)
         self.assertIsNone(slots.extension_fillers()[0].context)
+
+    def test_the_notes_tab_s_slot_takes_a_filler_with_its_draft_function(self):
+        # its button has nothing to do without one (ADR-0148)
+        with self.assertLogs("little_sister", level="WARNING") as logs:
+            slots.register("notes.actions", DEMO, NOTES_TEMPLATE)
+        self.assertEqual(slots.extension_fillers(), ())
+        self.assertIn("draft", "\n".join(logs.output))
+        slots.register("notes.actions", DEMO, NOTES_TEMPLATE, draft=draft_issue)
+        self.assertIs(slots.draft_of(DEMO), draft_issue)
+        self.assertIsNone(slots.draft_of("no.such.package"))
+
+    def test_a_draft_function_for_a_slot_that_calls_none_is_refused(self):
+        with self.assertLogs("little_sister", level="WARNING"):
+            slots.register("reason.actions", DEMO, TEMPLATE, action, draft=draft_issue)
+        self.assertEqual(slots.extension_fillers(), ())
+        self.assertIsNone(slots.draft_of(DEMO))
 
     def test_rendering_an_undeclared_slot_raises(self):
         # Our own bug, not a deployment's: the roster exists so a test catches it.
@@ -180,7 +198,7 @@ class RenderTests(TestCase):
     def test_a_provider_that_raises_is_a_held_line_that_counts(self):
         """Per request and swallowed, so it used to be a log entry per page view
         and nothing else; now it is one line on the node while it recurs, with the
-        count (backlog #70)."""
+        count."""
         self_report.runtime.forget()
         self.addCleanup(self_report.runtime.forget)
         slots.register("reason.actions", DEMO, TEMPLATE, explodes)
@@ -264,12 +282,18 @@ class NodeActionTests(TestCase):
         # the contract is worth a test of its own (ADR-0034). `place` joined with the
         # head's row (ADR-0127 decision 3), so a filler can tell a card's head from
         # a nested box's; `written_out` and `details` with what a draft is written
-        # with (ADR-0133 decisions 4 to 6), on both action slots.
+        # with (ADR-0133 decisions 4 to 6), on both action slots; and `notes_url`, the
+        # address of the node's Notes tab, on every slot (ADR-0148), the Notes tab's
+        # own beside the form's kind and the route its button posts to.
         self.assertEqual(slots.SLOTS["node.actions"].context,
-                         ("node", "surface", "place", "written_out", "details"))
+                         ("node", "surface", "place", "written_out", "details",
+                          "notes_url"))
         self.assertEqual(slots.SLOTS["reason.actions"].context,
                          ("node", "reason", "line", "index", "surface", "written_out",
-                          "details"))
+                          "details", "notes_url"))
+        self.assertEqual(slots.SLOTS["notes.actions"].context,
+                         ("node", "kind", "draft_action", "written_out", "details",
+                          "notes_url"))
         self.assertIn("`place`", slots.SLOTS["node.actions"].where)
 
     def test_no_registration_means_no_pixels(self):
@@ -559,7 +583,11 @@ class ContextContractTests(TestCase):
 
     def _seen(self, slot, url):
         seen = []
-        slots.register(slot, DEMO, NODE_TEMPLATE, recorder(seen))
+        if slots.SLOTS[slot].drafts:
+            slots.register(slot, DEMO, NOTES_TEMPLATE, recorder(seen),
+                           draft=draft_issue)
+        else:
+            slots.register(slot, DEMO, NODE_TEMPLATE, recorder(seen))
         self.client.get(url)
         return seen
 
@@ -567,7 +595,8 @@ class ContextContractTests(TestCase):
         for slot, url in (("reason.actions", "/status"),
                           ("node.actions", "/status"),
                           ("reason.actions", "/status/db"),
-                          ("node.actions", "/status/db")):
+                          ("node.actions", "/status/db"),
+                          ("notes.actions", "/notes/db")):
             with self.subTest(slot=slot, page=url):
                 slots.forget_fillers()
                 seen = self._seen(slot, url)
@@ -598,7 +627,7 @@ class ContextContractTests(TestCase):
 
     def test_the_place_names_are_the_documented_ones(self):
         # a card's head, a nested box's and a page's frame head (ADR-0127 decision
-        # 3), a leaf's page framed as a branch's is (backlog #91 §3.5): the filler is
+        # 3), a leaf's page framed as a branch's is (decision 8): the filler is
         # called for every node the grid draws, open or closed, and told where
         self.tree.upsert("/db/disk/smart", StatusCode.OK)
         for url, places in (("/status", {"/db": "card", "/db/disk": "box",
@@ -694,6 +723,35 @@ class DraftingTests(TestCase):
                              "[see](handbook#restart)")
             self.assertEqual(drafting["details"]()[1],
                              ("contact", "[the runbook](handbook#who)"))
+            self.assertEqual(drafting["notes_url"](), "")
+        # the root has no Notes tab, so no address of one
+        with app_module.app.test_request_context():
+            self.assertEqual(app_module._drafting(self.tree.snapshot("/"))["notes_url"](),
+                             "")
+
+    def test_every_slot_is_handed_the_address_of_the_node_s_notes_tab(self):
+        # absolute, since a draft is read outside the instance (ADR-0148)
+        for slot, url in (("node.actions", "/status/servers/db"),
+                          ("reason.actions", "/status/servers/db"),
+                          ("notes.actions", "/notes/servers/db")):
+            with self.subTest(slot=slot):
+                slots.forget_fillers()
+                addresses: list = []
+
+                def provider(*, node, notes_url, said=addresses):
+                    if node.path == "/servers/db":
+                        said.append(notes_url())
+                    return None
+
+                if slots.SLOTS[slot].drafts:
+                    slots.register(slot, DEMO, NOTES_TEMPLATE, provider,
+                                   draft=draft_issue)
+                else:
+                    slots.register(slot, DEMO, NODE_TEMPLATE, provider)
+                self.client.get(url)
+                self.assertTrue(addresses, f"{slot} handed nothing over")
+                self.assertEqual(set(addresses),
+                                 {"http://localhost/notes/servers/db"})
 
 
 class ContextGrowthTests(TestCase):

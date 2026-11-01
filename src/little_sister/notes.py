@@ -14,26 +14,44 @@ A note is no contribution rule (decision 2): it counts nothing, holds nothing ba
 and writes no row of the log. The book keeps the notes in memory by path and writes
 them through as ``var/state/notes.json`` (ADR-0071), plain JSON an operator reads, and
 an adopted copy replaces them at a takeover as the pins are replaced (ADR-0077).
+
+**Every pin leaves an entry that records it** (ADR-0145 decision 4): a pin's note
+enters as the pin is set, whatever its kind — one set without words a note with no
+text, a *record* — and keeps its pin's kind, a seen's status and a silence's level, and
+the pin's end: when, why in the log's words, and who, where a person ended it. **One
+act on many parts is one entry** (decision 5): the pins one act sets share their
+creation, so their notes name one pin, and a node's tab — and its retention — counts
+them as one; where the act was made on another node, each note says where (``at``), and
+that node's tab lists the act too.
+
+**A maintenance entry's note counts its windows** (ADR-0150): what the entry was
+planned as — one window set ahead, or a schedule — and every window of it that held,
+each once, from what the tree tells as it opens and closes them
+(:meth:`NoteBook.window_seen`): how many, how long those that closed held in all, the
+one open now, and the last that closed — from when until when, and how. The note is
+the only record that ties windows to their entry and outlives the log's pruning; a
+note written before notes counted windows counts none, and says what it said.
 """
 from __future__ import annotations
 
 import calendar
 import re
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from little_sister import instants, values
-from little_sister.pins import NO_NOTE
+from little_sister.codes import StatusCode
+from little_sister.pins import MAINTENANCE, NO_NOTE
 from little_sister.state import NOTES_FILE, StateLayer
 from little_sister.status import join_path
 
 if TYPE_CHECKING:
     from little_sister.pins import Pin
-    from little_sister.tree import StatusSnapshot
+    from little_sister.tree import StatusSnapshot, WindowSeen
 
 #: How many of a node's lines a note's context keeps, the rest counted: a node of
 #: 150 lines would otherwise put every one of them into every note written on it.
@@ -164,12 +182,145 @@ def context_of(node: StatusSnapshot | None, slug: str = "") -> Context:
         more=max(0, len(lines) - CONTEXT_LINES))
 
 
+def _status(data: Mapping[str, Any], key: str) -> StatusCode | None:
+    """The status a note's file says under ``key``, or ``None`` where it says none.
+
+    :raises ValueError: it says one that is no status."""
+    said = values.text(data, key)
+    try:
+        return StatusCode[said] if said else None
+    except KeyError:
+        raise ValueError(f"a note's {key} {said!r}, which is no status") from None
+
+
+#: What a maintenance entry was planned as (ADR-0150), the nouns its history line and
+#: the Copy document name it by — the ones *Handled*'s *Planned* counts in: one window
+#: set ahead, and a schedule, every other entry with windows. One window set from now
+#: is neither, and is said as a pin is.
+WINDOW = "window"
+SCHEDULE = "schedule"
+
+
+def planned_of(entry: Pin, before: str = "") -> str:
+    """What ``entry`` was planned as, its note having said ``before``: a series is a
+    :data:`SCHEDULE`, and stays one where an edit makes it one window; one window is a
+    :data:`WINDOW` where it starts after the entry was made, and nothing where it starts
+    as it was made — set from now; and any other pin is nothing."""
+    schedule = entry.schedule
+    if entry.kind != MAINTENANCE or schedule is None:
+        return ""
+    if before == SCHEDULE or not schedule.is_one_off:
+        return SCHEDULE
+    return WINDOW if schedule.starts_at > entry.created_at else ""
+
+
+@dataclass(frozen=True)
+class Tally:
+    """The windows of a maintenance entry that held (ADR-0150), as its note counts
+    them from what the tree tells (:meth:`NoteBook.window_seen`): ``windows``, how many
+    opened — each once: a window told again, at a restart inside it or an edit while it
+    is open, counts no more — and ``held``, how long those that closed held in all, in
+    seconds, each from when it began to hold; the one open now, from ``open_since``
+    until ``open_until`` as it stands; and the last that closed, from ``last_start``
+    until ``last_end``, ``last_closed`` how, in the log's words (``tree.ENDED_*``), and
+    ``last_closed_by`` who, where a person closed it. The surfaces say how many ran,
+    how long, and how the last closed; its start and end are kept beside how it closed
+    and said nowhere yet."""
+    windows: int = 0
+    held: float = 0.0
+    open_since: datetime | None = None
+    open_until: datetime | None = None
+    last_start: datetime | None = None
+    last_end: datetime | None = None
+    last_closed: str = ""
+    last_closed_by: str = ""
+
+    @property
+    def ran(self) -> int:
+        """How many of its windows closed — every one, once its entry has ended."""
+        return self.windows - (1 if self.open_since is not None else 0)
+
+    def closed(self, when: datetime, why: str, by: str = "") -> Tally:
+        """The tally once the window open in it closed ``when`` — or at its own end,
+        where that came first: the entry's last window, or one that closed while the
+        instance was down — for ``why``, by ``by``. Itself where none is open."""
+        if self.open_since is None:
+            return self
+        end = when if self.open_until is None else min(when, self.open_until)
+        end = max(end, self.open_since)
+        return replace(self, held=self.held + (end - self.open_since).total_seconds(),
+                       open_since=None, open_until=None, last_start=self.open_since,
+                       last_end=end, last_closed=why, last_closed_by=by)
+
+    def holding(self, start: datetime, until: datetime) -> Tally:
+        """The tally with the window that began to hold at ``start`` open, until
+        ``until`` as it stands: counted where it is not the one open in it, and its end
+        followed where it is — extended, or told again."""
+        if self.open_since == start:
+            return self if self.open_until == until else replace(self, open_until=until)
+        return replace(self, windows=self.windows + 1, open_since=start,
+                       open_until=until)
+
+    def to_dict(self) -> dict[str, Any]:
+        """The tally as a note's file carries it: its counts, each time in UTC, and how
+        the last window closed, each only where it has it."""
+        said: dict[str, Any] = {"windows": self.windows, "held": self.held}
+        for name, moment in (("open_since", self.open_since),
+                             ("open_until", self.open_until),
+                             ("last_start", self.last_start),
+                             ("last_end", self.last_end)):
+            if moment is not None:
+                said[name] = instants.stamp(moment)
+        if self.last_closed:
+            said["last_closed"] = self.last_closed
+        if self.last_closed_by:
+            said["last_closed_by"] = self.last_closed_by
+        return said
+
+    @classmethod
+    def from_dict(cls, data: object) -> Tally:
+        """A tally back from a note's file — :class:`ValueError` for one that is not a
+        mapping, a count that is no whole number, a length that is no number, and a
+        time that is no instant with an offset, which the store reports for the
+        file."""
+        if not isinstance(data, Mapping):
+            raise ValueError("a note's tally is not a mapping")
+        windows, held = data.get("windows", 0), data.get("held", 0.0)
+        if isinstance(windows, bool) or not isinstance(windows, int) or windows < 0:
+            raise ValueError(f"a note's tally counts {windows!r} windows")
+        if isinstance(held, bool) or not isinstance(held, int | float) or held < 0:
+            raise ValueError(f"a note's tally held its windows {held!r} seconds")
+
+        def moment(name: str) -> datetime | None:
+            value = data.get(name)
+            return (None if value is None
+                    else instants.instant(value, f"a note's tally's {name}"))
+
+        return cls(windows=windows, held=float(held),
+                   open_since=moment("open_since"), open_until=moment("open_until"),
+                   last_start=moment("last_start"), last_end=moment("last_end"),
+                   last_closed=values.text(data, "last_closed"),
+                   last_closed_by=values.text(data, "last_closed_by"))
+
+
 @dataclass(frozen=True)
 class Note:
     """One note on the node at ``path``, or on its line ``slug``: its Markdown, who
     wrote it first and when, who changed it last and when — the two dates of a pin
     (ADR-0014) — the pin it is the note of, by that pin's creation, empty for a note
     of its own, and the context it was written in.
+
+    A pin's note records its pin (ADR-0145 decision 4): its ``kind``, the ``status`` a
+    *seen* was set at and the ``level`` a silence holds its part at — following the
+    pin's edits while it stands — and its end: ``ended_at``, ``ended``, why in the
+    log's words (``tree.ENDED_*``), and ``ended_by``, who, where a person ended it. A
+    note of its own keeps none of them, and neither does a pin's note written before
+    a note kept them, until its pin ends. ``at`` is the node the act that set its pin
+    was made on, where that is not its own — a branch's head marking a failure beneath
+    it (decision 5) — and empty everywhere else. A maintenance entry's note says what
+    it was planned as, ``planned`` (:func:`planned_of`), following its edits, and counts
+    its windows, ``tally`` (ADR-0150) — ``None`` on every other note, and on one written
+    before notes counted windows.
 
     ``key`` names it among its node's notes, its creation as a file spells it;
     ``token`` is the compare-and-set an edit names (ADR-0047 decision 5)."""
@@ -182,6 +333,15 @@ class Note:
     set_by: str
     pin: str = ""
     context: Context = field(default_factory=Context)
+    kind: str = ""
+    status: StatusCode | None = None
+    level: StatusCode | None = None
+    ended_at: datetime | None = None
+    ended: str = ""
+    ended_by: str = ""
+    at: str = ""
+    planned: str = ""
+    tally: Tally | None = None
 
     @property
     def key(self) -> str:
@@ -192,7 +352,8 @@ class Note:
         return instants.stamp(self.set_at)
 
     def to_dict(self) -> dict[str, Any]:
-        """The note as its file carries it, under its path: each time in UTC."""
+        """The note as its file carries it, under its path: each time in UTC, and what
+        it records of its pin only where it has it."""
         said: dict[str, Any] = {
             "text": self.text,
             "created_at": instants.stamp(self.created_at),
@@ -203,14 +364,36 @@ class Note:
             said["slug"] = self.slug
         if self.pin:
             said["pin"] = self.pin
+        if self.kind:
+            said["kind"] = self.kind
+        if self.status is not None:
+            said["status"] = self.status.name
+        if self.level is not None:
+            said["level"] = self.level.name
+        if self.ended_at is not None:
+            said["ended_at"] = instants.stamp(self.ended_at)
+        if self.ended:
+            said["ended"] = self.ended
+        if self.ended_by:
+            said["ended_by"] = self.ended_by
+        if self.at:
+            said["at"] = self.at
+        if self.planned:
+            said["planned"] = self.planned
+        if self.tally is not None:
+            said["tally"] = self.tally.to_dict()
         return said
 
     @classmethod
     def from_dict(cls, path: str, data: Mapping[str, Any]) -> Note:
         """Read one note, its times strictly — :class:`ValueError` for one that is no
-        instant with an offset, which the store reports for the file."""
+        instant with an offset, and for a status or a level that is none, which the
+        store reports for the file."""
         created = instants.instant(data.get("created_at"), "a note's created_at")
         changed = data.get("set_at")
+        ended = data.get("ended_at")
+        made = values.text(data, "at")
+        counted = data.get("tally")
         return cls(
             path=path, slug=values.text(data, "slug"),
             text=values.text(data, "text"),
@@ -218,7 +401,62 @@ class Note:
             set_at=(created if changed is None
                     else instants.instant(changed, "a note's set_at")),
             set_by=values.text(data, "set_by"), pin=values.text(data, "pin"),
-            context=Context.from_dict(data.get("context")))
+            context=Context.from_dict(data.get("context")),
+            kind=values.text(data, "kind"), status=_status(data, "status"),
+            level=_status(data, "level"),
+            ended_at=(None if ended is None
+                      else instants.instant(ended, "a note's ended_at")),
+            ended=values.text(data, "ended"), ended_by=values.text(data, "ended_by"),
+            at=join_path(made) if made else "", planned=values.text(data, "planned"),
+            tally=None if counted is None else Tally.from_dict(counted))
+
+
+def _words(entry: Pin) -> str:
+    """What ``entry``'s note says: its words, and none where a maintenance pin was set
+    without any — the placeholder it holds is nobody's words (ADR-0014)."""
+    return "" if entry.kind == MAINTENANCE and entry.note == NO_NOTE else entry.note
+
+
+@dataclass(frozen=True)
+class Entry:
+    """One entry of a node's history (ADR-0145 decisions 5 and 6): a note of its own,
+    or the notes one act left at the node — on the node, on its lines, or, for an act
+    made on it, on the nodes beneath it — which name one pin's creation, oldest first.
+    Its time is its first note's creation, as a file keeps it."""
+    notes: tuple[Note, ...]
+
+    @property
+    def first(self) -> Note:
+        return self.notes[0]
+
+    @property
+    def created_at(self) -> datetime:
+        return self.first.created_at
+
+    @property
+    def pin(self) -> str:
+        return self.first.pin
+
+    @property
+    def text(self) -> str:
+        """The words of the act — its first note's, which every note of one act shares
+        as it was set, and which an edit of one pin changes for that one alone."""
+        return self.first.text
+
+
+def entries_of(notes: Iterable[Note]) -> tuple[Entry, ...]:
+    """``notes`` as entries, newest first (ADR-0145 decision 5): every note of its own
+    one entry, and the notes that name one pin's creation one entry, oldest first
+    within it."""
+    acts: dict[str, list[Note]] = {}
+    own: list[Entry] = []
+    for note in notes:
+        if note.pin:
+            acts.setdefault(note.pin, []).append(note)
+        else:
+            own.append(Entry((note,)))
+    found = [*own, *(Entry(tuple(sorted(held, key=_age))) for held in acts.values())]
+    return tuple(sorted(found, key=lambda entry: entry.created_at, reverse=True))
 
 
 @dataclass(frozen=True)
@@ -239,6 +477,10 @@ class NoteBook:
         self._lock = threading.Lock()
         self._notes: dict[str, list[Note]] = {}
         self._store: NoteStore | None = None
+        # What the tree told of an entry's windows before its note entered — the set's
+        # own window, told in the write that sets it — by path, line and the pin's
+        # creation, for the note to take as it enters (:meth:`pinned`).
+        self._unheard: dict[tuple[str, str, str], Tally] = {}
 
     def use_store(self, store: NoteStore) -> None:
         """Write every change through ``store`` from now on."""
@@ -250,6 +492,7 @@ class NoteBook:
         with self._lock:
             self._notes = {}
             self._store = None
+            self._unheard = {}
 
     def restore(self, notes: Mapping[str, Sequence[Note]]) -> None:
         """Take ``notes`` as the history — the start's read, or an adopted copy at
@@ -257,6 +500,7 @@ class NoteBook:
         with self._lock:
             self._notes = {join_path(path): sorted(held, key=_age)
                            for path, held in notes.items() if held}
+            self._unheard = {}
 
     # --- reading ---
 
@@ -266,8 +510,33 @@ class NoteBook:
             return tuple(reversed(self._notes.get(join_path(path), ())))
 
     def count(self, path: str) -> int:
+        """How many entries the node's tab lists (ADR-0145 decision 5): an act on many
+        parts one, and the acts made on the node from beneath it among them."""
+        return len(self.entries(path))
+
+    def entries(self, path: str) -> tuple[Entry, ...]:
+        """The node's history as its tab lists it, newest first (ADR-0145 decision
+        5): its notes and its lines', an act's notes one entry — and every act made on
+        it whose parts stand beneath it, by the notes those parts keep, which say it
+        was made here. None of the notes the nodes beneath it keep of their own."""
+        held = join_path(path)
+        prefix = held.rstrip("/") + "/"
         with self._lock:
-            return len(self._notes.get(join_path(path), ()))
+            found = [*self._notes.get(held, ()),
+                     *(note for at, notes in self._notes.items()
+                       if at.startswith(prefix) for note in notes if note.at == held)]
+        return entries_of(found)
+
+    def act(self, pin: str) -> tuple[Note, ...]:
+        """Every note one act left, wherever in the tree its parts stand: the notes
+        that name the pin creation ``pin``, by their path and their line — how many
+        parts the act had, and which (ADR-0145 decision 5)."""
+        if not pin:
+            return ()
+        with self._lock:
+            found = [note for notes in self._notes.values() for note in notes
+                     if note.pin == pin]
+        return tuple(sorted(found, key=lambda note: (note.path, note.created_at)))
 
     def beneath(self, path: str) -> tuple[Note, ...]:
         """The notes at ``path`` and at every path beneath it, newest first — what
@@ -339,63 +608,140 @@ class NoteBook:
             self._write()
             return NoteWrite(True, notes[index])
 
-    def pinned(self, path: str, slug: str, entry: Pin,
-               context: Context) -> Note | None:
+    def pinned(self, path: str, slug: str, entry: Pin, context: Context, *,
+               at: str = "") -> Note:
         """A pin set or edited on the node at ``path``, or on its line ``slug``:
-        its note enters the history when it is set (ADR-0047 decision 4) and
-        follows an edit while the pin stands, the note naming its pin by the pin's
-        creation (decision 5). A pin without a note writes none; the answer is the
-        note as the history holds it, or ``None``."""
-        if not entry.note or entry.note == NO_NOTE:
-            return None
+        its note enters the history when it is set (ADR-0047 decision 4), whatever
+        its kind and with words or without — a pin set without words a record with no
+        text (ADR-0145 decision 4) — and follows an edit while the pin stands, the
+        note naming its pin by the pin's creation (decision 5) and keeping its kind, a
+        seen's status and a silence's level — and a maintenance entry's what it was
+        planned as, and its windows counted from the first (ADR-0150): the set's own,
+        where one opened as it was set, told before the note entered. ``at`` is the
+        node the act was made on, kept where that is not ``path`` (ADR-0145 decision
+        5). The answer is the note as the history holds it."""
         owner = instants.stamp(entry.created_at)
         held = join_path(path)
+        made = join_path(at) if at else ""
+        words = _words(entry)
         with self._lock:
             notes = self._notes.setdefault(held, [])
             index = next((index for index, note in enumerate(notes)
                           if note.pin == owner and note.slug == slug), None)
             if index is not None:
                 stored = notes[index]
-                if stored.text == entry.note:
+                planned = (planned_of(entry, stored.planned)
+                           if stored.tally is not None else stored.planned)
+                if (stored.text, stored.kind, stored.status, stored.level,
+                        stored.planned) == (words, entry.kind, entry.status,
+                                            entry.level, planned):
                     return stored
-                notes[index] = replace(stored, text=entry.note,
-                                       set_at=entry.set_at, set_by=entry.set_by)
+                notes[index] = replace(stored, text=words, set_at=entry.set_at,
+                                       set_by=entry.set_by, kind=entry.kind,
+                                       status=entry.status, level=entry.level,
+                                       planned=planned)
                 self._write()
                 return notes[index]
-            note = Note(path=held, slug=slug, text=entry.note,
+            heard = self._unheard.pop((held, slug, owner), Tally())
+            note = Note(path=held, slug=slug, text=words,
                         created_at=self._unique(held, entry.set_at),
                         created_by=entry.set_by, set_at=entry.set_at,
-                        set_by=entry.set_by, pin=owner, context=context)
+                        set_by=entry.set_by, pin=owner, context=context,
+                        kind=entry.kind, status=entry.status, level=entry.level,
+                        at=made if made != held else "", planned=planned_of(entry),
+                        tally=heard if entry.kind == MAINTENANCE else None)
             notes.append(note)
             self._write()
             return note
 
+    def pin_ended(self, path: str, slug: str, entry: Pin, why: str, by: str,
+                  when: datetime) -> Note | None:
+        """The pin ``entry`` on the node at ``path``, or on its line ``slug``, ended
+        ``when``, for ``why`` — the log's word — and by ``by`` where a person ended
+        it: its note records the end (ADR-0145 decision 4), and the pin's kind where
+        the note was written before a note kept it — and a window of a maintenance
+        entry open as it ended closes with it, or at its own end where that came first
+        (ADR-0150). The one write a pin's note takes once its pin has ended (ADR-0047
+        decision 5). A pin that left no note — one set without words before notes
+        recorded every pin — has none to record it in, and the answer is ``None``."""
+        owner = instants.stamp(entry.created_at)
+        held = join_path(path)
+        moment = instants.utc(when, "a pin's end")
+        with self._lock:
+            self._unheard.pop((held, slug, owner), None)
+            notes = self._notes.get(held, [])
+            index = next((index for index, note in enumerate(notes)
+                          if note.pin == owner and note.slug == slug), None)
+            if index is None:
+                return None
+            stored = notes[index]
+            notes[index] = replace(
+                stored, kind=stored.kind or entry.kind,
+                status=stored.status if stored.kind else entry.status,
+                level=stored.level if stored.kind else entry.level,
+                ended_at=moment, ended=why, ended_by=by,
+                tally=(stored.tally.closed(moment, why, by)
+                       if stored.tally is not None else None))
+            self._write()
+            return notes[index]
+
+    def window_seen(self, seen: WindowSeen) -> Note | None:
+        """What the tree saw of a maintenance entry's windows (ADR-0150): its note
+        counts the window that holds — from ``seen.start`` until ``seen.until`` — once,
+        and closes the one it held open where that is another or none holds, at
+        ``seen.when``, for ``seen.why``, by ``seen.by``. What is told before the note
+        enters — the set's own window, in the write that sets it — is kept for the note
+        to take as it enters (:meth:`pinned`). A note written before notes counted
+        windows counts none. The answer is the note as the history holds it, and
+        ``None`` where it holds none yet or one that counts nothing."""
+        owner = instants.stamp(seen.pin.created_at)
+        held = join_path(seen.path)
+        with self._lock:
+            notes = self._notes.get(held, [])
+            index = next((index for index, note in enumerate(notes)
+                          if note.pin == owner and note.slug == seen.slug), None)
+            if index is None:
+                key = (held, seen.slug, owner)
+                self._unheard[key] = _heard(self._unheard.get(key, Tally()), seen)
+                return None
+            stored = notes[index]
+            if stored.tally is None:
+                return None
+            tally = _heard(stored.tally, seen)
+            if tally != stored.tally:
+                notes[index] = replace(stored, tally=tally)
+                self._write()
+            return notes[index]
+
     def retire(self, retention: Retention, *, now: datetime,
                zone: ZoneInfo) -> int:
         """Retire what ``retention`` says is past keeping, on every node, and say how
-        many went (ADR-0047 decision 9): past the age ceiling by age alone, then past
-        the floor while the node holds more than the cap, the oldest first — never
-        one of the last ``keep`` on its node."""
+        many notes went (ADR-0047 decision 9): past the age ceiling by age alone, then
+        past the floor while the node holds more than the cap, the oldest first —
+        never one of the last ``keep`` on its node. What is counted, kept and retired
+        is an **entry** (ADR-0145 decision 5): an act's notes on a node go together,
+        by its first note's age."""
         oldest = retention.max_age.cutoff(now, zone)
         floor = retention.min_age.cutoff(now, zone)
         retired = 0
         with self._lock:
             for path in list(self._notes):
                 notes = self._notes[path]
-                kept_from = max(0, len(notes) - retention.keep)
+                held = sorted(entries_of(notes), key=lambda entry: entry.created_at)
+                kept_from = max(0, len(held) - retention.keep)
                 gone = {index for index in range(kept_from)
-                        if notes[index].created_at < oldest}
-                standing = len(notes) - len(gone)
+                        if held[index].created_at < oldest}
+                standing = len(held) - len(gone)
                 for index in range(kept_from):
                     if standing <= retention.cap:
                         break
-                    if index not in gone and notes[index].created_at < floor:
+                    if index not in gone and held[index].created_at < floor:
                         gone.add(index)
                         standing -= 1
                 if gone:
-                    retired += len(gone)
-                    left = [note for index, note in enumerate(notes)
-                            if index not in gone]
+                    going = {note.key for index in gone for note in held[index].notes}
+                    retired += len(going)
+                    left = [note for note in notes if note.key not in going]
                     if left:
                         self._notes[path] = left
                     else:
@@ -421,6 +767,17 @@ class NoteBook:
 
 def _age(note: Note) -> datetime:
     return note.created_at
+
+
+def _heard(tally: Tally, seen: WindowSeen) -> Tally:
+    """``tally`` once it has heard ``seen`` (:meth:`NoteBook.window_seen`): the window
+    open in it closed where it is not the one that holds, and the one that holds
+    open."""
+    if seen.start is None or tally.open_since != seen.start:
+        tally = tally.closed(seen.when, seen.why, seen.by)
+    if seen.start is not None:
+        tally = tally.holding(seen.start, seen.until or seen.start)
+    return tally
 
 
 #: The process's notes, as :data:`~little_sister.tree.status_tree` is its tree: one

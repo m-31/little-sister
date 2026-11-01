@@ -1,14 +1,14 @@
 # ADR-0135 — A handled part keeps its true color, and every surface says by what
 
 - **Status:** Accepted
-- **Date:** 2026-10-25 (accepted 2026-10-24)
+- **Date:** 2026-11-01 (accepted 2026-10-24)
 - **Related:** [ADR-0032](0032-status-contribution-boundary.md) (the contribution
   boundary; rule 5, a transformed contribution visible and attributable),
   [ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) (a pin is one block, its
   kind data — decisions 1, 2, 6, 7 and 8 amended),
   [ADR-0127](0127-the-wall-is-a-tree-and-a-click-opens-or-closes-a-node.md) (decision 2,
   a chip's counts and its bare ‖ — amended), [ADR-0019](0019-inspection-popover.md) (the
-  inspection card, whose look and machinery the note's card takes — amended),
+  inspection card — amended),
   [ADR-0056](0056-stable-useful-dashboard-flow.md) (*Maintenance visibility*, the band's
   pill and a card's pip — amended), [ADR-0036](0036-addressable-reasons.md) (decisions 10
   and 12, the Maintenance page and the way back to it — amended),
@@ -31,7 +31,18 @@
   (the envelope's list of what handles a part, by decision 9's predicate, and a route
   per act),
   [ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md) (*seen*,
-  the first kind of accepted, and its ringed check)
+  the first kind of accepted, and its ringed check),
+  [ADR-0143](0143-a-handled-part-carries-its-jobs-mark-and-a-rail-in-the-color-it-counts-as.md)
+  (how a handled part looks — decision 1 amended),
+  [ADR-0144](0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md)
+  (*silenced*, a third job — amended),
+  [ADR-0146](0146-an-event-marked-done-shows-ok-until-its-line-reads-anything-else.md)
+  (*done*, accepted's second kind, and the fold's exception — amended),
+  [ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md) (the door, ◇, and the block as the button — decisions 3, 4, 5 and 6 amended),
+  [ADR-0109](0109-a-node-says-its-children-are-complete.md) (decision 4, what stands on
+  a node not reported now, held against its path),
+  [ADR-0150](0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md)
+  (decision 9, a maintenance entry planned, listed apart and counted nowhere)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -66,23 +77,34 @@ stands here.
 
 There are four jobs: down on purpose, maintenance, ‖; accepted, *done* and *seen*, a
 ringed check; silenced, a bell struck through; and a configured rule, §. Each mark is
-drawn in `currentColor` at the status cues' height, § as a path and not a font's glyph,
-so that it holds on every surface in every theme; and none stands alone — its word
-stands beside it in a head, a block and a line, and on a chip in the tooltip and the
-accessible name (ADR-0056), so that a job leans on neither color nor shape and a screen
-reader says it.
+drawn at the status cues' height, § as a path and not a font's glyph, so that it holds
+on every surface in every theme, and in the color of what its part counts as rather
+than in `currentColor` — a node's, and a line's with no tint of its own, on its own tint
+([ADR-0143](0143-a-handled-part-carries-its-jobs-mark-and-a-rail-in-the-color-it-counts-as.md)
+decisions 2 and 4). A line's mark stands at its top right and a node's beside its head's
+state. None stands alone: in a block its word stands beside it, and on a line, beside a
+head's state and on a chip its words are its tooltip and its accessible name (ADR-0056),
+so that a job leans on neither color nor shape and a screen reader says it.
 
 Every part keeps its true color and carries the mark of the rule acting on it, and what
 it counts as shows one level up: a line's in its node, a node's in its parent. A rule
 never changes the color of what it acts on — only how that counts above. Two exceptions
 stand: maintenance paints blue, there being nothing to read on a node down on purpose,
-which says its reading beside *maintenance*; and *done* shows OK with the failure it
-closed beside it. Damping's count and the shield's mark at the check's mount stay as
-built. Maintenance's mark, the ringed check — *seen*'s
-([ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md)) — and
-§, the configured rules'
+which says its reading beside *maintenance*; and *done*, the one acknowledgment that
+does not keep its part's true color, shows OK with the failure it closed beside it, its
+ringed check in OK's green. Wherever a part counts as something other than it shows, a
+rail on its right edge says what, in the color it counts as (ADR-0143 decisions 3 and
+5): damping's count and the shield's marker draw one too, and the shield says
+*· reached through* its dependency beside its state; a done, which shows OK and counts
+as OK, has none. The ringed check is *seen*'s
+([ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md)) and
+*done*'s
+([ADR-0146](0146-an-event-marked-done-shows-ok-until-its-line-reads-anything-else.md)),
+the bell struck through *silenced*'s
+([ADR-0144](0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md)),
+and § the configured rules'
 ([ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md) decision
-10), are drawn; the bell struck through comes with its kind.
+10).
 
 ### 2. Maintenance takes its own words, and *silenced* is left to its kind
 
@@ -100,23 +122,18 @@ until a deadline, Alertmanager's for the same. The code keeps its names
 maintenance take the new words in their titles, headers and decisions, ADR-0124's title
 among them.
 
-### 3. A block on the wall says its sentence, and its note opens from a mark
+### 3. A block on the wall says its sentence, and opens its node's *Notes* tab at its pin
 
 On the wall a rule's block says its mark and its sentence — who, until when, and what
-is left — and where it has a note, a note mark after them: a speech bubble, drawn as the
-marks are, its word *Note* in its tooltip and its accessible name. The mark opens the
-note in a card in the inspection card's look and place (ADR-0019): on a click, a tap,
-Enter or Space, for every viewer, and after a pause where the viewer's look opens cards
-on a pause (`inspection_card`, ADR-0029). It closes with Escape, a click elsewhere or the
-mark again, and holds through the refresh, as the inspection card does. The card names
-the node, says the block's sentence, its note whole — rendered, scrolling past a height,
-clamped HTML and never shortened Markdown (ADR-0018 decision 7) — who set it and when,
-and links to the node's page. It carries no buttons, so that a pin keeps its one editor
-(ADR-0104 decision 3), and it stands above the block, so that the sentence pressed stays
-in view. Without script the mark is a link to the node's page. Each note rides in the
-grid's fragment inside its block, in a template the browser keeps out of the page until
-the card reads it, so that nothing is fetched to open it and the fragment carries no
-more than when the note stood in the box.
+is left, a maintenance pin's *until* the end of its window open now
+([ADR-0150](0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md)
+decision 9) — and is one link, to the *Notes* tab of the node its pin stands on, opened
+at that pin: in a drawer over the wall with script, the tab itself without
+([ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)
+decisions 3 and 7). Its sentence is its name, so that what a screen reader hears is
+what the block says and what a click opens is what it describes. The note is read in
+the drawer, and the block is changed there, in its editor (decision 4): on the wall a
+block carries no note and no card for one.
 
 Where a node is stated on its own a block keeps its note whole, and *Edit* and *Clear*
 in words: a node's page, in the blocks of the node itself and of its lines, and
@@ -124,18 +141,16 @@ in words: a node's page, in the blocks of the node itself and of its lines, and
 boxes a node's page shows beneath it are a wall of their own, and their blocks the
 wall's.
 
-### 4. On the wall an admin edits with a pencil, and clears in the editor
+### 4. From the wall a block is changed and cleared in the drawer
 
-For an admin, *Edit* on the wall is a pencil mark after the note mark, its word *Edit*
-in its tooltip and its accessible name, shown as *Edit* and *Clear* were — on hover or
-keyboard focus, always on a touch screen — its room kept so that nothing moves when it
-shows. It opens the block's editor as before (ADR-0104 decision 4), and *Clear* stands
-there, in words beside *Save changes* and *Cancel*. *Clear* is the one control on a block
-that acts at once, without a confirmation — the rule ends and the node may alarm — and
-a small mark is where a mis-click lands; so every mark on the wall opens something, and
-every act with an effect is said in words inside what a mark opened. Ending a rule from
-the wall takes one click more. A node's page, whose head shows *Edit* and *Clear*
-always, keeps them in words, as *Handled* does.
+The drawer a block opens holds the block's editor, open for whoever may change it
+(ADR-0104 decision 4), and *Clear* stands there, in words beside *Save changes* and
+*Cancel*. *Clear* is the one control on a block that acts at once, without a
+confirmation — the rule ends and the node may alarm — and a small mark is where a
+mis-click lands; so every mark on the wall opens something, and every act with an effect
+is said in words inside what it opened. Ending a rule from the wall takes one click
+more. A node's page, whose head shows *Edit* and *Clear* always, keeps them in words, as
+*Handled* does.
 
 ### 5. Every block has a dashed edge, and a fill only where its rule paints
 
@@ -143,25 +158,30 @@ Every node and chip on the wall is a box with a solid edge, filled with its stat
 nothing else on the page has a dashed or dotted edge; so a block's edge is dashed — 1.5
 pixels of its ink — and says one thing: not a node, but something laid on one.
 Maintenance's block keeps its blue fill, its rule painting its node blue, and its dashes
-are its ink at 65 %, which clears the non-text bar on that tint in every theme. The
-block of a rule that keeps its node's color has no fill, the node's color running
-through it and its words in the node's own ink, which every theme already makes
-readable on its fill; standing on whatever fill its node's status gives it, its dashes
-are its ink at 75 %, as a head's squares' edges are, and its marks wash at 8 % under
-the pointer, a ring saying which one is open, since at maintenance's 65 % and 12 % a
-block on an amber or a green node falls under the bars in four themes
-(`tests/sweep_contrast.py`). With a solid edge a neutral block was an idle child box to
-the eye — the idle tint as it is is a pale idle box's fill and an idle chip's — and with
-the dashes a fill would only lend the idle tint's meaning, *reports nothing*, to what
-has no status, and cover the true color this record leaves alone. It is the same in
-every theme, and no color pair is added.
+are its ink at 65 %, which clears the non-text bar on that tint in every theme; a
+maintenance entry planned, which holds nothing, paints nothing either, its block
+carrying no tint (ADR-0150 decision 9). The block of a rule that keeps its node's color
+has no fill, the node's color running through it and its words in the node's own ink,
+which every theme already makes readable on its fill; standing on whatever fill its
+node's status gives it, its dashes are its ink at 75 %, as a head's squares' edges are,
+and on the wall, where it is a link, it washes at 8 % under the pointer, since at
+maintenance's 65 % and 12 % a block on an amber or a green node falls under the bars in
+four themes (`tests/sweep_contrast.py`). With a solid edge a neutral block was an idle
+child box to the eye — the idle tint as it is is a pale idle box's fill and an idle
+chip's — and with the dashes a fill would only lend the idle tint's meaning,
+*reports nothing*, to what has no status, and cover the true color this record leaves
+alone. It is the same in every theme, and no color pair is added.
 
-A person's rule's block stands on the wall while the rule stands — maintenance, *seen*,
-which ends by itself, and with its kind *silenced*, whose block stays between the
-recoveries of what flaps. A configured rule's block, §'s, stands on the wall only while
-the rule changes what its part counts, so that a block and ◇ follow one predicate, open
-and closed alike; on a node's page and *Handled* it stands always, *changes nothing now*
-beside it where it does not act.
+On the wall the blocks stand only while a browser's *◇ details* is on, off unless the
+deployment says otherwise (ADR-0147 decision 6), a handled part saying its color and
+its mark meanwhile; the switch takes blocks off the wall and nothing that counts. With
+it on, a person's rule's block stands while the rule holds — maintenance while a window
+of it is open, the wall showing nothing of one planned; *seen* and *done*, which end by
+themselves; and *silenced*, whose block stays between the recoveries of what flaps —
+and a configured rule's block, §'s, only while the rule changes what its part counts,
+so that a block and ◇ follow one predicate, open and closed alike. A node's own head
+and *Handled* state every block whole either way, a configured rule's standing always,
+*changes nothing now* beside it where it does not act.
 
 ### 6. A closed chip says what is handled beneath it in one short form
 
@@ -169,19 +189,25 @@ A chip counts each part by what it counts as above, so that its counts explain i
 (ADR-0127 decision 2). Beside the counts, where a bare ‖ stood, stand a ringed diamond
 and the number of parts beneath that a rule handles and the counts do not show as such.
 That is a pinned branch — the chip's own node among them — whose leaves count for
-themselves, a line's pin wherever its node is not ‖ among the counts, a part marked
-seen, and a part whose count a configured rule changes; with its kind a part silenced.
-A pinned leaf is ‖ among the counts already, its lines with it, and is not handled
-twice. The diamond's words, in the tooltip and the accessible name and at the end of
-the chip's own, say what each job handles — *3 handled: 1 node in maintenance, 2 lines
-in maintenance*, *4 handled: 1 line in maintenance, 2 seen, 1 by a rule* — the words
-*by a rule* the same for one part and for many. It is one mark and a number whatever
-the mix, so that a chip grows by the same whatever is handled beneath it, and the marks
-by job show once the node is opened. The band's pill takes the same form — the diamond,
-a number and the same words — counting every pin that stands and, beside them, the
-parts a configured rule changes now rather than the rules configured, which stand for
-good; it leads to *Handled*, and a card's pip takes the diamond and opens the card's own
-list.
+themselves, a line's pin wherever its node is not ‖ among the counts, a line marked
+done, a part marked seen, a part silenced, and a part whose count a configured rule
+changes — what stands on a part not reported now among them, on a line of the chip's
+own leaf too, though no count shows such a part (decision 11). A pinned leaf is ‖ among
+the counts already, its lines with it, and is not handled twice; a maintenance entry
+planned holds nothing, and nothing counts it. The diamond's words, in the tooltip and
+the accessible name and at the end of the chip's own, say what each job handles, *done*
+before *seen* — *3 handled: 1 node in maintenance, 2 lines in maintenance*, *6 handled:
+1 line in maintenance, 1 done, 2 seen, 1 silenced, 1 by a rule* — the words *by a rule*
+the same for one part and for many. It is one mark and a number whatever the mix, so
+that a chip grows by the same whatever is handled beneath it, and the marks by job show
+once the node is opened. The band's pill takes the same form — the diamond, a number and
+the same words — counting every pin that stands, what stands on a part not reported now
+among them, a node's row saying *not reported now*, and, beside them, the parts a
+configured rule changes now rather than the rules configured, which stand for good; it
+leads to *Handled*. A card has no pip: the door on its head, ◇, lit with the number of
+parts handled behind it, opens its node's *Notes* tab (ADR-0147 decision 2), and a
+closed chip, itself the button that opens its node, keeps its ◇ and its number beside
+its counts.
 
 ### 7. A branch says why it has its color, in a card of its own
 
@@ -191,11 +217,14 @@ fails or holds something handled, and nowhere else: not on a leaf, whose lines a
 page, nor on a node in maintenance, whose block says why. First what counts: each part
 beneath that fails and passes its failure up, with the status it counts as and since
 when — not what a pin, a shield or a damping counter holds back, nor anything beneath
-it. Then what is handled, under ◇ and its total, grouped by job under each mark, each
-with its rule, who or what set it and until when, what its part reads where that is a
-failure, linked to where it stands. Each list shows its first five rows and folds the
-rest beneath *N more*, as History folds its earlier periods, so that an outage does not
-grow its branch's page by a screen. Time keeps its one line —
+it. Then what is handled, under ◇ and its total, grouped by job under each mark — a
+done and a seen under *Accepted*, a silence under *Silenced* — each with its rule, who
+or what set it and until when, what its part reads where that is a failure, linked to
+where it stands; a line its node does not report now is *a line of …, not reported
+now*, a node not reported now *… not reported now*, without the comma, and one of its
+lines *a line of … not reported now* (decision 11). Each list shows its first five rows
+and folds the rest beneath *N more*, as History folds its earlier periods, so that an
+outage does not grow its branch's page by a screen. Time keeps its one line —
 *from pull_requests beneath it, and 2 more* — its *and 2 more* linking to the card; a
 node with rules of its own keeps them as the blocks at the head of its frame (ADR-0104
 decision 8). A branch's Copy document writes what is handled the same way, after
@@ -205,13 +234,21 @@ decision 8). A branch's Copy document writes what is handled the same way, after
 
 The Maintenance page becomes *Handled*, at `/handled`: every rule that stands, grouped
 by job, oldest first, each as its block (ADR-0104 decision 6). Its sections read as the
-jobs do — *In maintenance*; *Accepted*, *seen*'s (ADR-0142 decision 6); *By a rule*,
-every configured rule the longest standing first, with its file, its root, its note and
-its date; and *Silenced* with its kind. It takes the word the chip and the pill say, so
-that *◇ 12 handled* lands on a page of that name, and the rail's entry takes the ringed
-diamond. `GET /maintenance` redirects there with its query, so that a bookmark and the
-way back from an edit hold; a pin's writes go to a route per act, a maintenance pin's
-to `POST /pins/maintenance` (ADR-0141 decision 4).
+jobs do — *In maintenance*, and after what is in maintenance *Planned*, every
+maintenance entry that stands and holds nothing now, the soonest next window first,
+with a count of its own that says what it counts, *1 window and 1 schedule on 2 nodes,
+the soonest first* (ADR-0150 decision 9); *Accepted*, *done*'s beside *seen*'s
+(ADR-0146, ADR-0142 decision 6); *Silenced* (ADR-0144); and *By a rule*, every
+configured rule the longest standing first, with its file, its root, its note and its
+date. What stands on a part not reported now is listed as what stands on one reported
+is (decision 11): a line's maintenance pin under *In maintenance*, after the lines its
+node reports, as *A line not reported now* with *Edit* and *Clear*, and a silence or a
+seen on such a line the same way under *Silenced* and *Accepted*; what stands on a node
+not reported now under the node's own path, read from the snapshot. It takes the word
+the chip and the pill say, so that *◇ 12 handled* lands on a page of that name, and the
+rail's entry takes the ringed diamond. `GET /maintenance` redirects there with its
+query, so that a bookmark and the way back from an edit hold; a pin's writes go to a
+route per act, a maintenance pin's to `POST /pins/maintenance` (ADR-0141 decision 4).
 
 ### 9. One predicate behind the fold, the counts and the budget, and no switch
 
@@ -220,7 +257,13 @@ beside the counts, and the healthy fold folds only what is truly OK.
 On today's rules that is how they behave already — a pinned node counts as maintenance
 and spends no budget, and a node with a pin on it or beneath it is never folded — so
 nothing is counted differently; the later kinds are built to the same functions
-(`counts_as`, `own_failure` and `healthy` in `tree.py`). Whether the budget runs at all
+(`counts_as`, `own_failure` and `healthy` in `tree.py`). *Done* is the fold's one
+exception, for the reason it is decision 1's: the fold takes a done as the OK it shows —
+its line into its node's fold, its node and those above it into their parents' — where
+a person's rule on a part or beneath it is otherwise never folded (ADR-0146 decision
+6). It hides nothing so: it ends the moment its line reads anything other than
+the failure it closed, so the next failure unfolds and spends the budget as if there had
+been none, and staleness unfolds it as it does anything. Whether the budget runs at all
 is a browser's look, `failures` (ADR-0029), which asks the same `own_failure` and
 has no test of a failure of its own. Since every part keeps its true
 color, nothing on the wall is painted over and no switch shows it: the Events page's
@@ -241,29 +284,45 @@ a node and an entry carry `handled`, every rule that handles them now by decisio
 predicate, where `maintenance` said a pin alone, and `contribution` names the rule
 beside its kind — a break, `schema_version` 3 (ADR-0141 decision 3).
 
+### 11. What stands on a part not reported now is handled, and holds nothing until it is back
+
+What stands on a line its node does not report now — a finding that comes and goes, or
+every line of a node whose check failed — is handled as it is on a line the node
+reports, though it holds nothing until its line is back; and what stands on a node not
+reported now — its check no longer returns it, or has not written it since the start —
+is handled the same way: it holds nothing until the node is back, and it stands. The
+nearest node above such a node that stands lists it in its *Notes* tab and counts it on
+its door. The snapshot carries such a line beside its node's lines, and such a node
+beside the children of that nearest node, never among them, so that every surface reads
+them from one place (ADR-0147 decision 2, ADR-0080 decision 1,
+[ADR-0109](0109-a-node-says-its-children-are-complete.md) decision 4): a chip and the
+pill count them (decision 6), a branch's *why* card and its Copy document say them
+(decision 7), and *Handled* lists them (decision 8).
+
 ## Consequences
 
-- **ADR-0104 is amended**: decision 1, the note whole wherever the block stands — on the
-  wall behind the note mark, whole where a node is stated on its own — and *Edit* and
-  *Clear*, on the wall a pencil and *Clear* in the editor; decision 2, a closed node's ‖ —
-  the diamond and a total; decision 6, the Maintenance page — *Handled*; decision 7,
-  *Edit* and *Clear* shown on hover — the pencil; decision 8, *the block paints its own
-  tint* — only where its rule paints, every block's edge dashed.
+- **ADR-0104 is amended**: decision 1, the note whole wherever the block stands — read in
+  the drawer from the wall, whole where a node is stated on its own — and *Edit* and
+  *Clear*, from the wall in the block's editor in the drawer; decision 2, a closed node's
+  ‖ — the diamond and a total; decision 6, the Maintenance page — *Handled*; decision 7,
+  *Edit* and *Clear* shown on hover — none on the wall, where the block is a link;
+  decision 8, *the block paints its own tint* — only where its rule paints, every
+  block's edge dashed.
 - **So is ADR-0127 decision 2**: the bare ‖ and its words give way to the diamond and the
   number handled.
-- **ADR-0019** gains a second card on its machinery, the note's, opened by the mark and,
-  under the look, by a pause; **ADR-0056**'s pill and pip take the short form and lead to
-  *Handled*; **ADR-0036** decisions 10 and 12 name `/handled`; **ADR-0107** decision 3,
-  **ADR-0132** decision 6 and **ADR-0124** take maintenance's words, and the Copy
-  document (**ADR-0115**) its words and a branch's list of what is handled.
+- **ADR-0056**'s pill takes the short form and leads to *Handled*, and a card's head
+  carries the door where its pip stood; **ADR-0036** decisions 10 and 12 name
+  `/handled`; **ADR-0107** decision 3, **ADR-0132** decision 6 and **ADR-0124** take
+  maintenance's words, and the Copy document (**ADR-0115**) its words and a branch's
+  list of what is handled.
 - **Every record that said *silenced* of maintenance** says maintenance's words in its
   title, its header and its decisions — ADR-0014, 0036, 0039, 0042, 0072, 0082, 0083,
   0085, 0104, 0107, 0110, 0115, 0123, 0124, 0127 and 0132 — its context, consequences
   and alternatives keeping the words they were written in, and every file its name; the
   living documents take them throughout. The code keeps its names.
-- **The contrast sweep reads the wall's block as it now stands** — its words, the note
-  mark, the pencil under the pointer and the editor's *Clear* — and its dashed edge
-  against the non-text bar, in every theme (`tests/sweep_contrast.py`).
+- **The contrast sweep reads the wall's block as it stands** — its words on the wash
+  under the pointer, its chevron and the editor's *Clear* — and its dashed edge against
+  the non-text bar, in every theme (`tests/sweep_contrast.py`).
 - **The demo deployment** gets a recipe: a node's pin with a long note, a line's pin, a
   branch with the *Why* card (`testing-the-gui.md`, Mode 2).
 - **Nothing changes for the macOS client.**
@@ -285,12 +344,13 @@ beside its kind — a break, `schema_version` 3 (ADR-0141 decision 3).
 - **The words**: renaming the kind *muted* or *quieted* and leaving maintenance
   *silenced*, two words for maintenance and one nobody used for the kind.
 - **The block on the wall**: the note's first line, a gist that still costs every block a
-  line; the note whole, as built; *Note* in words, which costs a narrow card a line of its
-  sentence; the card on a pause alone, which a viewer who never chose cards, a touch
-  screen and a wall nobody touches never open; the note in the inspection card, which
-  says what a node is, not what is done to it now; a panel of the whole node; the note
-  opened in place, which moves the cards beneath and closes at the next refresh; the
-  sentence as the button, which holds a link where a pin above stands.
+  line; the note whole, as built; the note in a card opened from a mark on the block, a
+  pencil beside it, which ADR-0147 weighs against the block as one link — *Note* in
+  words costing a narrow card a line of its sentence, and the card on a pause alone
+  never opened by a viewer who never chose cards, a touch screen or a wall nobody
+  touches; the note in the inspection card, which says what a node is, not what is done
+  to it now; the note opened in place, which moves the cards beneath and closes at the
+  next refresh.
 - **The edge and fill**: a fill per theme — the idle tint in cyberpunk and dark, with 6 %
   of its ink in the light ones — a color pair to tune in every theme that says nothing
   the dashes do not; a fill with a solid edge, an idle box; a wash of the node's own ink,

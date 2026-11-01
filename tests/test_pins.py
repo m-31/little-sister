@@ -1,24 +1,31 @@
 """The pins and their file (ADR-0141): one pin with a kind, and ``pins.json``, which
-took ``maintenance.json``'s place with a clean break."""
+took ``maintenance.json``'s place with a clean break — and what a start makes of it."""
 import json
+import os
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from unittest import TestCase, mock
 
+os.environ.setdefault("SECRET_KEY", "test-key")
+
+from little_sister import app as app_module
 from little_sister import self_report
 from little_sister.codes import StatusCode
 from little_sister.pins import (
+    DONE,
     KINDS,
     MAINTENANCE,
     NO_NOTE,
     SEEN,
+    SILENCED,
     Pin,
     PinStore,
     PinTables,
 )
 from little_sister.state import PINS_FILE, StateLayer
+from little_sister.tree import StatusTree
 
 
 def _utc(*moment: int) -> datetime:
@@ -37,7 +44,7 @@ class PinTests(TestCase):
         self.assertEqual(Pin.from_dict(pin.to_dict()), pin)
 
     def test_a_pin_is_of_a_kind_this_release_knows(self):
-        self.assertEqual(KINDS, {MAINTENANCE, SEEN})
+        self.assertEqual(KINDS, {MAINTENANCE, SEEN, SILENCED, DONE})
         self.assertEqual(_pin().kind, MAINTENANCE)
         with self.assertRaisesRegex(ValueError, "does not know"):
             Pin("snoozed", "r", _utc(2026, 1, 1), _utc(2026, 1, 8))
@@ -103,9 +110,10 @@ class PinStoreTests(TestCase):
                          [("/db", ""), ("/db", "slow"), ("/zz", "")])
         self.assertEqual(written[1], {"path": "/db", "slug": "slow",
                                       **line.to_dict()})
+        # a maintenance entry writes its schedule, and never an end (ADR-0150)
         self.assertEqual(set(written[0]),
                          {"path", "slug", "id", "kind", "note", "set_at",
-                          "expires_at", "set_by", "created_at", "created_by"})
+                          "schedule", "set_by", "created_at", "created_by"})
 
     def test_missing_file_loads_empty_and_reports_nothing(self):
         # a first start is not a failure
@@ -269,7 +277,8 @@ class BothDatesTests(TestCase):
     def test_a_pin_without_the_creation_fields_reads_as_its_own_creation(self):
         raw = {"id": "0123456789abcdef", "kind": MAINTENANCE, "note": "planned",
                "set_at": "2026-01-01T00:00:00Z",
-               "expires_at": "2026-01-08T00:00:00Z", "set_by": "ada"}
+               "schedule": "DTSTART;TZID=Europe/Berlin:20260101T010000\n"
+                           "DTEND:20260108T000000Z", "set_by": "ada"}
         pin = Pin.from_dict(raw)
         self.assertEqual(pin.note, "planned")
         self.assertEqual(pin.created_at, _utc(2026, 1, 1))
@@ -378,5 +387,162 @@ class NewIdTests(TestCase):
             self.assertEqual(_pin().id, "fixed0000000001")
 
 
+class _Roots:
+    """What a start asks of an engine: the configured checks' roots."""
+
+    def __init__(self, *roots: str) -> None:
+        self._roots = list(roots)
+
+    def check_roots(self) -> list[str]:
+        return self._roots
+
+
+class StartTests(TestCase):
+    """A start replays the whole file — the maintenance and what a person
+    acknowledged, a *seen* and a silence (ADR-0142, ADR-0144) — and writes it back
+    whole, so that each stands through every restart, not only the first: a start
+    that wrote the file between the two kept the maintenance alone, and the next one
+    lost the rest, with no row."""
+
+    def setUp(self) -> None:
+        self.addCleanup(setattr, app_module, "status_tree", app_module.status_tree)
+
+    def start(self, directory: str) -> StatusTree:
+        app_module.status_tree = StatusTree()
+        app_module._restore_state(_Roots("/site"), StateLayer(directory))  # type: ignore[arg-type]
+        return app_module.status_tree
+
+    def test_every_kind_stands_through_every_restart(self) -> None:
+        later = datetime.now(UTC) + timedelta(days=5)
+        with tempfile.TemporaryDirectory() as directory:
+            tree = self.start(directory)
+            for path in ("/site/web/disk", "/site/web/cpu", "/site/db"):
+                tree.upsert(path, StatusCode.ERROR, "it fails")
+            tree.set_maintenance("/site/db", "moving it", expires_at=later)
+            for path, kind, fields in (
+                    ("/site/web/disk", SEEN, {"expires_at": None}),
+                    ("/site/web/cpu", SILENCED,
+                     {"expires_at": later, "level": StatusCode.OK})):
+                write = tree.set_acknowledgment(path, "", kind, "known",
+                                                set_by="ada", **fields)
+                self.assertTrue(write.applied, write.problem)
+            held = ({"/site/db": MAINTENANCE},
+                    {"/site/web/cpu": SILENCED, "/site/web/disk": SEEN})
+            for restart in range(3):
+                with self.subTest(restart=restart):
+                    tree = self.start(directory)
+                    nodes, _lines = tree.pins()
+                    acknowledged, _lines = tree.acknowledgments()
+                    self.assertEqual(
+                        ({path: pin.kind for path, pin in nodes.items()},
+                         {path: pin.kind for path, pin in acknowledged.items()}),
+                        held)
+                    written = json.loads((Path(directory) / PINS_FILE).read_text())
+                    self.assertEqual(
+                        sorted((pin["path"], pin["kind"]) for pin in written["pins"]),
+                        [("/site/db", MAINTENANCE), ("/site/web/cpu", SILENCED),
+                         ("/site/web/disk", SEEN)])
+
+
 if __name__ == '__main__':
     unittest.main()
+
+
+class ScheduleTests(TestCase):
+    """A maintenance entry holds its schedule (ADR-0150): one window for a pin set with
+    an end, written in the configured zone, or a series with its holiday list and its
+    windows changed alone; the file writes the schedule, never an end; and an entry in
+    the shape before schedules is dropped, with nothing said."""
+
+    SERIES = ("DTSTART;TZID=Europe/Berlin:20261107T220000\nDURATION:PT8H\n"
+              "RRULE:FREQ=WEEKLY;BYDAY=SA;UNTIL=20261128T225959Z")
+
+    def test_a_pin_set_with_an_end_is_one_window_in_the_configured_zone(self):
+        pin = Pin(MAINTENANCE, "planned", _utc(2026, 1, 1, 9), _utc(2026, 1, 8))
+        assert pin.schedule is not None
+        self.assertEqual(pin.schedule.text(),
+                         "DTSTART;TZID=Europe/Berlin:20260101T100000\n"
+                         "DTEND:20260108T000000Z")
+        self.assertEqual(pin.expires_at, _utc(2026, 1, 8))
+        self.assertNotIn("expires_at", pin.to_dict())
+        self.assertEqual(Pin.from_dict(pin.to_dict()), pin)
+
+    def test_a_series_reads_back_with_its_list_and_its_changed_windows(self):
+        from little_sister.pins import Changed
+        from little_sister.schedule import Schedule
+        first = _utc(2026, 11, 7, 21)
+        changed = Changed(first, first + timedelta(hours=9), "the restore runs long",
+                          "lex", first + timedelta(hours=7))
+        pin = Pin(MAINTENANCE, "backup", _utc(2026, 11, 1), set_by="ada",
+                  schedule=Schedule.parse(self.SERIES), not_on="DE-BY",
+                  changed=[changed])
+        # where the last window ends, as written: the 28th's, at 06:00
+        self.assertEqual(pin.expires_at, _utc(2026, 11, 29, 5))
+        said = pin.to_dict()
+        self.assertEqual(said["schedule"], self.SERIES)
+        self.assertEqual(said["not_on"], "DE-BY")
+        self.assertEqual(said["changed"], [{
+            "start": "2026-11-07T21:00:00Z", "end": "2026-11-08T06:00:00Z",
+            "note": "the restore runs long", "by": "lex",
+            "at": "2026-11-08T04:00:00Z"}])
+        self.assertEqual(Pin.from_dict(said), pin)
+
+    def test_a_schedule_and_its_parts_are_maintenances_alone(self):
+        from little_sister.schedule import Schedule
+        with self.assertRaisesRegex(ValueError, "has no schedule"):
+            Pin(SILENCED, "flaps", _utc(2026, 1, 1), _utc(2026, 1, 2),
+                level=StatusCode.OK, schedule=Schedule.parse(self.SERIES))
+
+    def test_a_schedule_outside_the_subset_refuses_the_file(self):
+        raw = dict(_pin().to_dict(), path="/db", slug="",
+                   schedule="DTSTART;TZID=Europe/Berlin:20260101T010000\n"
+                            "DURATION:PT8H\nRRULE:FREQ=YEARLY;UNTIL=20261231T000000Z")
+        with self.assertRaisesRegex(ValueError, "not DAILY, WEEKLY or MONTHLY"):
+            PinStore.tables({"pins": [raw]})
+
+    def test_one_in_the_shape_before_schedules_is_dropped_and_nothing_said(self):
+        self_report.startup.forget()
+        self.addCleanup(self_report.startup.forget)
+        old = {"id": "0123456789abcdef", "kind": MAINTENANCE, "note": "planned",
+               "set_at": "2026-01-01T00:00:00Z",
+               "expires_at": "2026-01-08T00:00:00Z", "set_by": "ada", "path": "/db",
+               "slug": ""}
+        seen = dict(Pin(SEEN, "known", _utc(2026, 1, 1), None, "ada",
+                        status=StatusCode.ERROR).to_dict(), path="/db", slug="")
+        held = PinStore.tables({"pins": [old, seen]})
+        self.assertEqual(held.nodes, {})
+        self.assertEqual(list(held.acknowledged), ["/db"])
+        self.assertEqual(held.unknown, 0)
+        with tempfile.TemporaryDirectory() as directory:
+            state = StateLayer(directory)
+            state.write(PINS_FILE, {"pins": [old, seen]})
+            self.assertEqual(PinStore(state).load_all().nodes, {})
+        self.assertEqual([line for line in self_report.startup.lines()
+                          if "pins" in line.slug], [])
+
+    def test_the_same_window_rewritten_later_is_the_same_pin(self):
+        # a save that changes nothing changes nothing, though its write is later: an
+        # edit keeps the entry's creation, which its one window runs from
+        first = Pin(MAINTENANCE, "planned", _utc(2026, 1, 1), _utc(2026, 1, 8))
+        again = Pin(MAINTENANCE, "planned", _utc(2026, 1, 3), _utc(2026, 1, 8),
+                    created_at=_utc(2026, 1, 1))
+        self.assertTrue(first.same_pin_as(again))
+        self.assertEqual(again.schedule.starts_at, _utc(2026, 1, 1))
+        longer = Pin(MAINTENANCE, "planned", _utc(2026, 1, 3), _utc(2026, 1, 9),
+                     created_at=_utc(2026, 1, 1))
+        self.assertFalse(first.same_pin_as(longer))
+
+    def test_a_window_moved_to_start_later_is_another_window(self):
+        # a one-off's start is its own since it can be set ahead (landing 3b): an
+        # edit that moves it changes the pin, its end the same
+        from little_sister.schedule import Schedule
+        first = Pin(MAINTENANCE, "planned", _utc(2026, 1, 1), _utc(2026, 1, 8))
+        zone = first.schedule.zone
+        moved = Pin(MAINTENANCE, "planned", _utc(2026, 1, 3),
+                    schedule=Schedule.one_off(_utc(2026, 1, 2), _utc(2026, 1, 8), zone),
+                    created_at=_utc(2026, 1, 1))
+        self.assertFalse(first.same_pin_as(moved))
+        kept = Pin(MAINTENANCE, "planned", _utc(2026, 1, 3),
+                   schedule=Schedule.one_off(_utc(2026, 1, 1), _utc(2026, 1, 8), zone),
+                   created_at=_utc(2026, 1, 1))
+        self.assertTrue(first.same_pin_as(kept))

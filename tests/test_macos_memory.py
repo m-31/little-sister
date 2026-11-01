@@ -137,24 +137,20 @@ class MacosMemoryCheckTests(TestCase):
             codes.append(self._kids(result)["pressure"].code)
         self.assertEqual(codes, [StatusCode.OK, StatusCode.WARN, StatusCode.ERROR])
 
-    def test_the_retired_thresholds_and_bounds_name_what_replaces_them(self):
+    def test_the_retired_thresholds_and_bounds_stop_the_start_as_unknown_keys(self):
         for keys, said in (
                 ({"thresholds": {"swap": {"warn": 4096, "error": 8192},
                                  "process": {"warn": 1024, "error": 2048}}},
-                 "write max_swap_warn: 4096 MiB, max_swap_error: 8192 MiB — and a "
-                 "watched process's levels, thresholds.process, are max_rss_warn "
-                 "and max_rss_error in its own entry (ADR-0131)"),
+                 "unknown key(s) at the top level: thresholds (macos-memory takes: "),
                 ({"processes": [{"name": "x", "pattern": "a", "warn_mb": 512,
                                  "error_mb": 1024}]},
-                 "processes[1] 'warn_mb' and 'error_mb' are retired: a process's "
-                 "levels are a pair in its entry now, its level the last value that "
-                 "passes — write max_rss_warn: 512 MiB, max_rss_error: 1024 MiB "
-                 "(ADR-0131)")):
+                 "unknown key(s) in processes[1]: error_mb, warn_mb (an entry takes: "
+                 "name, pattern, max_rss, max_rss_warn, max_rss_error, "
+                 "max_rss_reason)")):
             with tempfile.TemporaryDirectory() as directory, \
                     self.assertRaises(CheckError) as caught:
                 self._check(directory, **keys)
-            self.assertTrue(str(caught.exception).endswith(said),
-                            str(caught.exception))
+            self.assertIn(said, str(caught.exception))
 
     def test_missing_proc_keys_are_unavailable(self):
         with tempfile.TemporaryDirectory() as directory:

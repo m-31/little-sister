@@ -1,7 +1,7 @@
 # ADR-0141 — Every pin is one thing with a kind, in one file, and the envelope lists what handles a part
 
 - **Status:** Accepted
-- **Date:** 2026-10-25
+- **Date:** 2026-11-01 (accepted 2026-10-25)
 - **Related:** [ADR-0014](0014-maintenance-persistence.md) (the pin and its file —
   amended), [ADR-0036](0036-addressable-reasons.md) (a line's pin, which the file
   holds beside a node's — amended),
@@ -23,7 +23,17 @@
   does not apply), [ADR-0140](0140-a-nodes-notes-stand-on-a-tab-of-their-own.md) (a
   pin's note, which the file keeps under `note`),
   [ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md) (*seen*,
-  the first acknowledgment)
+  the first acknowledgment),
+  [ADR-0144](0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md)
+  (*silenced*, the third kind — decisions 3 and 4 amended),
+  [ADR-0145](0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)
+  (a note's permission —
+  amended),
+  [ADR-0146](0146-an-event-marked-done-shows-ok-until-its-line-reads-anything-else.md)
+  (*done*, the fourth kind — decisions 3 and 4 amended),
+  [ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)
+  (decision 2: time decides what stands, whether its part is reported now or not),
+  [ADR-0150](0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md) (a maintenance pin's schedule — decision 1 amended)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -56,19 +66,29 @@ come in the second, as kinds of the same pin — *seen* in
 1. **Every pin is in one file, `pins.json`, a list of pins each beside its target.** A
    pin is its kind, its note, who set it last and when, who first did and when, until
    when where it has an end, and its id; its target is a node by its path, or one of its
-   lines by the path and the line's slug, `slug` empty for the node's own. The file is
+   lines by the path and the line's slug, `slug` empty for the node's own. A maintenance
+   pin's end is its schedule's
+   ([ADR-0150](0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md)
+   decision 1): its entry keeps the schedule as RFC 5545 text, `schedule`, with
+   `not_on` and `changed` beside it, and no `expires_at`. The file is
    `{"pins": [{"path", "slug", "id", "kind", …}, …]}` in the order of the targets, so
    the same pins are the same bytes, each time in UTC (ADR-0120). It is written
-   through, carried by a keeper and adopted at a takeover as `maintenance.json` was.
-   `maintenance.json` is not read: a start that finds it without `pins.json` says so
-   once on its `load.` slug, at WARN, as a retired name of ADR-0134's — a pin set
-   before the upgrade holds nothing until it is set again — and leaves it for a
-   rollback. A file this release cannot read takes every pin with it, which fails
-   toward alarming: a time without a zone, a path that is none, a pin without an id or
-   a kind, or two pins of one kind on one place, which no kind allows yet. A pin of a
-   kind this release does not know is skipped and named once — an older standby
-   adopting a newer holder's file keeps every pin it understands (ADR-0032 rule 7), and
-   its next write drops the rest.
+   through, carried by a keeper and adopted at a takeover as `maintenance.json` was,
+   and a start writes it once, after it has replayed the maintenance and the
+   acknowledgments. `maintenance.json` is not read: a start that finds it without
+   `pins.json` says so once on its `load.` slug, at WARN, as a retired name of
+   ADR-0134's — a pin set before the upgrade holds nothing until it is set again — and
+   leaves it for a rollback. A file this release cannot read takes every pin with it,
+   which fails toward alarming: a time without a zone, a path that is none, a pin
+   without an id or a kind, two pins of one kind on one place, which no kind allows
+   yet, or a done without an occurrence or with an end
+   ([ADR-0146](0146-an-event-marked-done-shows-ok-until-its-line-reads-anything-else.md)
+   decision 1). A maintenance entry in the shape before schedules, with an
+   `expires_at`, is dropped as the file is read, with no word, and every other pin reads
+   on; a release from before schedules refuses the file whole. A pin of a kind this
+   release does not know is skipped and named once, as a done is by a release that does
+   not know it — an older standby adopting a newer holder's file keeps every pin it
+   understands (ADR-0032 rule 7), and its next write drops the rest.
 
 2. **A pin has an id, made when it is first set and kept through every edit.** Sixteen
    random hex digits, which two pins never share in practice, and nothing to parse;
@@ -84,27 +104,62 @@ come in the second, as kinds of the same pin — *seen* in
    wall follows (ADR-0135 decision 9). Each item has its `id`, its `kind` — the word
    `contribution.by` says it in — its `source`, `person` or `configuration`, its `note`,
    and `counts_as` in the notation `config/aggregation.yaml` writes a table in,
-   `nothing` for a maintenance pin's part; a pin adds who set it and when, who first did
-   and when it ends, null where it has no end, a configured rule its `file`, the day it
-   stands `since`, its `level`, the lines or children it names and, with a count, how
-   many fail. A `contribution` gains `rule`: the `id` of the item that decided, null for
-   a mechanism — damping, a shield, a node not yet reported — and for a node that is
-   maintenance because every one of its entries is pinned or its check said so.
-   `maintenance`, the one object a pin had, goes: the spec is 3.0.0, the golden answers
-   are `envelope-3.json` and `series-3.json`, and the macOS client takes
-   `schema_version` 3 in the same release. Damping, the shield and *undefined* stay in
-   `contribution.by` alone: no person set them and no file says them, and they draw no
-   block.
+   `nothing` for a maintenance pin's part, a seen's table for a done's and its level's
+   table for a silence's; a pin adds who set it and when, who first did and when it
+   ends, null where it has no end — a done its `status` and its `occurrence` too, and a
+   maintenance pin its window open, `starts_at` and `expires_at`, its time left, a
+   one-off's start and its end, beside `until`, its schedule's end, and `sentence`, the
+   page's words for it — and a configured rule its `file`, the day it stands `since`,
+   its `level`, the lines or children it names and, with a count, how many fail. A
+   `contribution` gains `rule`: the `id` of the item that decided, null for a mechanism
+   — damping, a shield, a node not yet reported — and for a node that is maintenance
+   because every one of its entries is pinned or its check said so. `maintenance`, the
+   one object a pin had, goes, which is a major version: 3.0.0, the golden answers
+   `envelope-3.json` and `series-3.json`, and the macOS client takes `schema_version` 3
+   in the same release. Damping, the shield and *undefined* stay in `contribution.by`
+   alone: no person set them and no file says them, and they draw no block.
+
+   Beside these lists, and never among them, a node says what stands on a part it does
+   not report now and what is planned, each in the order it was set: the page says
+   them, and the snapshot it says them from carries them, so the envelope does
+   ([ADR-0080](0080-the-envelope-is-the-snapshot-published.md) decision 1). A node's
+   `entries` lists beside its `items` `not_reported`: each entry a pin or a person's
+   acknowledgment stands on that the node does not report now — a finding that comes
+   and goes, or every entry of a node whose check failed — with its `slug` and its
+   `handled`, the page's *A line not reported now*. A node lists beside its `children`
+   `nodes_not_reported`: each node beneath it that is not reported now — its check no
+   longer returns it, or has not written it since the start — and that a pin or a
+   person's acknowledgment stands on, listed at the nearest node above it that stands,
+   with its `path`, its `handled` and, on its entries, `not_reported`; the page counts
+   such a node where it is listed, *not reported now*. What stands on either holds
+   nothing until it is reported again, and time decides what stands, whether its part
+   is reported now or not
+   ([ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)
+   decision 2). And a node lists beside its `handled` what is planned, `planned`: its
+   own maintenance entry that stands and holds nothing now and its entries', each with
+   the pin's fields but `counts_as`, its next window, null where none is to open, and
+   `why`; an entry or a node not reported now carries its own in its record, `planned`
+   beside `handled` (ADR-0150 decision 12). *Silenced* and *done*, the third and fourth
+   kinds, and these fields are additive under ADR-0080 decision 1, a minor version:
+   3.1.0.
 
 4. **Every act has a permission of its own, named for the kind it sets.** A route asks
    `Identity.may(<name>)`, never `admin`, and every permission is an admin's until a
    deployment's roles map onto them — which makes that a mapping rather than a rewrite
-   of every route. `maintenance` and `seen`
-   ([ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md)) are
-   the ones there are; `done` and `silenced` come with their kinds. Each act has a route
-   of its own as well: a maintenance pin is set, changed and cleared at
-   `POST /pins/maintenance`, a seen at `POST /pins/seen`, and `POST /maintenance` is
-   gone, while `GET /maintenance` still redirects to *Handled* (ADR-0135 decision 8).
+   of every route. The ones there are: `maintenance`, `seen`
+   ([ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md)),
+   `silenced`
+   ([ADR-0144](0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md)),
+   `done` (ADR-0146), and `note`, a note's, an act though no kind of pin
+   ([ADR-0145](0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)
+   decision 3); a node's *Notes* tab offers in its form the kinds a reader may set.
+   Ending an acknowledgment, or making it another kind, asks the permission of the kind
+   that stands besides the route's own, so making a seen or a silence done, or a done
+   another kind, asks both kinds' permissions. Each act has a route of its own as well:
+   a maintenance pin is set, changed and cleared at `POST /pins/maintenance`, a seen at
+   `POST /pins/seen`, a silence at `POST /pins/silenced` and a done at
+   `POST /pins/done`; `POST /maintenance` is gone, while `GET /maintenance` still
+   redirects to *Handled* (ADR-0135 decision 8).
 
 ## Consequences
 

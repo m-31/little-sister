@@ -36,7 +36,8 @@ from __future__ import annotations
 import hashlib
 import re
 import threading
-from collections import deque
+from bisect import bisect_right
+from collections import Counter, deque
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -54,17 +55,22 @@ from little_sister.aggregation import (
 )
 from little_sister.codes import RANKED, escalates
 from little_sister.details import Detail, Details, Row
+from little_sister.holidays import NO_HOLIDAYS, Holidays
 from little_sister.logger import logger
 from little_sister.pins import (
     ACKNOWLEDGMENTS,
+    DONE,
     MAINTENANCE,
     NO_NOTE,
     SEEN,
+    SILENCED,
+    Changed,
     Pin,
     PinStore,
     PinWrite,
 )
 from little_sister.reasons import ReasonInput
+from little_sister.schedule import Schedule, Window, next_after, open_at, sentence
 from little_sister.status import (
     HEARTBEAT_PATH,
     PATH_SEP,
@@ -95,14 +101,13 @@ STALE_DEGRADE = StatusCode.WARN
 #: anticipates: `aggregation`, `dependency` and `damping` join it as those land.
 MAINTENANCE_RULE = "maintenance"
 
-#: The rule a **damping counter** is, when it holds an escalation back (backlog
-#: #38 B). The second member of the vocabulary above; `aggregation` joins it when
-#: that lands.
+#: The rule a **damping counter** is, when it holds an escalation back (ADR-0083).
+#: The second member of the vocabulary above; `aggregation` joins it when that lands.
 DAMPING_RULE = "damping"
 
 #: The rule a **dependency shield** is: this node is reached through a check that is
 #: failing, so its reading is not believed and its parent counts nothing of it
-#: (backlog #38 A). *We could not get there* rather than *it is broken*.
+#: (ADR-0084). *We could not get there* rather than *it is broken*.
 DEPENDENCY_RULE = "dependency"
 
 #: What a node contributes when its parent counted **nothing** of it because it had
@@ -129,6 +134,108 @@ SEEN_RULE = SEEN
 #: reading at or beneath it is past its tolerance, which escalates under every rule.
 ACCEPTED = Table(((StatusCode.WARN, StatusCode.OK), (StatusCode.ERROR, StatusCode.OK)))
 
+#: The rule a person's **silence** is (ADR-0144): a failure that flaps held at a level
+#: until its deadline, the part keeping its true color. The kind's own word.
+SILENCED_RULE = SILENCED
+
+#: The rule a person's **done** is (ADR-0146): an event looked into and over, its
+#: line showing OK with the failure it closed beside it and counting as ``OK`` in its
+#: node's own status, until the line reads anything other than that failure. The
+#: kind's own word.
+DONE_RULE = DONE
+
+#: What a part a person has silenced counts as above it (ADR-0144), by the level the
+#: silence holds it at: ``OK`` — every failure counting as ``OK``, as a *seen*'s —
+#: or ``WARN``, an error held at a warning; and, through :func:`_mapped`, never less
+#: than a warning where a reading at or beneath it is past its tolerance.
+SILENCED_AT: dict[StatusCode, Table] = {
+    StatusCode.OK: ACCEPTED,
+    StatusCode.WARN: Table(((StatusCode.ERROR, StatusCode.WARN),)),
+}
+
+
+@dataclass(frozen=True)
+class _Held:
+    """What a person's acknowledgment makes of the part it stands on (ADR-0142,
+    ADR-0144): the table its part counts by, and its kind, the rule
+    ``contribution.by`` names. A *seen* counts in place of any configured rule on
+    the part; a silence beside one, the stricter of the two counting
+    (:func:`_stricter`)."""
+    table: Table
+    by: str
+
+
+@dataclass(frozen=True)
+class _Unheld:
+    """What a node a person acknowledged would pass up without the acknowledgment —
+    after the configured rule at its boundary, where one stands — and ``by``, the
+    acknowledgment's kind as ``contribution.by`` names it. A rule counting the node's
+    siblings counts it by this toward its count, so that a part a person holds counts
+    there as it reads (ADR-0144); and beside a silence, a configured rule reads it,
+    the stricter of the two counting (:func:`_ruled`)."""
+    contribution: Contribution | None
+    by: str
+
+
+def acknowledged_table(pin: Pin) -> Table:
+    """What a person's acknowledgment ``pin`` makes its part count as above it: every
+    failure ``OK`` for a *seen* (ADR-0142), and a silence's table by its level
+    (ADR-0144) — the ``counts_as`` its item in the envelope says."""
+    if pin.kind == SILENCED:
+        assert pin.level is not None
+        return SILENCED_AT[pin.level]
+    return ACCEPTED
+
+
+def _held(pin: Pin | None) -> _Held | None:
+    """What the acknowledgment ``pin`` makes of its part, or ``None`` for none."""
+    if pin is None:
+        return None
+    if pin.kind == SILENCED:
+        return _Held(acknowledged_table(pin), SILENCED_RULE)
+    if pin.kind == DONE:
+        return _DONE_HELD
+    return _SEEN_HELD
+
+
+#: What a *seen* makes of its part (ADR-0142): every failure counting as ``OK``.
+_SEEN_HELD = _Held(ACCEPTED, SEEN_RULE)
+
+#: What a *done* makes of its line (ADR-0146): its failure counting as ``OK``, as a
+#: seen's does — the line besides showing OK, which is the done's alone.
+_DONE_HELD = _Held(ACCEPTED, DONE_RULE)
+
+
+def _held_by_row(row: Event) -> _Held:
+    """What the acknowledgment a node's row is of made of the node's own part, as the
+    row says it: its kind from its cause, a silence's level from the row (ADR-0144),
+    and ``OK`` from one that names none."""
+    if row.cause.startswith(f"{SILENCED}-"):
+        return _Held(SILENCED_AT[row.level or StatusCode.OK], SILENCED_RULE)
+    return _SEEN_HELD
+
+
+def _accepted_alone(line: ReasonLine) -> bool:
+    """Whether a person's acceptance stands on ``line`` — a *seen* (ADR-0142) or a
+    *done* (ADR-0146), each of which counts in place of any configured rule on it,
+    where a silence counts beside one (ADR-0144)."""
+    return (line.acknowledgment is not None
+            and line.acknowledgment.kind in (SEEN, DONE))
+
+
+def _done(line: ReasonLine) -> bool:
+    """Whether a *done* decides how ``line`` counts (ADR-0146): the one
+    acknowledgment that changes what its line shows — OK — and no pin over it, which
+    is the louder fact."""
+    return line.accepted and line.acknowledgment is not None and (
+        line.acknowledgment.kind == DONE)
+
+
+def _closes(pin: Pin | None) -> bool:
+    """Whether the acknowledgment ``pin`` is a *done* (ADR-0146) — asked of a line
+    by its address, where :func:`_done` asks it of a line drawn."""
+    return pin is not None and pin.kind == DONE
+
 #: The segment the instance's own branch stands at beneath the root, which no
 #: configured rule reaches (ADR-0137).
 _OWN_BRANCH = HEARTBEAT_PATH.strip("/")
@@ -137,7 +244,8 @@ _OWN_BRANCH = HEARTBEAT_PATH.strip("/")
 #: its check reports, beneath a pin — as against a row of what it showed and
 #: published otherwise. A *seen* is on both sides, as a configured rule is: on a node
 #: it keeps a change its node showed from its parent, and on a line one its check
-#: reported from its node (ADR-0142), so its rows say which themselves.
+#: reported from its node (ADR-0142), so its rows say which themselves — and so do a
+#: *done*'s (ADR-0146), which stands on a line alone.
 #:
 #: The distinction earns its own name because :meth:`StatusTree.history` turns on it,
 #: and getting it wrong is silent. A pinned node showed `MAINTENANCE` throughout, so a
@@ -161,16 +269,26 @@ HIDES_THE_READING = frozenset({MAINTENANCE_RULE})
 #:
 #: A **reading** is a check's run. A node's **pin** is written when it is set, when
 #: it is edited and when it ends — cleared, expired or reaped — whatever that does
-#: to what the node shows. A **line's pin** is written only where it changes what
-#: its node shows, set or ended: nothing is written for a line by itself. A
-#: **removal** is written for each node that leaves the tree. And a wait that ends
+#: to what the node shows. So is a **line's pin**, one row of its node a pin
+#: (ADR-0145 decision 9): it was written only where it changed what its node shows.
+#: A pin's end says why it ended (:attr:`Event.ended`), as an acknowledgment's does.
+#: A **removal** is written for each node that leaves the tree. And a wait that ends
 #: by its count writes that the node's status **reached** the level above.
 CAUSE_READING = "reading"
 CAUSE_PIN_SET = "pin-set"
 CAUSE_PIN_EDITED = "pin-edited"
 CAUSE_PIN_ENDED = "pin-ended"
 CAUSE_LINE_PIN_SET = "line-pin-set"
+CAUSE_LINE_PIN_EDITED = "line-pin-edited"
 CAUSE_LINE_PIN_ENDED = "line-pin-ended"
+#: A window of a maintenance entry opened or closed (ADR-0150): the tick's rows, a
+#: line's beside a node's, written as a set's and an end's are. An entry's last close
+#: is its end, one row (``pin-ended``), and a window open at the moment its entry is
+#: set writes the set alone.
+CAUSE_PIN_OPENED = "pin-opened"
+CAUSE_PIN_CLOSED = "pin-closed"
+CAUSE_LINE_PIN_OPENED = "line-pin-opened"
+CAUSE_LINE_PIN_CLOSED = "line-pin-closed"
 #: A node left the tree: its check said that its children are complete and no
 #: longer returned it (ADR-0109 decision 5).
 CAUSE_REMOVED = "removed"
@@ -203,9 +321,21 @@ CAUSE_SEEN_ENDED = "seen-ended"
 CAUSE_LINE_SEEN_SET = "line-seen-set"
 CAUSE_LINE_SEEN_EDITED = "line-seen-edited"
 CAUSE_LINE_SEEN_ENDED = "line-seen-ended"
+CAUSE_SILENCED_SET = "silenced-set"
+CAUSE_SILENCED_EDITED = "silenced-edited"
+CAUSE_SILENCED_ENDED = "silenced-ended"
+CAUSE_LINE_SILENCED_SET = "line-silenced-set"
+CAUSE_LINE_SILENCED_EDITED = "line-silenced-edited"
+CAUSE_LINE_SILENCED_ENDED = "line-silenced-ended"
+#: A *done* stands on a line alone (ADR-0146), so its rows are a line's.
+CAUSE_LINE_DONE_SET = "line-done-set"
+CAUSE_LINE_DONE_EDITED = "line-done-edited"
+CAUSE_LINE_DONE_ENDED = "line-done-ended"
 
 #: The acts on an acknowledgment that a row names (:func:`acknowledgment_cause`).
 SET, EDITED, ENDED = "set", "edited", "ended"
+#: The two acts a maintenance entry's windows add, a line's rows naming them.
+OPENED, CLOSED = "opened", "closed"
 
 
 def acknowledgment_cause(kind: str, act: str, *, line: bool) -> str:
@@ -221,25 +351,95 @@ ACKNOWLEDGMENT_CAUSES = frozenset(
     for kind in ACKNOWLEDGMENTS for act in (SET, EDITED, ENDED)
     for line in (False, True))
 #: The causes of the rows of an acknowledgment on a node itself, which a replay
-#: reads to say when the node's own part counted as ``OK`` above it.
+#: reads to say when the node's own part counted as its acknowledgment held it.
 _NODE_ACKNOWLEDGMENT_CAUSES = frozenset(
     acknowledgment_cause(kind, act, line=False)
     for kind in ACKNOWLEDGMENTS for act in (SET, EDITED, ENDED))
+#: The cause of a line's maintenance pin's row, by the act (ADR-0145 decision 9).
+_LINE_PIN_CAUSES: dict[str, str] = {SET: CAUSE_LINE_PIN_SET,
+                                    EDITED: CAUSE_LINE_PIN_EDITED,
+                                    ENDED: CAUSE_LINE_PIN_ENDED,
+                                    OPENED: CAUSE_LINE_PIN_OPENED,
+                                    CLOSED: CAUSE_LINE_PIN_CLOSED}
+#: The rows that publish nothing where they change nothing their node shows
+#: (:meth:`StatusTree._emit`): an acknowledgment's (ADR-0142) and a line's pin's,
+#: which is written whatever it does to its node (ADR-0145 decision 9) — what a wait
+#: holds back, such a row still holds, as a pin that changed nothing held it when it
+#: wrote no row (ADR-0108).
+_QUIET_UNCHANGED = ACKNOWLEDGMENT_CAUSES | frozenset(_LINE_PIN_CAUSES.values())
 
-#: Why an acknowledgment ended (ADR-0142), the value :attr:`Event.ended` carries on
-#: the row of its end, so that the log answers why an alarm came back: by a person's
-#: hand; at the end it was given; its part recovered, or reads a failure worse than
-#: the one it was set at; a new occurrence of the failure — a line's identity or the
-#: field its type names, where it is bound to one; or its part is no longer reported
-#: — its line gone from a reading of its node, its node removed, or reading no status.
+#: Why a pin ended (ADR-0142, ADR-0145 decision 9), the value :attr:`Event.ended`
+#: carries on the row of its end, so that the log answers why an alarm came back: by
+#: a person's hand; at the end it was given; its part recovered, or reads a failure
+#: worse than the one it was set at; a new occurrence of the failure — a line's
+#: identity or the field its type names, where it is bound to one; or its part is no
+#: longer reported — its line gone from a reading of its node, its node removed, or
+#: reading no status. A silence ends only at its deadline, by hand, or made another
+#: kind (ADR-0144); a done by hand, made another kind, or as its line reads anything
+#: other than the failure it closed — another event, the same one recovered or worse,
+#: or no line — and never by the clock (ADR-0146); a maintenance pin by hand, at its
+#: end, or reaped at a start where no check covers its path (``gone``).
 ENDED_HAND = "hand"
 ENDED_CLOCK = "clock"
 ENDED_RECOVERY = "recovery"
 ENDED_WORSENING = "worsening"
 ENDED_OCCURRENCE = "occurrence"
 ENDED_GONE = "gone"
+#: An acknowledgment a person's edit made another kind ended, and the other kind was
+#: set in its place, in one write (ADR-0144): a *seen* made a silence or a *done*, a
+#: silence made *seen* or a *done*, a *done* made *seen* or a silence (ADR-0146) — the
+#: word naming the kind it became.
+ENDED_MADE: dict[str, str] = {SEEN: "made-seen", SILENCED: "made-silenced",
+                              DONE: "made-done"}
 ENDINGS = frozenset({ENDED_HAND, ENDED_CLOCK, ENDED_RECOVERY, ENDED_WORSENING,
-                     ENDED_OCCURRENCE, ENDED_GONE})
+                     ENDED_OCCURRENCE, ENDED_GONE, *ENDED_MADE.values()})
+#: Why a pin ended as every surface says it after the act (ADR-0142, ADR-0145
+#: decision 6): the Events page's chip — *seen ended · worse* — a Notes tab's entry
+#: and the Copy document's.
+ENDED_WORDS: Mapping[str, str] = {
+    ENDED_HAND: "by hand",
+    ENDED_CLOCK: "at its end",
+    ENDED_RECOVERY: "recovered",
+    ENDED_WORSENING: "worse",
+    ENDED_OCCURRENCE: "a new occurrence",
+    ENDED_GONE: "no longer reported",
+    ENDED_MADE[SILENCED]: "made a silence",
+    ENDED_MADE[SEEN]: "made seen",
+    ENDED_MADE[DONE]: "made done",
+}
+
+#: Who hears of every pin the tree ends (ADR-0145 decision 4), with what a pin's note
+#: records of it: the node's path, the line's slug — empty for the node's own — the
+#: pin, why it ended in the log's words (:data:`ENDINGS`), who ended it where a person
+#: did, and when. An adoption at a takeover tells nobody: what it ends, the holder
+#: ended, and the notes it adopts with the pins say so already.
+PinEnd = Callable[[str, str, Pin, str, str, datetime], object]
+
+
+@dataclass(frozen=True)
+class WindowSeen:
+    """What the tree saw of a maintenance entry's windows (ADR-0150), as it tells who
+    listens (:meth:`StatusTree.on_window`): at ``when``, the entry ``pin`` on the node
+    at ``path`` — on its line ``slug``, empty for the node's own — and the window of it
+    that holds, which began to hold at ``start`` — its own start, or the entry's
+    creation where it was open as the entry was made — until ``until`` as it stands;
+    or, ``start`` ``None``, none. Where a window that held holds no more, it closed for
+    ``why``, in the log's words (:data:`ENDINGS`), by ``by`` where a person closed
+    it."""
+    path: str
+    slug: str
+    pin: Pin
+    when: datetime
+    start: datetime | None = None
+    until: datetime | None = None
+    why: str = ""
+    by: str = ""
+
+
+#: Who hears what the tree sees of the windows (:class:`WindowSeen`), told under its
+#: lock in the write that opens, closes or replays one: a set, an edit, a tick, a
+#: start's replay — never an adoption at a takeover, whose notes come with its pins.
+WindowTold = Callable[[WindowSeen], object]
 
 #: What a removal's row says for its reason: nothing about the node changed but
 #: that it is gone, and this is why.
@@ -253,6 +453,111 @@ NO_LONGER_REPORTED = "no longer reported by its check"
 #: than on a quiet one.
 CHANGE_WINDOW_SECONDS = 3600.0
 STALE_MIN_GRACE_SECONDS = 30.0
+
+
+@dataclass(frozen=True)
+class Shut:
+    """What of a maintenance entry's windows its holiday list stops (ADR-0149 decision
+    3, ADR-0150 decision 4), the entry standing all the same until its own end: every
+    one, where the list cannot be had — ``why_not`` the startup record's words for it
+    — or those from ``year`` on, the first year a window of its rule starts in that
+    the list does not state, which begins at ``begins``, an instant; and where it stops
+    neither, ``list_key`` alone, every window left being on a day the list names."""
+    list_key: str
+    why_not: str = ""
+    year: int = 0
+    begins: datetime | None = None
+
+    def said(self, at: Callable[[datetime], str]) -> str:
+        """The words a page writes where the entry is listed, and the envelope's
+        ``why``, ``at`` writing an instant as that page does (decision 6 of #35's
+        note): *applies not at all* and why, or from when its windows stop."""
+        if self.why_not:
+            return f"applies not at all: {self.why_not}"
+        if self.year and self.begins is not None:
+            return (f"from {at(self.begins)} its windows do not apply: the list is "
+                    f"not complete for {self.year}")
+        return "no window is to open: each one left is on a day its list names"
+
+
+@dataclass(frozen=True)
+class Planned:
+    """A maintenance entry that stands and holds nothing now (ADR-0150): its ``pin``,
+    the ``next`` window to open — ``None`` where none is to — and ``shut``, what of its
+    windows its holiday list stops, where it stops any. Listed apart from what holds
+    and counted nowhere: the door, the pill, the chips and the healthy fold read what
+    holds, and a planned window holds nothing until it opens."""
+    pin: Pin
+    next: Window | None = None
+    shut: Shut | None = None
+
+
+@dataclass(frozen=True)
+class OpenWindow:
+    """The window of a maintenance entry open now, as its block's two rows say it
+    (ADR-0150, landing 4): the ``window``, its end the time left; who extended it,
+    where an extension stands on it (``extended_by``); the ``next`` window to open
+    after it, ``None`` where none is to; whether it is its schedule's ``last``, no
+    window of its own text coming after it, which makes *End now* the entry's end; and
+    ``shut``, what of the windows after it its holiday list stops, where it stops
+    any."""
+    window: Window
+    extended_by: str = ""
+    next: Window | None = None
+    last: bool = False
+    shut: Shut | None = None
+
+
+@dataclass(frozen=True)
+class ListStop:
+    """What a holiday list stops of the maintenance entries that stand (ADR-0149
+    decision 3, ADR-0150): its ``list_key``; ``why_not``, where it cannot be had and
+    stops every window of each entry that names it; or the ``year`` it is not complete
+    for, in which a window of each entry's rule starts; and how many ``entries`` it
+    stops so."""
+    list_key: str
+    entries: int
+    why_not: str = ""
+    year: int = 0
+
+
+#: Why an *Extend* or an *End now* changed nothing (ADR-0150, landing 4): the window
+#: it names closed before it arrived — nothing reopens a window by itself — or the
+#: end it asks for is not later than the window's own, and *Extend* never shortens.
+WINDOW_CLOSED = "closed"
+NOT_LATER = "not later"
+
+
+@dataclass(frozen=True)
+class EntryWords:
+    """How a maintenance entry is said wherever it is listed (ADR-0150): ``at`` writes
+    an instant as that surface writes every instant — a page in the deployment's zone
+    and time format, a copied document with its offset too — ``zone`` is that
+    surface's zone, by name, and ``list_name`` reads a holiday list's key as the name
+    it has after *not on*, the key itself where the list cannot be had. One for each
+    surface, so that the page, the envelope and the Copy document say an entry in the
+    one function's words (``schedule.sentence``). ``moment`` is when the surface is
+    drawn, from which a sentence says only what is still ahead — the clock's where none
+    is given."""
+    at: Callable[[datetime], str]
+    zone: str
+    list_name: Callable[[str], str] = str
+    moment: datetime | None = None
+
+    def sentence(self, pin: Pin) -> str:
+        """The entry's sentence, until its end — the last window its own text writes
+        (ADR-0150 decision 4) — saying of what it adds and leaves out by hand only
+        what is still ahead (landing 4)."""
+        assert pin.schedule is not None and pin.expires_at is not None
+        return sentence(pin.schedule, until=pin.expires_at, at=self.at,
+                        zone=self.zone,
+                        not_on=self.list_name(pin.not_on) if pin.not_on else "",
+                        after=self.moment or instants.now())
+
+    def why(self, planned: Planned) -> str:
+        """Why no window of a planned entry is to open, or from when its windows
+        stop; empty where its list stops none."""
+        return "" if planned.shut is None else planned.shut.said(self.at)
 
 
 @dataclass(frozen=True)
@@ -302,15 +607,23 @@ class ReasonLine:
     #: keeps its true color under the rule's mark. A line a person has seen is the
     #: person's, and carries none.
     rule: RuleAt | None = None
-    #: The acknowledgment on this line, where one stands (ADR-0142): a *seen*, the
+    #: The acknowledgment on this line, where one stands: a *seen* (ADR-0142), the
     #: line keeping its true color under a ringed check and counting as ``OK`` in its
-    #: node's own status. Suspended, as a line's pin is, while its node's lines are no
-    #: members — a check error stands in for them.
+    #: node's own status, or a silence (ADR-0144), the line keeping it under a bell
+    #: struck through and counting as its level holds it — ``OK``, or a warning at
+    #: most. Suspended, as a line's pin is, while its node's lines are no members — a
+    #: check error stands in for them.
     acknowledgment: Pin | None = None
     #: What tells this line's failure from the next one (ADR-0142), as its check
     #: wrote it: the field its type names, else its reading's identity; empty where
     #: nothing does.
     occurrence: str = ""
+    #: The window of ``maintenance`` that is open (ADR-0150): its end the time left,
+    #: which a series' schedule, standing a year, is not. ``None`` where no pin holds.
+    window: Window | None = None
+    #: The maintenance entry on this line that stands and holds nothing now, its next
+    #: window to come (ADR-0150): listed apart, and changing nothing the line counts.
+    planned: Planned | None = None
 
     @property
     def accepted(self) -> bool:
@@ -334,15 +647,16 @@ def failing_first(lines: Iterable[ReasonLine]) -> list[ReasonLine]:
     is silenced (ADR-0041); so does a line with no code of its own, which says
     nothing for itself (ADR-0042). A failure a person has seen comes after the ones
     nobody has, and before the rest (ADR-0142): it keeps its color, and is no longer
-    the reason for the box's. Where nothing clips the lines — a node's own on its
-    page, the Copy documents — the check's order stands, and this is not asked.
+    the reason for the box's. A line a person marked done shows OK, and counts among
+    the rest (ADR-0146). Where nothing clips the lines — a node's own on its page, the
+    Copy documents — the check's order stands, and this is not asked.
     """
     errors: list[ReasonLine] = []
     warnings: list[ReasonLine] = []
     accepted: list[ReasonLine] = []
     rest: list[ReasonLine] = []
     for line in lines:
-        code = None if line.quiet else line.code
+        code = None if line.quiet or _done(line) else line.code
         if code in (StatusCode.ERROR, StatusCode.WARN) and line.accepted:
             accepted.append(line)
         elif code is StatusCode.ERROR:
@@ -437,6 +751,37 @@ class RunFacts:
                 self.next_run_at, "a run's next_run_at"))
 
 
+
+@dataclass(frozen=True)
+class NodeNotReported:
+    """A node no node stands at now, and what stands on it
+    (``StatusSnapshot.nodes_not_reported``): its path, its own pin and a person's
+    acknowledgment on it, either absent, and what stands on its lines — each its slug
+    alone, no text and no code, its pin and its acknowledgment, in the order they were
+    set — as a line its node does not report now is carried
+    (``StatusSnapshot.not_reported``).
+
+    Its check no longer reports it — a node that says its children are complete left
+    it out (ADR-0109) — or has not written it since the start, which leaves every node
+    for the next run to write. Its words are *not reported now*, which hold for both,
+    never *removed*. A pin is held against its path and makes no node (ADR-0109
+    decision 4), so what stands on such a path stands, holding nothing until a node is
+    reported there again, and is counted where it stands, beside the nearest node above
+    it that stands (ADR-0147 decision 2).
+    """
+    path: str
+    maintenance_entry: Pin | None = None
+    acknowledgment: Pin | None = None
+    not_reported: tuple[ReasonLine, ...] = ()
+    #: The window of ``maintenance_entry`` that is open, as a node's
+    #: (``StatusSnapshot.maintenance_window``).
+    maintenance_window: Window | None = None
+    #: The node's own entry that stands and holds nothing now, as a node's
+    #: (``StatusSnapshot.planned_entry``): such a record stands for a planned window
+    #: alone too.
+    planned_entry: Planned | None = None
+
+
 @dataclass(frozen=True)
 class StatusSnapshot:
     """Immutable copy of a node and its subtree, safe to read outside the lock.
@@ -528,10 +873,20 @@ class StatusSnapshot:
     show_when_quiet: bool | None = None
     maintenance: bool = False
     maintenance_entry: Pin | None = None
-    #: The acknowledgment on the node itself, where one stands (ADR-0142): a *seen*
-    #: of a failure its own reading says, the node keeping its color under a ringed
-    #: check while its parent counts its own part as ``OK`` — ``contribution`` says
-    #: so, where that changes what is counted.
+    #: The window of ``maintenance_entry`` that is open (ADR-0150): the node's time
+    #: left is its end, never a series' schedule's a year away. ``None`` where no pin
+    #: holds.
+    maintenance_window: Window | None = None
+    #: The node's own maintenance entry that stands and holds nothing now (ADR-0150):
+    #: a window planned, or a series between two, with its next window. Listed apart
+    #: from ``maintenance_entry`` and counted nowhere — an entry stands in one place at
+    #: a time, as in the envelope's ``handled`` and ``planned``.
+    planned_entry: Planned | None = None
+    #: The acknowledgment on the node itself, where one stands: a *seen* of a failure
+    #: its own reading says (ADR-0142), the node keeping its color under a ringed
+    #: check while its parent counts its own part as ``OK``, or a silence (ADR-0144),
+    #: under a bell struck through, its own part counting as its level holds it —
+    #: ``contribution`` says so, where that changes what is counted.
     acknowledgment: Pin | None = None
     stale: bool = False
     #: How old this node's own reading may get before ``stale`` turns true — the
@@ -545,6 +900,31 @@ class StatusSnapshot:
     children: tuple[StatusSnapshot, ...] = ()
     reasons: tuple[ReasonLine, ...] = ()
     members: bool = False
+    #: The lines a pin or a person's acknowledgment stands on that the run does not
+    #: report now — a finding that comes and goes, or every line of a node whose lines
+    #: are no members, a check's error standing in for them — each its slug alone, no
+    #: text and no code, its pin and its acknowledgment, in the order they were set.
+    #: **Never among** :attr:`reasons`: the fold, a part's count and color and the
+    #: failure budget walk those, and these are no lines now. What stands on one holds
+    #: nothing until its line is reported again — suspended, not deleted (ADR-0036
+    #: decision 6, ADR-0144 decision 5) — and is joined here, once, beside the lines
+    #: it was set on, so that every surface that says what stands on a node reads it
+    #: from the one snapshot (ADR-0080 decision 1): a part :func:`handled_parts`
+    #: lists, and the envelope's ``entries.not_reported``.
+    not_reported: tuple[ReasonLine, ...] = ()
+    #: The nodes beneath this one that no node stands at now and that something stands
+    #: on — a pin or a person's acknowledgment, on the node or on one of its lines —
+    #: each beside the nearest node above it that stands, which is this one, in the
+    #: order what stands on each was first set (:class:`NodeNotReported`). **Never
+    #: among** :attr:`children`: the roll-up, a chip's counts, the healthy fold and the
+    #: failure budget walk those, and these are no nodes now. What stands on one holds
+    #: nothing until a node is reported at its path again — its check no longer reports
+    #: it, or has not written it since the start — and is joined here, once, so that
+    #: every surface that says what stands reads it from the one snapshot (ADR-0080
+    #: decision 1): parts :func:`handled_parts` lists, counted by this node's door, and
+    #: the envelope's ``nodes_not_reported``. A node whose whole branch is gone stands
+    #: beside the root.
+    nodes_not_reported: tuple[NodeNotReported, ...] = ()
     run: RunFacts | None = None
     #: What this node's **parent counted**, where that is not this node's ``code``,
     #: and the rule that made it so — ``None`` in the ordinary case, which is most
@@ -706,7 +1086,7 @@ class StatusSnapshot:
 #
 # One vocabulary over what a node counts for itself, which the chip's counts, the
 # healthy fold and, from stage 4, the failure budget read — so that the round on
-# maintenance and aggregation changes them once (backlog #91, §7.9).
+# maintenance and aggregation changes them once (ADR-0127 decisions 2, 4 and 5).
 
 #: The states a chip counts, in the order its glyphs are drawn: ● ▲ ‖ ✓ ○.
 COUNTED_STATES: tuple[str, ...] = ("error", "warn", "maintenance", "ok", "idle")
@@ -737,9 +1117,12 @@ def line_counts_as(node: StatusSnapshot, line: ReasonLine) -> str:
     """The state a line counts for: its own code (ADR-0042), or, having none, the
     code its node rolls up to; a pinned line is in maintenance (ADR-0041). A line a
     configured rule decides keeps its true color (ADR-0137): having no code of its
-    own, it is the reading the rule read, which its node may no longer show."""
+    own, it is the reading the rule read, which its node may no longer show. A line
+    a person marked done is the OK it shows (ADR-0146)."""
     if line.quiet:
         return "maintenance"
+    if _done(line):
+        return "ok"
     if line.code is not None:
         return _STATE_OF[line.code]
     if line.rule is not None and line.rule.reads is not None:
@@ -756,12 +1139,15 @@ def failing(node: StatusSnapshot) -> bool:
 
 def pin_beneath(node: StatusSnapshot) -> bool:
     """Whether a person's rule stands on this node or beneath it: a pin or an
-    acknowledgment on the node, on one of its lines, or on any node of its
-    subtree."""
+    acknowledgment on the node, on one of its lines, or on any node of its subtree —
+    but a *done*, a red a person declared over, which shows OK and which the healthy
+    fold takes as what it shows (ADR-0146): it ends the moment its line reads
+    anything other than the failure it closed."""
     if (node.maintenance or node.maintenance_entry is not None
             or node.acknowledgment is not None):
         return True
-    if any(line.quiet or line.acknowledgment is not None for line in node.reasons):
+    if any(line.quiet or (line.acknowledgment is not None and not _done(line))
+           for line in node.reasons):
         return True
     return any(pin_beneath(child) for child in node.children)
 
@@ -826,26 +1212,149 @@ def healthy(node: StatusSnapshot) -> bool:
     """What the healthy fold folds (ADR-0127 decision 4): a node whose code is
     ``OK``, nothing beneath it stale, no pin on it or beneath it, and no configured
     rule changing a count on it or beneath it — only what is truly OK (ADR-0135
-    decision 9, ADR-0137)."""
+    decision 9, ADR-0137) — a *done* taken as the OK it shows (ADR-0146)."""
     return (node.code is StatusCode.OK and not node.stale and not pin_beneath(node)
             and not ruled_beneath(node))
 
 
 def line_healthy(node: StatusSnapshot, line: ReasonLine) -> bool:
     """A line is healthy when its own code is ``OK``, or, having none, when the code
-    its node rolls up to is, no pin covers it — the node's own, or the line's — and
-    no configured rule changes how it counts."""
+    its node rolls up to is, no pin covers it — the node's own, or the line's — no
+    person's acknowledgment stands on it, which a silence does through a recovery
+    (ADR-0144), and no configured rule changes how it counts. **A line marked done is
+    healthy**, the OK it shows (ADR-0146): the fold's one exception, as a done is the
+    one acknowledgment that does not keep its line's true color."""
     if line.quiet or node.maintenance or node.maintenance_entry is not None:
         return False
-    if _acts(line.rule):
+    if _done(line):
+        return True
+    if line.acknowledgment is not None or _acts(line.rule):
         return False
     code = line.code if line.code is not None else node.code
     return code is StatusCode.OK
 
 
+def line_contribution(line: ReasonLine, node: StatusSnapshot) -> Contribution | None:
+    """What a line's node counts of it, and the rule that made it so, where that is
+    not the line as it reads (ADR-0137) — the virtual child's
+    :attr:`StatusSnapshot.contribution`, which the envelope's entry carries and a
+    line's rail draws (ADR-0143): a pin counts nothing of it, a person's *seen*
+    counts its failure as ``OK`` (ADR-0142), and so does a *done* (ADR-0146), a
+    silence what its level makes of it beside a configured rule, the stricter of the
+    two (ADR-0144), and a configured rule what its table makes of it."""
+    if line.maintenance is not None:
+        return Contribution(None, MAINTENANCE_RULE, line.maintenance.id)
+    if line.acknowledgment is not None:
+        reads = _line_reads(line, node)
+        if line.acknowledgment.kind == SILENCED:
+            return _line_silenced(line, line.acknowledgment, reads)
+        if reads in _FAILURES:
+            return Contribution(StatusCode.OK, line.acknowledgment.kind,
+                                line.acknowledgment.id)
+        return None
+    if line.rule is None or not line.rule.changes:
+        return None
+    return Contribution(line.rule.counts, AGGREGATION_RULE, line.rule.rule.name)
+
+
+def _beside_silence(line: ReasonLine, mark: RuleAt) -> RuleAt:
+    """Where the configured rule deciding ``line`` stands on it (ADR-0137) once a
+    person's silence on the line has had its say (ADR-0144): as the rule makes it,
+    unless the silence counts the line for less, the stricter deciding — and then
+    the rule changes nothing now, reading the line and counting it as it reads."""
+    pin = line.acknowledgment
+    if not line.accepted or pin is None or pin.kind != SILENCED or mark.reads is None:
+        return mark
+    assert pin.level is not None
+    held = SILENCED_AT[pin.level].counts(mark.reads)
+    if mark.counts is None or held is None or not escalates(held, mark.counts):
+        return mark
+    return replace(mark, counts=mark.reads, changes=False)
+
+
+def _line_silenced(line: ReasonLine, pin: Pin, reads: StatusCode
+                   ) -> Contribution | None:
+    """What a line's node counts of it where a person's silence ``pin`` stands on it
+    (ADR-0144): the stricter cap of what its level and a configured rule on the line
+    make of what it ``reads`` — the silence's where the line counts for less under it,
+    the rule's otherwise, and the silence's alone without one — and nothing where that
+    is what it reads."""
+    assert pin.level is not None
+    held = SILENCED_AT[pin.level].counts(reads)
+    configured = line.rule.counts if line.rule is not None else reads
+    if configured is not None and held is not None and escalates(held, configured):
+        return None if held is reads else Contribution(held, SILENCED_RULE, pin.id)
+    if configured is reads:
+        return None
+    assert line.rule is not None
+    return Contribution(configured, AGGREGATION_RULE, line.rule.rule.name)
+
+
+def _line_reads(line: ReasonLine, node: StatusSnapshot) -> StatusCode:
+    """What a line reads: the code its check declared, or, having none, its node's
+    reported code (ADR-0042)."""
+    return line.code if line.code is not None else node.reported_code
+
+
+def line_shows(node: StatusSnapshot, line: ReasonLine) -> StatusCode:
+    """What a line shows: maintenance where a pin stands on it (ADR-0041), OK where
+    a person marked it done — the one acknowledgment that does not keep a line's
+    true color, its failure beside the OK (ADR-0146) — and what it reads otherwise:
+    the code its check declared, or, having none, its node's reported code."""
+    if line.quiet:
+        return StatusCode.MAINTENANCE
+    if _done(line):
+        return StatusCode.OK
+    return _line_reads(line, node)
+
+
+#: The states a rail is drawn in (ADR-0143): what a part counts as one level up,
+#: where that is not what it shows — ``nothing`` for a part counted as nothing.
+RAIL_STATES: tuple[str, ...] = ("ok", "warn", "error", "nothing")
+
+
+def _rail(counted: StatusCode, shows: StatusCode) -> str | None:
+    """The state of :data:`RAIL_STATES` a part's rail is drawn in, given what one
+    level up counts of it and what it shows — or ``None`` where the two are one. A
+    part counted as nothing draws ``nothing``, unless it is in maintenance or not
+    reported, which count nothing by themselves (ADR-0039) and so count as they
+    show."""
+    nothing = (StatusCode.MAINTENANCE, StatusCode.UNDEFINED)
+    if counted is shows or (counted in nothing and shows in nothing):
+        return None
+    if counted in nothing:
+        return "nothing"
+    return _STATE_OF[counted]
+
+
+def node_rail(node: StatusSnapshot) -> str | None:
+    """The state a node's box draws its rail in (ADR-0143): what its parent counts
+    of it (:attr:`StatusSnapshot.counted`) where that is not what it shows — a node
+    seen for itself with nothing failing beneath it, one a configured rule counts
+    otherwise, one a damping counter still holds back and one a shield leaves out —
+    or ``None``."""
+    return _rail(node.counted, node.code)
+
+
+def line_rail(node: StatusSnapshot, line: ReasonLine) -> str | None:
+    """The state a line draws its rail in (ADR-0143): what its node counts of it
+    (:func:`line_contribution`) where that is not what it shows — a seen failure as
+    ``ok``, what a configured rule's table makes of it — or ``None``. A pinned line
+    shows maintenance and counts nothing, which is what maintenance counts, so it
+    draws none; nor does a line marked done, which shows OK and counts as OK
+    (ADR-0146)."""
+    contribution = line_contribution(line, node)
+    if contribution is None:
+        return None
+    shows = line_shows(node, line)
+    counted = (contribution.code if contribution.code is not None
+               else StatusCode.UNDEFINED)
+    return _rail(counted, shows)
+
+
 def own_failure(node: StatusSnapshot) -> str | None:
     """What a node fails with **for itself**, as the failure budget reads it
-    (backlog #91 §3.3, §7.9): ``error`` or ``warn``, by what it counts for itself — a
+    (ADR-0127 decision 5): ``error`` or ``warn``, by what it counts for itself — a
     leaf's reading, a stale one as the warning it counts as, and a branch's own,
     whatever its children say — or ``None``. A node a damping counter still holds
     back from its parent is no failure until it escalates, and a pinned one counts as
@@ -866,17 +1375,36 @@ def own_failure(node: StatusSnapshot) -> str | None:
 
 #: What rules handle beneath a closed node that its counts do not show as such, in
 #: the order a chip's words say them, each as one part and as many (ADR-0135
-#: decision 6): a pinned branch, which the counts pass over, a line's pin, a part a
-#: person has seen (ADR-0142), and a part a configured rule changes the count of
-#: (ADR-0137) — a node, or a line, which keeps its true color among the counts as a
-#: seen one does. *Done* and *silenced* come with their kinds.
-HANDLED_ORDER: tuple[str, ...] = ("node", "line", SEEN, "rule")
+#: decision 6): a pinned branch, which the counts pass over, a line's pin, a line a
+#: person marked done, which the counts take as the OK it shows (ADR-0146), a part a
+#: person has seen (ADR-0142), a part a person has silenced (ADR-0144), and a part a
+#: configured rule changes the count of (ADR-0137) — a node, or a line, which keeps
+#: its true color among the counts as a seen one does.
+HANDLED_ORDER: tuple[str, ...] = ("node", "line", DONE, SEEN, SILENCED, "rule")
 _HANDLED_WORDS: dict[str, tuple[str, str]] = {
     "node": ("node in maintenance", "nodes in maintenance"),
     "line": ("line in maintenance", "lines in maintenance"),
+    DONE: ("done", "done"),
     SEEN: ("seen", "seen"),
+    SILENCED: ("silenced", "silenced"),
     "rule": ("by a rule", "by a rule"),
 }
+
+
+def handled_said(by_kind: Mapping[str, int]) -> str:
+    """What is handled, counted, in the one form every count of it says — a closed
+    chip's ◇, a node's door and its *Notes* tab (ADR-0147 decision 2): *3 handled: 1
+    line in maintenance, 2 seen*, each kind of part in :data:`HANDLED_ORDER`, and
+    empty where nothing is."""
+    said = []
+    for kind in HANDLED_ORDER:
+        count = by_kind.get(kind, 0)
+        if count:
+            one, many = _HANDLED_WORDS[kind]
+            said.append(f"{count:,} {one if count == 1 else many}")
+    if not said:
+        return ""
+    return f"{sum(by_kind.values()):,} handled: " + ", ".join(said)
 
 
 @dataclass(frozen=True)
@@ -901,16 +1429,8 @@ class ChipCounts:
     def handled_words(self) -> str:
         """The diamond in words: *3 handled: 1 node in maintenance, 2 lines in
         maintenance*, each kind of part handled, in :data:`HANDLED_ORDER`; empty
-        where nothing is."""
-        said = []
-        for kind in HANDLED_ORDER:
-            count = self.handled_by.get(kind, 0)
-            if count:
-                one, many = _HANDLED_WORDS[kind]
-                said.append(f"{count:,} {one if count == 1 else many}")
-        if not said:
-            return ""
-        return f"{self.handled:,} handled: " + ", ".join(said)
+        where nothing is (:func:`handled_said`)."""
+        return handled_said(self.handled_by)
 
     @property
     def total(self) -> int:
@@ -959,16 +1479,28 @@ def handled_beneath(node: StatusSnapshot) -> dict[str, int]:
     branch** is not, whatever stands beneath it, and is one node in maintenance
     here, its own lines' pins with it. A **line's pin** is one line in maintenance
     wherever its node is not ‖ among the counts. A leaf's own chip counts its lines,
-    a pinned one as ‖, so nothing of a leaf's pins is handled out of sight.
+    a pinned one as ‖, so nothing of a leaf's pins on the lines it reports is handled
+    out of sight; a **line its node does not report now** is in no count, and what
+    stands on it is counted here wherever its node is not ‖ as a whole, the chip's
+    own leaf among them (``StatusSnapshot.not_reported``). A **node not reported now**
+    is in no count either, and what stands on it is counted here as a branch's would
+    be — its pin one node in maintenance, its lines' pins with it, or else each line's
+    pin one line — beside the nearest node above it that stands
+    (``StatusSnapshot.nodes_not_reported``).
 
     **A part a configured rule changes the count of** (ADR-0137) is one handled by
     a rule wherever it stands, the chip's own node and a leaf's own lines among
     them: it keeps its true color among the counts, and the color it passes up is
     what the counts do not show — a node whose parent counts it otherwise, by its
     own rule or by its parent's count over children, and a line its node counts
-    otherwise. **A part a person has seen** (ADR-0142) is the same, a node or a line
-    wherever it stands, while its acknowledgment stands."""
-    nodes = lines = ruled = seen = 0
+    otherwise. **A part a person has seen or silenced** (ADR-0142, ADR-0144) is the
+    same, a node or a line wherever it stands, while its acknowledgment stands, by
+    its kind — and a configured rule beside a silence is counted where it decides
+    what the part counts as, the stricter of the two, as :func:`rules_beneath` lists
+    them both. **A line a person marked done** (ADR-0146) is counted among the OK it
+    shows, and here as done."""
+    nodes = lines = ruled = 0
+    accepted = dict.fromkeys(sorted(ACKNOWLEDGMENTS), 0)
     stack = [node]
     while stack:
         current = stack.pop()
@@ -976,17 +1508,39 @@ def handled_beneath(node: StatusSnapshot) -> dict[str, int]:
             ruled += 1
         ruled += sum(1 for line in current.reasons if _acts(line.rule))
         if current.acknowledgment is not None:
-            seen += 1
-        seen += sum(1 for line in current.reasons if line.accepted)
+            accepted[current.acknowledgment.kind] += 1
+        for line in (*current.reasons, *current.not_reported):
+            if line.accepted:
+                assert line.acknowledgment is not None
+                accepted[line.acknowledgment.kind] += 1
+        # a node not reported now is in no count: what stands on it is counted here as
+        # a branch's is — its pin one node in maintenance, its lines' pins with it, or
+        # else each line's pin a line — and each acknowledgment by its kind
+        for gone in current.nodes_not_reported:
+            if gone.acknowledgment is not None:
+                accepted[gone.acknowledgment.kind] += 1
+            for line in gone.not_reported:
+                if line.accepted:
+                    assert line.acknowledgment is not None
+                    accepted[line.acknowledgment.kind] += 1
+            if gone.maintenance_entry is not None:
+                nodes += 1
+            else:
+                lines += sum(1 for line in gone.not_reported if line.quiet)
+        away = sum(1 for line in current.not_reported if line.quiet)
         if current.children:
             if current.maintenance_entry is not None:
                 nodes += 1
             else:
-                lines += sum(1 for line in current.reasons if line.quiet)
+                lines += sum(1 for line in current.reasons if line.quiet) + away
             stack.extend(current.children)
-        elif current is not node and counts_as(current) != "maintenance":
-            lines += sum(1 for line in current.reasons if line.quiet)
-    handled = {"node": nodes, "line": lines, SEEN: seen, "rule": ruled}
+        elif counts_as(current) != "maintenance":
+            # a leaf's own chip counts the lines its run reports, a pinned one as ‖,
+            # and none counts a line it does not report now
+            if current is not node:
+                lines += sum(1 for line in current.reasons if line.quiet)
+            lines += away
+    handled = {"node": nodes, "line": lines, **accepted, "rule": ruled}
     return {kind: count for kind, count in handled.items() if count}
 
 
@@ -995,13 +1549,18 @@ class HandledRule:
     """A rule that stands beneath a node, as the node's *why* card and its Copy
     document list it under its job (ADR-0135 decision 7): the node it stands on and
     that node's path beneath the one it is listed for, the stored pin, and for a
-    line's pin the line's slug and text. ``reads`` is what its part reads under it
-    where that is a failure — what the part would count as without it.
+    line's pin the line's slug and text — no text for a line its node does not
+    report now, whose pin holds nothing until it does (ADR-0036 decision 6).
+    ``reads`` is what its part reads under it where that is a failure — what the
+    part would count as without it. ``gone`` says that no node stands at ``path`` now
+    (:class:`NodeNotReported`): its part, the node or one of its lines, is said as
+    *not reported now*, and reads nothing.
 
     A configured rule (ADR-0137) is listed once for each part it changes the count
     of now, with ``rule`` where it stands on that part, in place of a pin: a node
     whose parent counts it otherwise, or one of its lines. An acknowledgment
-    (ADR-0142) is a pin of its kind, on a node or one of its lines."""
+    (ADR-0142) is a pin of its kind, on a node or one of its lines. A maintenance pin
+    carries its ``window`` open (ADR-0150), whose end is its time left."""
 
     path: str
     name: str
@@ -1010,64 +1569,257 @@ class HandledRule:
     line: str = ""
     reads: StatusCode | None = None
     rule: RuleAt | None = None
+    gone: bool = False
+    window: Window | None = None
+
+    @property
+    def ends(self) -> datetime | None:
+        """When it ends by itself: a maintenance pin's window open, else its own
+        end — none for a configured rule, which stands for good."""
+        if self.window is not None:
+            return self.window.end
+        return None if self.entry is None else self.entry.expires_at
 
     @property
     def job(self) -> str:
         """Its job, as the *why* card groups it and the mark it is drawn with: the
-        pin's kind — ``maintenance``, ``seen`` — or ``aggregation`` for a configured
-        rule."""
+        pin's kind — ``maintenance``, ``seen``, ``silenced`` — or ``aggregation`` for a
+        configured rule. A *done* does the accepted job a *seen* does, under the same
+        ringed check (ADR-0135 decision 1, ADR-0146), and is grouped with it; its
+        words are its kind's."""
         if self.rule is not None:
             return AGGREGATION_RULE
-        return self.entry.kind if self.entry is not None else MAINTENANCE_RULE
+        if self.entry is None:
+            return MAINTENANCE_RULE
+        return SEEN_RULE if self.entry.kind == DONE else self.entry.kind
 
 
 def _failure(code: StatusCode | None) -> StatusCode | None:
     return code if code in (StatusCode.WARN, StatusCode.ERROR) else None
 
 
-def rules_beneath(node: StatusSnapshot) -> tuple[HandledRule, ...]:
-    """Every rule that stands beneath ``node``, the node's own aside (ADR-0135
-    decision 7): a node's pin and a line's, whatever stands above it, and each part
-    a configured rule changes the count of now (ADR-0137), in the tree's order, a
-    node's own before its lines'. A branch's own reading under its pin is the
-    check's reported code; a branch that declares nothing reads nothing, and says
-    what it holds beneath in its own rows. A rule on a node, or a count over its
-    parent's children, reads what the node passes up."""
-    rules: list[HandledRule] = []
-    stack = list(reversed(node.children))
+def _standing_on(line: ReasonLine) -> list[Pin]:
+    """What stands on a line: its pin that holds, its entry planned, and a person's
+    acknowledgment."""
+    return [entry for entry in (line.maintenance,
+                                None if line.planned is None else line.planned.pin,
+                                line.acknowledgment)
+            if entry is not None]
+
+
+def _set_order(line: ReasonLine) -> tuple[datetime, str]:
+    """A line not reported now by when what stands on it was first set, then by its
+    slug (``StatusSnapshot.not_reported``)."""
+    return min(entry.created_at for entry in _standing_on(line)), line.slug
+
+
+def _first_set(record: NodeNotReported) -> tuple[datetime, str]:
+    """A node not reported now by when what stands on it was first set — its own pin,
+    its entry planned, a person's acknowledgment on it, or what stands on one of its
+    lines — then by its path (``StatusSnapshot.nodes_not_reported``)."""
+    planned = record.planned_entry
+    entries = [entry for entry in (record.maintenance_entry,
+                                   None if planned is None else planned.pin,
+                                   record.acknowledgment)
+               if entry is not None]
+    entries += [entry for line in record.not_reported for entry in _standing_on(line)]
+    return min(entry.created_at for entry in entries), record.path
+
+
+@dataclass(frozen=True)
+class HandledPart:
+    """A part at or beneath a node that something handles now, as the node's door
+    counts it and its *Notes* tab lists it (ADR-0147 decision 2): a node, ``slug``
+    empty, or one of its lines; the job that decides how it counts, the mark it
+    carries — a pin's, ``node`` or ``line``, a person's acknowledgment by its kind, or
+    a configured rule's, ``rule`` — and every rule that handles it, as the *why* card
+    lists them."""
+
+    path: str
+    slug: str
+    job: str
+    rules: tuple[HandledRule, ...]
+
+
+def _parts_on(current: StatusSnapshot, name: str) -> list[HandledPart]:
+    """What handles ``current``'s own part and each of its lines now (ADR-0147
+    decision 2), each part once with every rule that handles it: a pin, whatever
+    stands above it; a person's acknowledgment; a configured rule while it changes
+    what the part counts as (ADR-0137), beside a person's silence where the rule is
+    the stricter (ADR-0144). ``name`` is ``current``'s path beneath the node it is
+    listed for. The node's own part before its lines', in the check's order, and
+    then each line its run does not report now that something stands on, in the
+    order it was set (``StatusSnapshot.not_reported``), its rule with no text and
+    reading nothing; and last each node beneath it that is not reported now, in the
+    order what stands on it was set (``StatusSnapshot.nodes_not_reported``), its own
+    part before its lines', every rule of it ``gone`` and reading nothing. A branch's
+    own reading under its pin is the check's reported
+    code; a rule on a node, or a count over its parent's children, reads what the
+    node passes up."""
+    parts: list[HandledPart] = []
+    own: list[HandledRule] = []
+    if current.maintenance_entry is not None:
+        own.append(HandledRule(current.path, name, current.maintenance_entry,
+                               reads=_failure(current.reported_code),
+                               window=current.maintenance_window))
+    if current.acknowledgment is not None:
+        own.append(HandledRule(current.path, name, current.acknowledgment,
+                               reads=_failure(current.own_code)))
+    for at in (current.rule, current.parent_rule):
+        if _acts(at):
+            assert at is not None
+            own.append(HandledRule(current.path, name, rule=at,
+                                   reads=_failure(at.reads)))
+    if own:
+        parts.append(HandledPart(current.path, "", _own_job(current), tuple(own)))
+    for line in current.reasons:
+        held: list[HandledRule] = []
+        if line.quiet and line.maintenance is not None:
+            held.append(HandledRule(current.path, name, line.maintenance,
+                                    slug=line.slug, line=line.text,
+                                    reads=_failure(line.code), window=line.window))
+        elif line.accepted:
+            assert line.acknowledgment is not None
+            held.append(HandledRule(
+                current.path, name, line.acknowledgment, slug=line.slug,
+                line=line.text, reads=_failure(
+                    line.code if line.code is not None
+                    else current.reported_code)))
+        if _acts(line.rule):
+            assert line.rule is not None
+            held.append(HandledRule(current.path, name, slug=line.slug,
+                                    line=line.text, rule=line.rule,
+                                    reads=_failure(line.rule.reads)))
+        if held:
+            parts.append(HandledPart(current.path, line.slug, _line_job(line),
+                                     tuple(held)))
+    for line in current.not_reported:
+        # what stands on a line not reported now holds nothing until it is, and
+        # reads nothing: its pin, the louder fact, or else a person's acknowledgment
+        # — and a line with a window planned alone is no part handled (ADR-0150)
+        entry = line.maintenance if line.quiet else line.acknowledgment
+        if entry is None:
+            continue
+        parts.append(HandledPart(current.path, line.slug, _line_job(line),
+                                 (HandledRule(current.path, name, entry,
+                                              slug=line.slug, window=line.window),)))
+    for gone in current.nodes_not_reported:
+        # what stands on a node not reported now holds nothing until it is, and reads
+        # nothing: its own part — its pin, beside which a person's acknowledgment
+        # decides nothing, or else that acknowledgment — then each of its lines, as a
+        # line not reported now is listed
+        beneath = gone.path[len(current.path):].strip("/")
+        under = f"{name}/{beneath}" if name else beneath
+        on_it = tuple(HandledRule(gone.path, under, entry, gone=True,
+                                  window=(gone.maintenance_window
+                                          if entry is gone.maintenance_entry
+                                          else None))
+                      for entry in (gone.maintenance_entry, gone.acknowledgment)
+                      if entry is not None)
+        if on_it:
+            first = on_it[0].entry
+            assert first is not None
+            parts.append(HandledPart(gone.path, "", "node" if first.kind == MAINTENANCE
+                                     else first.kind, on_it))
+        for line in gone.not_reported:
+            entry = line.maintenance if line.quiet else line.acknowledgment
+            if entry is None:
+                continue
+            parts.append(HandledPart(gone.path, line.slug, _line_job(line),
+                                     (HandledRule(gone.path, under, entry,
+                                                  slug=line.slug, gone=True,
+                                                  window=line.window),)))
+    return parts
+
+
+def _own_job(node: StatusSnapshot) -> str:
+    """The job that decides how a node's own part counts, the mark it carries: its
+    pin, beside which a person's acknowledgment decides nothing; else that
+    acknowledgment, by its kind; else a configured rule."""
+    if node.maintenance_entry is not None:
+        return "node"
+    if node.acknowledgment is not None:
+        return node.acknowledgment.kind
+    return "rule"
+
+
+def _line_job(line: ReasonLine) -> str:
+    """The job that decides how a line counts, the one mark it carries (ADR-0143
+    decision 2): its pin, the louder fact; else a person's acknowledgment, by its
+    kind; else a configured rule."""
+    if line.quiet:
+        return "line"
+    if line.accepted:
+        assert line.acknowledgment is not None
+        return line.acknowledgment.kind
+    return "rule"
+
+
+def handled_parts(node: StatusSnapshot) -> tuple[HandledPart, ...]:
+    """Every part at and beneath ``node`` that something handles now (ADR-0147
+    decision 2) — the node itself, its lines and everything beneath it, each part
+    once, whatever handles it, a line its node does not report now among them, which
+    what stands on it holds, and a node not reported now beside the nearest node above
+    it that stands — in the tree's order: what its *Notes* tab lists under
+    what stands, and as many as its door, ◇, says (:func:`door_counts`). The pins set
+    above it are none of them: they are the node above's, and counted on its door."""
+    parts: list[HandledPart] = []
+    stack = [node]
     while stack:
         current = stack.pop()
-        name = current.path[len(node.path):].lstrip("/")
-        if current.maintenance_entry is not None:
-            rules.append(HandledRule(current.path, name, current.maintenance_entry,
-                                     reads=_failure(current.reported_code)))
-        if current.acknowledgment is not None:
-            rules.append(HandledRule(current.path, name, current.acknowledgment,
-                                     reads=_failure(current.own_code)))
-        for at in (current.rule, current.parent_rule):
-            if _acts(at):
-                assert at is not None
-                rules.append(HandledRule(current.path, name, rule=at,
-                                         reads=_failure(at.reads)))
-        for line in current.reasons:
-            if line.quiet and line.maintenance is not None:
-                rules.append(HandledRule(current.path, name, line.maintenance,
-                                         slug=line.slug, line=line.text,
-                                         reads=_failure(line.code)))
-            elif line.accepted:
-                assert line.acknowledgment is not None
-                rules.append(HandledRule(
-                    current.path, name, line.acknowledgment, slug=line.slug,
-                    line=line.text, reads=_failure(
-                        line.code if line.code is not None
-                        else current.reported_code)))
-            elif _acts(line.rule):
-                assert line.rule is not None
-                rules.append(HandledRule(current.path, name, slug=line.slug,
-                                         line=line.text, rule=line.rule,
-                                         reads=_failure(line.rule.reads)))
+        parts.extend(_parts_on(current, current.path[len(node.path):].lstrip("/")))
         stack.extend(reversed(current.children))
-    return tuple(rules)
+    return tuple(parts)
+
+
+def rules_beneath(node: StatusSnapshot) -> tuple[HandledRule, ...]:
+    """Every rule that stands beneath ``node``, the node's own aside (ADR-0135
+    decision 7): the rules of the parts :func:`handled_parts` lists beneath it, a
+    node's pin and a line's, whatever stands above it, and each part a configured rule
+    changes the count of now (ADR-0137), in the tree's order, a node's own before its
+    lines'. A branch that declares nothing reads nothing, and says what it holds
+    beneath in its own rows."""
+    return tuple(rule for part in handled_parts(node) if part.path != node.path
+                 for rule in part.rules)
+
+
+@dataclass(frozen=True)
+class DoorCount:
+    """What a node's door, ◇, says (ADR-0147 decision 2): how many parts at and
+    beneath the node something handles now, by the job that decides each — the parts
+    :func:`handled_parts` lists, counted — and the words its tooltip and its accessible
+    name say them in, as a chip says what it counts."""
+
+    by_job: Mapping[str, int] = field(default_factory=dict)
+
+    @property
+    def count(self) -> int:
+        """How many parts: the number the door is lit with, none where it is plain."""
+        return sum(self.by_job.values())
+
+    @property
+    def words(self) -> str:
+        """*3 handled: 1 line in maintenance, 2 seen*, each job in
+        :data:`HANDLED_ORDER`, and empty where nothing is — a chip's form
+        (:func:`handled_said`)."""
+        return handled_said(self.by_job)
+
+
+def door_counts(node: StatusSnapshot) -> dict[str, DoorCount]:
+    """Every node's door at and beneath ``node``, by path (ADR-0147 decision 2), in
+    one walk: what :func:`handled_parts` lists for each node, counted by job without
+    listing it — a node's own parts beside its children's doors, each part once."""
+    doors: dict[str, DoorCount] = {}
+
+    def walk(current: StatusSnapshot) -> Counter[str]:
+        jobs = Counter(part.job for part in _parts_on(current, ""))
+        for child in current.children:
+            jobs.update(walk(child))
+        doors[current.path] = DoorCount(dict(jobs))
+        return jobs
+
+    walk(node)
+    return doors
 
 
 @dataclass(frozen=True)
@@ -1228,8 +1980,14 @@ class Event:
     did not show; a configured rule marks both kinds, so its rows say it themselves,
     and so does a *seen* (ADR-0142).
 
-    ``ended`` says why an acknowledgment ended, on the row of its end — one of the
-    ``ENDED_`` words — and is empty on every other row (ADR-0142).
+    ``ended`` says why a pin ended, on the row of its end — one of the ``ENDED_``
+    words — an acknowledgment's (ADR-0142) and a maintenance pin's (ADR-0145 decision
+    9) alike, and is empty on every other row, and on the end of a pin an adopted
+    file's holder ended.
+
+    ``level`` is the level a silence held its part at, on every row of it — its set,
+    its edits and its end (ADR-0144) — so that what a branch counted while it stood is
+    read from the log after it ended; ``None`` on every other row.
     """
     path: str
     name: str
@@ -1243,6 +2001,7 @@ class Event:
     #: Set from the mark where the row does not say it (:meth:`__post_init__`).
     shown: bool | None = None
     ended: str = ""
+    level: StatusCode | None = None
 
     def __post_init__(self) -> None:
         """``timestamp`` is an instant, held in UTC (ADR-0120): an event cannot be
@@ -1276,6 +2035,8 @@ class Event:
             raw["shown"] = self.shown
         if self.ended:
             raw["ended"] = self.ended
+        if self.level is not None:
+            raw["level"] = self.level.name
         return raw
 
     @classmethod
@@ -1285,10 +2046,12 @@ class Event:
         reason that is not a list of text, a time that is not an instant with an
         offset — so the layer can report the file rather than half-read it."""
         said = data.get("reported")
+        held = data.get("level")
         try:
             old = StatusCode[str(data.get("old", ""))]
             new = StatusCode[str(data.get("new", ""))]
             reported = None if said is None else StatusCode[str(said)]
+            level = None if held is None else StatusCode[str(held)]
         except KeyError as error:
             raise ValueError(f"an event carries an unknown code: {error}") from error
         reason = data.get("reason", [])
@@ -1302,7 +2065,7 @@ class Event:
                    suppressed_by=str(data.get("suppressed_by", "")),
                    cause=str(data.get("cause", "")), reported=reported,
                    shown=shown if isinstance(shown := data.get("shown"), bool)
-                   else None, ended=str(data.get("ended", "")))
+                   else None, ended=str(data.get("ended", "")), level=level)
 
 
 def events_from_payload(payload: object) -> list[Event]:
@@ -1608,19 +2371,73 @@ class _RanOut:
 
     ``accepted`` are lines whose acknowledgment to count as still standing, by slug:
     those a reading has just ended, which is how the row of what the node shows tells
-    whether their end is what changed it (ADR-0142)."""
+    whether their end is what changed it (ADR-0142) — and ``done`` those of them that
+    were a *done*, which a rule's count takes as the OK it showed (ADR-0146).
+
+    ``closed`` are those of them that did not end — ``""`` the node's own: a window of
+    a maintenance entry that closed while the instance was down, the entry standing
+    for its windows to come (ADR-0150), whose row says it closed."""
     node: bool = False
     lines: frozenset[str] = frozenset()
     accepted: frozenset[str] = frozenset()
+    done: frozenset[str] = frozenset()
+    closed: frozenset[str] = frozenset()
+
+
+def _ran_cause(ran_out: _RanOut | None, slug: str) -> str:
+    """The cause of the row of a pin that ran out while the instance was down, the
+    node's own (``slug`` empty) or a line's: its end — or, where a window of it closed
+    and the entry stands, the close (ADR-0150)."""
+    closed = ran_out is not None and slug in ran_out.closed
+    if slug:
+        return CAUSE_LINE_PIN_CLOSED if closed else CAUSE_LINE_PIN_ENDED
+    return CAUSE_PIN_CLOSED if closed else CAUSE_PIN_ENDED
 
 
 @dataclass(frozen=True)
 class _Ended:
     """An acknowledgment a write ended (ADR-0142): the line it stood on by its slug,
-    empty for its node's own, the pin, and why — one of the ``ENDED_`` words."""
+    empty for its node's own, the pin, and why — one of the ``ENDED_`` words — and who
+    ended it, where a person did (ADR-0145 decision 4)."""
     slug: str
     pin: Pin
     why: str
+    by: str = ""
+
+
+@dataclass(frozen=True)
+class _LineAct:
+    """One act on a line's maintenance pin, which a row of its node says (ADR-0145
+    decision 9): the line's slug, the pin, the act — ``set``, ``edited`` or ``ended``
+    — and for an end why it ended, empty where the holder of an adopted file ended
+    it, and who, where a person did."""
+    slug: str
+    pin: Pin
+    act: str
+    why: str = ""
+    by: str = ""
+
+
+@dataclass(frozen=True)
+class _Due:
+    """What of the maintenance entries one moment opens, closes and ends (ADR-0150), a
+    line's by its node's path and its slug and a node's by its path
+    (:meth:`StatusTree._windows_due`): what held and holds no more ends, its schedule
+    over, or closes, a window of it to come; what held nothing and holds now opens; and
+    what holds nothing, its schedule over, is spent."""
+    ending_lines: tuple[tuple[str, str], ...] = ()
+    closing_lines: tuple[tuple[str, str], ...] = ()
+    opening_lines: tuple[tuple[str, str], ...] = ()
+    spent_lines: tuple[tuple[str, str], ...] = ()
+    ending: tuple[str, ...] = ()
+    closing: tuple[str, ...] = ()
+    opening: tuple[str, ...] = ()
+    spent: tuple[str, ...] = ()
+
+    def __bool__(self) -> bool:
+        return any((self.ending_lines, self.closing_lines, self.opening_lines,
+                    self.spent_lines, self.ending, self.closing, self.opening,
+                    self.spent))
 
 
 @dataclass(frozen=True)
@@ -1648,9 +2465,10 @@ class _Inputs:
     damped: _Damped | None = None
     escalate_after: int = 1
     carried: bool = False
-    #: Whether a person's acknowledgment stands on the node itself (ADR-0142), which
-    #: makes its parent count its own part as ``OK``.
-    accepted: bool = False
+    #: What a person's acknowledgment on the node itself makes of its own part
+    #: (ADR-0142, ADR-0144) — its parent counting it ``OK``, or a silence's level —
+    #: or ``None`` where none stands.
+    accepted: _Held | None = None
 
 
 #: What a container on the way to a node the tree does not hold yet holds itself.
@@ -1683,10 +2501,14 @@ class _Part:
     #: counts for less than a warning (ADR-0137).
     contribution: Contribution | None = None
     stale: bool = False
-    #: Whether a person's acknowledgment stands on it (ADR-0142): part of its own
-    #: part, which a change moves, since its set and its end move what its parent
-    #: counts without moving what it counts for itself.
-    accepted: bool = False
+    #: What a person's acknowledgment on it makes of its own part (ADR-0142,
+    #: ADR-0144): part of its own part, which a change moves, since its set, its end
+    #: and a silence's level move what its parent counts without moving what it
+    #: counts for itself.
+    accepted: _Held | None = None
+    #: What it would pass up without a person's acknowledgment on it, where one
+    #: stands, which a rule counting its parent's children counts it by (ADR-0144).
+    unheld: _Unheld | None = None
 
 
 @dataclass(frozen=True)
@@ -1827,6 +2649,21 @@ class StatusTree:
         # the next run cannot destroy a pin and nothing derived is written into the
         # tree (ADR-0032 rule 3).
         self._entry_maintenance: dict[tuple[str, str], Pin] = {}
+        # Maintenance that stands and holds nothing now (ADR-0150): an entry none of
+        # whose windows is open — before its first, or between two — a node's and a
+        # line's, kept in the same file and moved into the tables above as a window
+        # opens (:meth:`_windows_due`), the tables above holding what holds now.
+        self._waiting: dict[str, Pin] = {}
+        self._waiting_lines: dict[tuple[str, str], Pin] = {}
+        # The deployment's holidays (ADR-0149), which an entry's ``not_on`` names, and
+        # the windows of each schedule as they read them, with the list it leaves out
+        # and the windows changed alone (:meth:`windows`).
+        self._holidays: Holidays = NO_HOLIDAYS
+        self._windows_of: dict[tuple[Schedule, str, tuple[Changed, ...]],
+                               tuple[Window, ...]] = {}
+        # and the years each schedule's rule starts a window in, which its list must
+        # state (:meth:`_shut`)
+        self._years_of: dict[Schedule, Mapping[int, datetime]] = {}
         # A person's acknowledgments (ADR-0142): one per node, and one per line by
         # its node's path and its slug, beside the pins and kept in the same file.
         # Each is bound to what it accepted, which the readings check: a node's own
@@ -1834,6 +2671,12 @@ class StatusTree:
         self._acknowledged: dict[str, Pin] = {}
         self._entry_acknowledged: dict[tuple[str, str], Pin] = {}
         self._pin_store = pin_store
+        # Who hears of every pin the tree ends (ADR-0145 decision 4): the notes,
+        # whose note of a pin records its end.
+        self._pin_ends: list[PinEnd] = []
+        # Who hears what the tree sees of a maintenance entry's windows (ADR-0150): the
+        # notes, whose note of an entry counts them.
+        self._windows_told: list[WindowTold] = []
         # Check mounts: the nodes a check writes its result root to, seeded at
         # startup. Read only by the snapshot's timestamp roll-up (ADR-0027); the
         # tree itself stays check-agnostic and derives nothing into the nodes.
@@ -1851,7 +2694,7 @@ class StatusTree:
         # restart, so no node is read as named before its run has said; a node a
         # run removes leaves it.
         self._named_by_run: set[str] = set()
-        # The damping counter per path (backlog #38 B): what this node last
+        # The damping counter per path (ADR-0083): what this node last
         # published upward, the worse status it is holding back, and how many
         # consecutive readings have shown it — the node's **own** status, what it
         # shows, and not the code its check reported (ADR-0108). Side-table for the
@@ -1860,7 +2703,7 @@ class StatusTree:
         # a poll is not a reading and a counter that advanced per snapshot would
         # escalate a node nobody had asked about again.
         self._damping: dict[str, _Damped] = {}
-        # What each check is reached **through** (backlog #38 A): the mount path of
+        # What each check is reached **through** (ADR-0084): the mount path of
         # a check, against the mount path of the check it depends on. Seeded at
         # startup by the engine, which knows its checks, exactly as the mounts are
         # — the tree stays check-agnostic and derives the shield in the snapshot.
@@ -1900,6 +2743,54 @@ class StatusTree:
     def use_pin_store(self, store: PinStore) -> None:
         """Attach the pins' store (once, at startup, before restore)."""
         self._pin_store = store
+
+    def on_pin_end(self, listener: PinEnd) -> None:
+        """Tell ``listener`` of every pin the tree ends from now on, whatever its kind
+        and whatever ended it (ADR-0145 decision 4): a person's hand, its end or its
+        deadline, a reading, its part no longer reported, a start's reap, a kind made
+        the other. Told under the tree's lock, in the write that ends the pin; an
+        adoption at a takeover tells nobody (:data:`PinEnd`). One already listening is
+        not added twice."""
+        with self._lock:
+            if listener not in self._pin_ends:
+                self._pin_ends.append(listener)
+
+    def _told_end(self, path: str, slug: str, pin: Pin, why: str, *,
+                  when: datetime, by: str = "") -> None:
+        """Tell who listens that ``pin`` on the node at ``path``, or on its line
+        ``slug``, ended ``when`` for ``why``, by ``by`` where a person ended it — and
+        nobody where it says no why: an adoption's, whose holder ended it."""
+        if not why:
+            return
+        for listener in self._pin_ends:
+            listener(path, slug, pin, why, by, when)
+
+    def on_window(self, listener: WindowTold) -> None:
+        """Tell ``listener`` what the tree sees of a maintenance entry's windows from
+        now on (ADR-0150), so that the entry's note counts each window once: the window
+        that holds as the entry is set or edited, as the tick opens one and as a start
+        replays one, and that none holds as an edit or the tick closes one and as a
+        start finds it closed (:class:`WindowSeen`). An entry's end closes its window
+        with it, which :meth:`on_pin_end` tells; an adoption at a takeover tells
+        nobody. One already listening is not added twice."""
+        with self._lock:
+            if listener not in self._windows_told:
+                self._windows_told.append(listener)
+
+    def _told_window(self, path: str, slug: str, pin: Pin, *, when: datetime,
+                     why: str, by: str = "") -> None:
+        """Tell who listens which window of ``pin`` — on the node at ``path``, or on
+        its line ``slug`` — holds ``when``, or that none does; where one that held
+        holds no more, it closed for ``why``, by ``by``."""
+        if not self._windows_told:
+            return
+        window = open_at(self.windows(pin), when)
+        seen = WindowSeen(
+            path, slug, pin, when,
+            start=None if window is None else max(window.start, pin.created_at),
+            until=None if window is None else window.end, why=why, by=by)
+        for listener in self._windows_told:
+            listener(seen)
 
     def use_aggregation(self, rules: RuleSet) -> None:
         """Take the configured rules (ADR-0137) — once, at startup, before the log
@@ -2105,7 +2996,7 @@ class StatusTree:
         falsy-means-empty fill would let the next tick overwrite it.
 
         ``escalate_after`` is how many consecutive readings of a **worse** code this
-        node needs before it publishes that code upward (backlog #38 B). It is
+        node needs before it publishes that code upward (ADR-0083). It is
         resolved by the engine — the check's own value, or the deployment's default
         — because the tree reads no configuration; it writes through like
         ``frequency_seconds``, and ``1`` is today's behavior.
@@ -2198,6 +3089,10 @@ class StatusTree:
             # only the first of them is a transition.
             reached = self._damp(node)
             wrote = self._record_reading(node, shown, reported, ran_out, ended)
+            # and each end told, at the reading that ended it (ADR-0145 decision 4)
+            for item in ended:
+                self._told_end(node.path, item.slug, item.pin, item.why,
+                               when=node.timestamp or moment)
             if ended:
                 self._persist()
             if reached and self._shields(moment).get(node.path) is None:
@@ -2230,8 +3125,8 @@ class StatusTree:
     def about(self, path: str) -> str:
         """The ``about`` the node at ``path`` carries, or ``""`` where it carries
         none or no node stands there — so whether a run's label would fill it
-        (ADR-0025), which the engine asks before it names a long one (backlog #91
-        §3.5). Thread-safe."""
+        (ADR-0025), which the engine asks before it names a long one
+        (ADR-0127 decision 8). Thread-safe."""
         with self._lock:
             node = self._find_node(path)
             return node.about if node is not None else ""
@@ -2385,7 +3280,7 @@ class StatusTree:
 
     def set_dependency(self, path: str, on_path: str) -> None:
         """Register that the check mounted at ``path`` is reached **through** the
-        check mounted at ``on_path`` (backlog #38 A).
+        check mounted at ``on_path`` (ADR-0084).
 
         Registry-only, like :meth:`set_check_mount`: no node is created and nothing
         is written onto one. Whether the shield is *in force* is derived in the
@@ -2427,8 +3322,11 @@ class StatusTree:
                                                         next_run_at)
 
     def set_maintenance(self, path: str, note: str | None = None, *,
-                        expires_at: datetime, set_by: str = "",
-                        expected_set_at: str | None = None) -> PinWrite:
+                        expires_at: datetime | None = None, set_by: str = "",
+                        expected_set_at: str | None = None,
+                        schedule: Schedule | None = None,
+                        not_on: str = "",
+                        changed: Iterable[Changed] = ()) -> PinWrite:
         """Pin the node at ``path`` to maintenance (a sticky admin override) until
         ``expires_at``, an instant, recording who set it. Stores the entry and
         writes it through (ADR-0014). Thread-safe.
@@ -2457,14 +3355,24 @@ class StatusTree:
         The write has **one instant**, the store's and the log's (ADR-0110 decision
         6): the row is dated as the entry's ``set_at`` — for a new pin its
         creation, so a restart finds the period's beginning and the pin's the same.
+
+        ``schedule`` sets what the entry covers (ADR-0150) — one window, set ahead or
+        now, or a series, ``not_on`` the holiday list its rule leaves out, and
+        ``changed`` its windows changed alone, which a write that names none drops —
+        where ``expires_at`` alone sets one window from now, or moves a one-off's end
+        and keeps its start. **An entry none of whose windows is open now holds
+        nothing**: it stands, is written through, and writes no row, until a window
+        opens (:meth:`sweep_expired`); one open now writes its set alone.
         """
         with self._lock:
             key = join_path(path)
-            stored = self._maintenance.get(key)
+            stored = self._maintenance.get(key) or self._waiting.get(key)
             if not self._token_matches(stored, expected_set_at):
                 return PinWrite(False, stored, refused=True)
             # Taken under the lock, so the log stays in the order it was written.
             moment = instants.now()
+            if schedule is None:
+                schedule = self._kept_start(stored, expires_at, moment)
             entry = Pin(
                 MAINTENANCE,
                 note=note or NO_NOTE,
@@ -2473,32 +3381,58 @@ class StatusTree:
                 set_by=set_by,
                 created_at=stored.created_at if stored else moment,
                 created_by=stored.created_by if stored else set_by,
-                id=stored.id if stored else "")
+                id=stored.id if stored else "",
+                schedule=schedule, not_on=not_on, changed=changed)
             if stored is not None and stored.same_pin_as(entry):
                 return PinWrite(False, stored)
             # A pin set or edited is one write, at that instant (ADR-0132 decision 2).
             with self._one_write(moment):
-                self._apply_maintenance(key, entry, when=moment)
+                self._waiting.pop(key, None)
+                if self._holds(entry, moment):
+                    self._apply_maintenance(key, entry, when=moment)
+                    self._told_window(key, "", entry, when=moment, why=ENDED_HAND,
+                                      by=set_by)
+                else:
+                    if key in self._maintenance:
+                        # an edit that leaves no window open now closes the one that
+                        # was, by hand: the entry stands for its windows to come
+                        self._clear_node(key, why=ENDED_HAND, by=set_by,
+                                         closing=True)
+                        self._told_window(key, "", entry, when=moment,
+                                          why=ENDED_HAND, by=set_by)
+                    self._waiting[key] = entry
             self._persist()
             return PinWrite(True, entry)
 
     def clear_maintenance(self, path: str, *,
-                          expected_set_at: str | None = None) -> PinWrite:
+                          expected_set_at: str | None = None,
+                          by: str = "") -> PinWrite:
         """Release maintenance; the node shows the check's preserved reading again
         **at once**, not at the next run — nothing was destroyed while it was pinned
         (ADR-0041; see :meth:`_clear_node`). ``applied`` is ``False`` when it wasn't
-        in maintenance.
+        in maintenance. Its end says it ended by hand, and ``by`` whose (ADR-0145
+        decision 9).
 
         Clearing carries the same ``expected_set_at`` token as
         :meth:`set_maintenance` — clearing someone else's pin should not be the one
         write that stays silent (ADR-0014).
         """
         with self._lock:
-            stored = self._maintenance.get(join_path(path))
+            key = join_path(path)
+            waiting = self._waiting.get(key)
+            stored = self._maintenance.get(key) or waiting
             if not self._token_matches(stored, expected_set_at):
                 return PinWrite(False, stored, refused=True)
+            if waiting is not None and key not in self._maintenance:
+                # an entry that holds nothing now ends with no row: nothing the
+                # node shows changes, and its end is told (ADR-0145 decision 4)
+                del self._waiting[key]
+                self._told_end(key, "", waiting, ENDED_HAND, when=self._instant(),
+                               by=by)
+                self._persist()
+                return PinWrite(True, None)
             with self._one_write():
-                cleared = self._clear_node(path)
+                cleared = self._clear_node(path, why=ENDED_HAND, by=by)
             if cleared:
                 self._persist()
             return PinWrite(cleared, None)
@@ -2536,6 +3470,16 @@ class StatusTree:
         side-table only — there is no node to pin and no status to write, and a
         slug the next run does not report simply does not apply.
 
+        **An entry that holds nothing at the start** — a series between two of its
+        windows (ADR-0150) — stands, holding nothing, and its next window opens it.
+        Where its node showed ``MAINTENANCE`` at the stop, a window of it closed while
+        the instance was down, and the close is a row as a pin's end is: the node's
+        first reading's, or, for a node nothing reports to, one written here at the
+        window's end. A window that opened while the instance was down is a replay
+        that the log does not hold, its row and its period's beginning the window's.
+        What a line's window that opened or closed meanwhile changed, the node's first
+        reading says as a reading: what held on a line at the stop is not kept.
+
         **Nothing is written for a pin that ran out while the instance was down**,
         where a check reports to the node: there is no reading yet to say what the
         node shows without it. Which pins did is remembered per node, and the
@@ -2551,8 +3495,17 @@ class StatusTree:
             for entry_path, entry in entries.items():
                 key = join_path(entry_path)
                 if not entry.is_expired(moment):
-                    with self._one_write(moment):
-                        self._apply_maintenance(entry_path, entry, replay=True)
+                    if self._holds(entry, moment):
+                        with self._one_write(moment):
+                            self._apply_maintenance(entry_path, entry, replay=True)
+                    else:
+                        self._waiting[key] = entry
+                        if (self._restored_shown.get(key)
+                                is StatusCode.MAINTENANCE):
+                            self._closed_meanwhile(key, entry, moment)
+                    # the window that holds at the start, once however often a start
+                    # replays it, or none — one that held at the stop closed meanwhile
+                    self._told_window(key, "", entry, when=moment, why=ENDED_CLOCK)
                 elif (self._restored_shown.get(key) is StatusCode.MAINTENANCE
                       and self._restored_reading.get(key, StatusCode.UNDEFINED)
                       is StatusCode.UNDEFINED):
@@ -2563,18 +3516,55 @@ class StatusTree:
                             path=key, name=leaf_name(key),
                             old=StatusCode.MAINTENANCE, new=StatusCode.UNDEFINED,
                             reason=(), timestamp=entry.expires_at,
-                            cause=CAUSE_PIN_ENDED, reported=StatusCode.UNDEFINED))
+                            cause=CAUSE_PIN_ENDED, reported=StatusCode.UNDEFINED,
+                            ended=ENDED_CLOCK))
                         self._restored_shown[key] = StatusCode.UNDEFINED
+                        self._told_end(key, "", entry, ENDED_CLOCK,
+                                       when=entry.expires_at)
                 else:
                     self._ran_out[key] = _RanOut(node=True)
+                    # It ended at its end, which its note says now; its row is the
+                    # node's first reading's (ADR-0107 decision 5).
+                    assert entry.expires_at is not None
+                    self._told_end(key, "", entry, ENDED_CLOCK, when=entry.expires_at)
             for (entry_path, slug), entry in (entry_pins or {}).items():
                 if not entry.is_expired(moment):
-                    self._entry_maintenance[entry_path, slug] = entry
+                    if self._holds(entry, moment):
+                        self._entry_maintenance[entry_path, slug] = entry
+                    else:
+                        self._waiting_lines[entry_path, slug] = entry
+                    self._told_window(join_path(entry_path), slug, entry, when=moment,
+                                      why=ENDED_CLOCK)
                 else:
                     key = join_path(entry_path)
                     before = self._ran_out.get(key, _RanOut())
-                    self._ran_out[key] = _RanOut(before.node, before.lines | {slug})
+                    self._ran_out[key] = _RanOut(before.node, before.lines | {slug},
+                                                 closed=before.closed)
+                    assert entry.expires_at is not None
+                    self._told_end(key, slug, entry, ENDED_CLOCK, when=entry.expires_at)
             self._persist()
+
+    def _closed_meanwhile(self, key: str, entry: Pin, moment: datetime) -> None:
+        """Write the close of a window of ``entry`` on the node at ``key``, which
+        showed ``MAINTENANCE`` at the stop and holds nothing at the start ``moment``
+        (:meth:`restore_maintenance`): by the node's first reading, as a pin that ran
+        out meanwhile ends (ADR-0107 decision 5), or here, at the window's end, for a
+        node nothing reports to, to the ``UNDEFINED`` it shows."""
+        if (self._restored_reading.get(key, StatusCode.UNDEFINED)
+                is not StatusCode.UNDEFINED):
+            before = self._ran_out.get(key, _RanOut())
+            self._ran_out[key] = _RanOut(True, before.lines,
+                                         closed=before.closed | {""})
+            return
+        closed = max((window.end for window in self.windows(entry)
+                      if window.end <= moment), default=moment)
+        with self._one_write(closed):
+            self._log(Event(
+                path=key, name=leaf_name(key),
+                old=StatusCode.MAINTENANCE, new=StatusCode.UNDEFINED,
+                reason=(), timestamp=closed, cause=CAUSE_PIN_CLOSED,
+                reported=StatusCode.UNDEFINED, ended=ENDED_CLOCK))
+            self._restored_shown[key] = StatusCode.UNDEFINED
 
     def adopt_maintenance(self, entries: dict[str, Pin],
                           entry_pins: dict[tuple[str, str],
@@ -2591,47 +3581,80 @@ class StatusTree:
         whole, first, and a node that shows something else for it gets the event
         of a line's pin that ended, or was set where none of its own went
         (ADR-0107 decision 1). Nothing is written through: the file on disk is
-        the copy being adopted, and the sweep drops what is expired from it."""
+        the copy being adopted, and the sweep drops what is expired from it.
+
+        A line's pin is a row of its node whatever it does to what the node shows
+        (ADR-0145 decision 9): one that went, one that came and one that changed, one
+        row each — the first of a node's from what it showed — an end saying no why,
+        its holder having ended it.
+
+        An entry of the file that holds nothing at the moment — a series between two
+        windows (ADR-0150) — stands, holding nothing: one that held here closes, its
+        row a window's close, and one that holds now and did not here opens, or is
+        set, as :meth:`_began` reads it."""
         moment = _asked_at(now)
         # An adopted table is one write (ADR-0132 decision 2).
         with self._lock, self._one_write():
-            adopted = {key: entry for key, entry in (entry_pins or {}).items()
-                       if not entry.is_expired(moment)}
-            went = {path for path, slug in self._entry_maintenance
-                    if (path, slug) not in adopted}
-            showing = self._showing(
-                path for path, _slug in (*self._entry_maintenance, *adopted))
+            standing = {key: entry for key, entry in (entry_pins or {}).items()
+                        if not entry.is_expired(moment)}
+            adopted = {key: entry for key, entry in standing.items()
+                       if self._holds(entry, moment)}
+            waiting = {key: entry for key, entry in standing.items()
+                       if key not in adopted}
+            acts: dict[str, list[_LineAct]] = {}
+            for (path, slug), pin in sorted(self._entry_maintenance.items()):
+                held = adopted.get((path, slug))
+                if held is None or held.id != pin.id:
+                    waits = waiting.get((path, slug))
+                    acts.setdefault(path, []).append(
+                        _LineAct(slug, pin, CLOSED, ENDED_CLOCK)
+                        if waits is not None and waits.id == pin.id
+                        else _LineAct(slug, pin, ENDED))
+            for (path, slug), pin in sorted(adopted.items()):
+                stood = self._entry_maintenance.get((path, slug))
+                if stood is None or stood.id != pin.id:
+                    acts.setdefault(path, []).append(_LineAct(
+                        slug, pin, OPENED if self._began(pin, moment)[1] else SET))
+                elif not stood.same_pin_as(pin):
+                    acts.setdefault(path, []).append(_LineAct(slug, pin, EDITED))
+            shown = {path: self._shows_at(path, self._find_node(path)) for path in acts}
             self._entry_maintenance = adopted
-            self._emit_line_pins(
-                showing, lambda node: CAUSE_LINE_PIN_ENDED if node.path in went
-                else CAUSE_LINE_PIN_SET)
-            keep = {path for path, entry in entries.items()
-                    if not entry.is_expired(moment)}
+            self._waiting_lines = waiting
+            for path in sorted(acts):
+                self._line_pin_rows(path, acts[path], shown[path])
+            standing_nodes = {path: entry for path, entry in entries.items()
+                              if not entry.is_expired(moment)}
+            keep = {path for path, entry in standing_nodes.items()
+                    if self._holds(entry, moment)}
             for path in [path for path in self._maintenance if path not in keep]:
-                self._clear_node(path)
-            for entry_path, entry in entries.items():
+                # the holder ended it: its row says no why, and its note is the
+                # holder's (ADR-0145 decision 4) — or, where the file keeps it
+                # holding nothing, a window of it closed
+                waits = standing_nodes.get(path)
+                self._clear_node(path, closing=waits is not None
+                                 and waits.id == self._maintenance[path].id)
+            self._waiting = {path: entry for path, entry in standing_nodes.items()
+                             if path not in keep}
+            for entry_path, entry in standing_nodes.items():
                 if entry_path in keep:
                     self._apply_maintenance(entry_path, entry)
 
     def sweep_expired(self, now: datetime | None = None) -> list[str]:
-        """Clear every pin past its ``expires_at``, a node's and a line's — each a
-        real transition of what its node shows, with its event (ADR-0014, ADR-0041
-        decision 4, ADR-0107 decision 1). Returns the paths whose own pin was
-        cleared. Called each scheduler tick."""
+        """Open and close the maintenance entries' windows, and clear every pin past
+        its end, a node's and a line's — each a real transition of what its node
+        shows, with its event (ADR-0014, ADR-0041 decision 4, ADR-0107 decision 1,
+        ADR-0150). Returns the paths whose own pin was cleared. Called each scheduler
+        tick."""
         moment = _asked_at(now)
         with self._lock:
-            # Expiry is the *only* thing that disposes of a per-entry pin, so this
-            # sweep is its whole lifecycle end (ADR-0036 decision 6). It writes no
-            # status — the pin was never in the tree, and the node's own code is
-            # derived (ADR-0032 rule 3) — and it is an event where the node shows
-            # something else for it, one for a node however many of its lines'
-            # pins ran out together (ADR-0107 decision 1). The lines go first: a
-            # node whose own pin runs out in the same sweep then ends on what it
-            # shows without either.
-            stale_entries = [key for key, entry in self._entry_maintenance.items()
-                             if entry.is_expired(moment)]
-            expired = [path for path, entry in self._maintenance.items()
-                       if entry.is_expired(moment)]
+            # The windows and their schedules' ends are the only thing that disposes
+            # of a per-entry pin, so this sweep is its whole lifecycle end (ADR-0036
+            # decision 6). It writes no status — the pin was never in the tree, and
+            # the node's own code is derived (ADR-0032 rule 3) — and each is a row of
+            # its node, the first of a node's from what it showed (ADR-0145 decision
+            # 9). The lines go first: a node whose own pin runs out in the same sweep
+            # then ends on what it shows without either.
+            due = self._windows_due(moment)
             # An acknowledgment given an end ends there too (ADR-0142), each its row.
             accepted_out: dict[str, list[_Ended]] = {}
             for (path, slug), pin in self._entry_acknowledged.items():
@@ -2642,24 +3665,19 @@ class StatusTree:
                 if pin.is_expired(moment):
                     accepted_out.setdefault(path, []).append(
                         _Ended("", pin, ENDED_CLOCK))
-            if not (stale_entries or expired or accepted_out):
+            if not (due or accepted_out):
                 return []
-            # **The pins a sweep finds run out are one write together**, a node's
-            # and a line's alike (ADR-0132 decision 2): a branch whose pinned
-            # children both end at 18:00 goes from maintenance to what they show,
-            # and never through what one of them shows alone.
+            # **What a sweep finds due is one write together**, a node's and a
+            # line's alike (ADR-0132 decision 2): a branch whose pinned children both
+            # end at 18:00 goes from maintenance to what they show, and never through
+            # what one of them shows alone.
             with self._one_write():
-                if stale_entries:
-                    showing = self._showing(path for path, _slug in stale_entries)
-                    for key in stale_entries:
-                        del self._entry_maintenance[key]
-                    self._emit_line_pins(showing, lambda node: CAUSE_LINE_PIN_ENDED)
+                self._lines_due(due)
                 for path in sorted(accepted_out):
                     self._end_acknowledgments(path, accepted_out[path])
-                for path in expired:
-                    self._clear_node(path)
+                ended = self._nodes_due(due)
             self._persist()
-            return expired
+            return ended
 
     def reap_uncovered(self, roots: list[str]) -> list[str]:
         """Drop maintenance whose path **none of ``roots`` covers** — the configured
@@ -2672,13 +3690,19 @@ class StatusTree:
 
             uncovered = [path for path in self._maintenance if not covered(path)]
             for path in uncovered:
-                self._clear_node(path)
+                self._clear_node(path, why=ENDED_GONE)
+            # what holds nothing now goes too, with no row, since nothing showed it
+            waiting = [path for path in self._waiting if not covered(path)]
+            for path in waiting:
+                self._told_end(path, "", self._waiting.pop(path), ENDED_GONE,
+                               when=self._instant())
+            waiting_lines = [key for key in self._waiting_lines if not covered(key[0])]
+            for key in waiting_lines:
+                self._told_end(key[0], key[1], self._waiting_lines.pop(key),
+                               ENDED_GONE, when=self._instant())
             orphan_entries = [key for key in self._entry_maintenance
                               if not covered(key[0])]
-            showing = self._showing(path for path, _slug in orphan_entries)
-            for key in orphan_entries:
-                del self._entry_maintenance[key]
-            self._emit_line_pins(showing, lambda node: CAUSE_LINE_PIN_ENDED)
+            self._end_line_pins(orphan_entries, ENDED_GONE)
             # An acknowledgment no check covers is on a part nothing reports now,
             # and ends so (ADR-0142).
             orphans: dict[str, list[_Ended]] = {}
@@ -2690,9 +3714,9 @@ class StatusTree:
                     orphans.setdefault(path, []).append(_Ended(slug, pin, ENDED_GONE))
             for path in sorted(orphans):
                 self._end_acknowledgments(path, orphans[path])
-            if uncovered or orphan_entries or orphans:
+            if uncovered or waiting or waiting_lines or orphan_entries or orphans:
                 self._persist()
-            return uncovered
+            return uncovered + waiting
 
     def forget_uncovered(self, roots: Iterable[str]) -> list[str]:
         """Drop what was restored of every node on none of ``roots``' lines — the
@@ -2827,7 +3851,8 @@ class StatusTree:
                                                    line=bool(item.slug)),
                         reported=readings.get(left, self._restored_reading.get(
                             left, StatusCode.UNDEFINED)),
-                        ended=ENDED_GONE))
+                        ended=ENDED_GONE, level=item.pin.level))
+                    self._told_end(left, item.slug, item.pin, ENDED_GONE, when=when)
                 if showed is StatusCode.UNDEFINED:
                     self._restored_shown.pop(left, None)
                     self._restored_reading.pop(left, None)
@@ -2853,24 +3878,37 @@ class StatusTree:
         is the table whole, with the ones **no node stands for** (ADR-0109 decision
         4) — its node was removed, or no check has written it yet in this process.
         Such a pin silences nothing now, holds again the moment a node returns at
-        its path, and ends by its own expiry. Thread-safe."""
+        its path, and ends by its own expiry. A maintenance entry none of whose
+        windows is open now, a series between two (ADR-0150), stands among them.
+        Thread-safe."""
         with self._lock:
-            return dict(self._maintenance), dict(self._entry_maintenance)
+            return ({**self._waiting, **self._maintenance},
+                    {**self._waiting_lines, **self._entry_maintenance})
 
     def maintenance_entry(self, path: str) -> Pin | None:
-        """The maintenance entry pinned at ``path``, if any — the path read as
-        every write here reads it, with or without its leading slash, so a
-        form's ``branch`` finds the pin its own post made."""
+        """The maintenance entry that holds at ``path`` now, if any — a window of it
+        open — the path read as every write here reads it, with or without its
+        leading slash, so a form's ``branch`` finds the pin its own post made."""
         with self._lock:
             return self._maintenance.get(join_path(path))
+
+    def standing_entry(self, path: str) -> Pin | None:
+        """The maintenance entry that stands at ``path``, a window of it open or none
+        (ADR-0150): what an edit of it names, and keeps what it does not change.
+        :meth:`maintenance_entry` is the one that holds."""
+        with self._lock:
+            key = join_path(path)
+            return self._maintenance.get(key) or self._waiting.get(key)
 
     # --- per-entry pins (ADR-0036) ---
 
     def set_entry_maintenance(self, path: str, slug: str,
                               note: str | None = None, *,
-                              expires_at: datetime, set_by: str = "",
-                              expected_set_at: str | None = None
-                              ) -> PinWrite:
+                              expires_at: datetime | None = None, set_by: str = "",
+                              expected_set_at: str | None = None,
+                              schedule: Schedule | None = None,
+                              not_on: str = "",
+                              changed: Iterable[Changed] = ()) -> PinWrite:
         """Pin **one reason** of the node at ``path`` — the finding somebody is
         working on — leaving its siblings alarming, which is the entire point
         (ADR-0036).
@@ -2881,18 +3919,23 @@ class StatusTree:
         same expiry rules, and the same answer to a set that changes nothing: it
         writes nothing (:meth:`set_maintenance`). Thread-safe.
 
-        **It is an event where it changes what the node shows** (ADR-0107 decision
-        1) — the one failing line silenced turns the node green — and its reason
-        is that line, by its text, and the pin's note. A pin that leaves the node
-        showing what it showed writes none: one of two failing lines, an edit of
-        a pin, a slug no run reports, a node no check has written.
+        **Its set and its edit are each a row of its node** (ADR-0145 decision 9),
+        whatever they do to what the node shows — the one failing line pinned turns
+        the node green, one of two changes nothing, nor does an edit — and its reason
+        is that line, by its text, and the pin's note (:meth:`_line_pin_rows`).
+        ``schedule``, ``not_on`` and ``changed`` set what it covers, and one none of
+        whose windows is open now holds nothing and writes no row, as a node's does
+        (ADR-0150).
         """
         moment = instants.now()
         with self._lock:
             key = (join_path(path), slug)
-            stored = self._entry_maintenance.get(key)
+            holding = self._entry_maintenance.get(key)
+            stored = holding or self._waiting_lines.get(key)
             if not self._token_matches(stored, expected_set_at):
                 return PinWrite(False, stored, refused=True)
+            if schedule is None:
+                schedule = self._kept_start(stored, expires_at, moment)
             entry = Pin(
                 MAINTENANCE,
                 note=note or NO_NOTE,
@@ -2901,45 +3944,154 @@ class StatusTree:
                 set_by=set_by,
                 created_at=stored.created_at if stored else moment,
                 created_by=stored.created_by if stored else set_by,
-                id=stored.id if stored else "")
+                id=stored.id if stored else "",
+                schedule=schedule, not_on=not_on, changed=changed)
             if stored is not None and stored.same_pin_as(entry):
                 return PinWrite(False, stored)
             # A line's pin set is one write, at that instant (ADR-0132 decision 2).
             with self._one_write(moment):
-                showing = self._showing([key[0]])
-                self._entry_maintenance[key] = entry
-                self._emit_line_pins(
-                    showing, lambda node: CAUSE_LINE_PIN_SET,
-                    lambda node: (*(line.text for line in node.reason_entries
-                                    if line.slug == slug), entry.note))
+                shown = self._shows_at(key[0], self._find_node(key[0]))
+                self._waiting_lines.pop(key, None)
+                if self._holds(entry, moment):
+                    self._entry_maintenance[key] = entry
+                    self._line_pin_rows(
+                        key[0],
+                        [_LineAct(slug, entry, SET if holding is None else EDITED)],
+                        shown)
+                    self._told_window(key[0], slug, entry, when=moment,
+                                      why=ENDED_HAND, by=set_by)
+                else:
+                    if holding is not None:
+                        del self._entry_maintenance[key]
+                        self._line_pin_rows(
+                            key[0],
+                            [_LineAct(slug, holding, CLOSED, ENDED_HAND, set_by)],
+                            shown)
+                        self._told_window(key[0], slug, entry, when=moment,
+                                          why=ENDED_HAND, by=set_by)
+                    self._waiting_lines[key] = entry
             self._persist()
             return PinWrite(True, entry)
 
     def clear_entry_maintenance(self, path: str, slug: str, *,
-                                expected_set_at: str | None = None
-                                ) -> PinWrite:
+                                expected_set_at: str | None = None,
+                                by: str = "") -> PinWrite:
         """Release a per-entry pin. ``applied`` is ``False`` when there was none.
-        An event where the node shows something else without it, as its set was
-        (ADR-0107 decision 1), with the node's lines for its reason."""
+        A row of its node, as its set was (ADR-0145 decision 9), the line for its
+        reason, saying it ended by hand — ``by`` whose."""
         with self._lock:
             key = (join_path(path), slug)
-            stored = self._entry_maintenance.get(key)
+            waiting = self._waiting_lines.get(key)
+            stored = self._entry_maintenance.get(key) or waiting
             if not self._token_matches(stored, expected_set_at):
                 return PinWrite(False, stored, refused=True)
-            with self._one_write():
-                showing = self._showing([key[0]])
-                existed = self._entry_maintenance.pop(key, None) is not None
-                if existed:
-                    self._emit_line_pins(showing,
-                                         lambda node: CAUSE_LINE_PIN_ENDED)
-            if existed:
+            if waiting is not None and key not in self._entry_maintenance:
+                del self._waiting_lines[key]
+                self._told_end(key[0], slug, waiting, ENDED_HAND,
+                               when=self._instant(), by=by)
                 self._persist()
-            return PinWrite(existed, None)
+                return PinWrite(True, None)
+            with self._one_write():
+                shown = self._shows_at(key[0], self._find_node(key[0]))
+                gone = self._entry_maintenance.pop(key, None)
+                if gone is not None:
+                    self._line_pin_rows(
+                        key[0], [_LineAct(slug, gone, ENDED, ENDED_HAND, by)], shown)
+            if gone is not None:
+                self._persist()
+            return PinWrite(gone is not None, None)
+
+    def change_window(self, path: str, slug: str = "", *, opened: datetime,
+                      until: datetime | None = None, note: str = "", by: str = "",
+                      expected_set_at: str | None = None) -> PinWrite:
+        """Change the window of a maintenance entry that is open now, alone (ADR-0150,
+        landing 4): extend it to ``until``, an instant later than its end — *Extend*,
+        an edit, its row the edit's — or, with no ``until``, end it now — *End now*,
+        which closes it, *window closed · by hand*, the entry standing for its windows
+        to come, or, where no window of its own text comes after it, is the entry's
+        end, *maintenance ended · by hand*.
+
+        The window is named by when it opened, ``opened``. One that closed before the
+        change arrived is refused as a stale edit is, ``problem``
+        :data:`WINDOW_CLOSED` — nothing reopens a window by itself — and an ``until``
+        not after its end with :data:`NOT_LATER`, since *Extend* never shortens. Each
+        change is kept beside the schedule, keyed by the start of the window it
+        changed, as RFC 5545's ``RECURRENCE-ID`` keys one, with ``note``, the words
+        why, ``by`` and when (:class:`~little_sister.pins.Changed`); an extension that
+        reaches the next window's start joins the two, as windows that overlap join.
+        The entry's own note, schedule and holiday list stay as they are, and the token
+        guards the change as every write here (:meth:`set_maintenance`). Thread-safe.
+        """
+        with self._lock:
+            key: Any = (join_path(path), slug) if slug else join_path(path)
+            holding = (self._entry_maintenance.get(key) if slug
+                       else self._maintenance.get(key))
+            stored = holding or (self._waiting_lines.get(key) if slug
+                                 else self._waiting.get(key))
+            if not self._token_matches(stored, expected_set_at):
+                return PinWrite(False, stored, refused=True)
+            moment = instants.now()
+            window = (None if holding is None
+                      else open_at(self.windows(holding), moment))
+            if (holding is None or holding.schedule is None or window is None
+                    or window.start != instants.utc(opened, "the window's start")):
+                return PinWrite(False, stored, problem=WINDOW_CLOSED)
+            overrides = {each.start: each for each in holding.changed}
+            if until is not None:
+                until = instants.utc(until, "a window's new end")
+                if until <= window.end:
+                    return PinWrite(False, stored, problem=NOT_LATER)
+                first = window.starts[0]
+                overrides[first] = Changed(first, until, note, by, moment)
+            else:
+                # every window the open one is made of ends now — one joined to it
+                # and not begun yet with it, ending where it begins
+                for begin in window.starts:
+                    overrides[begin] = Changed(begin, max(begin, moment), note, by,
+                                               moment)
+                ends = {each.start: each.end for each in overrides.values()}
+                if not any(each.end > moment
+                           for each in holding.schedule.windows(changed=ends)):
+                    # its last window: ending it is the entry's end
+                    if slug:
+                        return self.clear_entry_maintenance(
+                            path, slug, expected_set_at=expected_set_at, by=by)
+                    return self.clear_maintenance(path, expected_set_at=expected_set_at,
+                                                  by=by)
+            changes = tuple(overrides.values())
+            if slug:
+                return self.set_entry_maintenance(
+                    path, slug, holding.note, schedule=holding.schedule,
+                    not_on=holding.not_on, changed=changes, set_by=by,
+                    expected_set_at=expected_set_at)
+            return self.set_maintenance(
+                path, holding.note, schedule=holding.schedule, not_on=holding.not_on,
+                changed=changes, set_by=by, expected_set_at=expected_set_at)
+
+    def _end_line_pins(self, keys: Iterable[tuple[str, str]], why: str) -> None:
+        """End the lines' pins at ``keys`` for ``why`` — their end, or their path no
+        longer covered — each a row of its node (:meth:`_line_pin_rows`), a node's
+        first from what it showed before any of them went."""
+        by_path: dict[str, list[str]] = {}
+        for path, slug in keys:
+            by_path.setdefault(path, []).append(slug)
+        for path in sorted(by_path):
+            shown = self._shows_at(path, self._find_node(path))
+            acts = [_LineAct(slug, self._entry_maintenance.pop((path, slug)), ENDED,
+                             why) for slug in sorted(by_path[path])]
+            self._line_pin_rows(path, acts, shown)
 
     def entry_maintenance(self, path: str, slug: str) -> Pin | None:
-        """The pin on one reason of ``path``, if any."""
+        """The pin that holds on one reason of ``path`` now, if any."""
         with self._lock:
             return self._entry_maintenance.get((join_path(path), slug))
+
+    def standing_line_entry(self, path: str, slug: str) -> Pin | None:
+        """The maintenance entry that stands on one reason of ``path``, a window of
+        it open or none, as :meth:`standing_entry` is a node's."""
+        with self._lock:
+            key = (join_path(path), slug)
+            return self._entry_maintenance.get(key) or self._waiting_lines.get(key)
 
     def entry_maintenance_at(self, path: str) -> dict[str, Pin]:
         """Every per-entry pin held against ``path``, by slug — including slugs the
@@ -2971,33 +4123,58 @@ class StatusTree:
         with self._lock:
             return dict(self._acknowledged), dict(self._entry_acknowledged)
 
-    def acknowledgeable(self, path: str, slug: str = "") -> str:
+    def acknowledgeable(self, path: str, slug: str = "", kind: str = "") -> str:
         """Why the node at ``path``, or its line ``slug``, cannot take a new
-        acknowledgment now, in a sentence a refusal says — and empty where it can: it
-        fails now, by its own reading or its line's, and nothing on it or above it
-        holds it in maintenance, nor accepts it already (ADR-0142). A node whose lines
-        are members fails through them, and they take one each. Thread-safe."""
+        acknowledgment of ``kind`` now, in a sentence a refusal says — and empty where
+        it can: it fails now, by its own reading or its line's, and nothing on it or
+        above it holds it in maintenance, nor accepts it already (ADR-0142). A node
+        whose lines are members fails through them, and they take one each. A *done*
+        asks besides that the failure is an event: a line whose failure has an
+        occurrence of its own, never a node's own failure (ADR-0146). A silence asks no
+        failure, since it is bound to none (ADR-0144 decision 1): it stands on a part
+        that reads ok and holds it from its next failure — but not on one its own
+        check reads as in maintenance, over which no silence counts. Thread-safe."""
         with self._lock:
-            return self._refusal(join_path(path), slug)
+            return self._refusal(join_path(path), slug, kind=kind)
 
     def set_acknowledgment(self, path: str, slug: str, kind: str, note: str, *,
                            expires_at: datetime | None, set_by: str = "",
-                           expected_set_at: str | None = None) -> PinWrite:
+                           expected_set_at: str | None = None,
+                           level: StatusCode | None = None,
+                           occurrence: str | None = None) -> PinWrite:
         """Accept the failure of the node at ``path``, or of its line ``slug``, as
         ``kind`` — or edit the acknowledgment that stands there (ADR-0142). A
         **compare-and-set** write as a pin's is (ADR-0014): ``expected_set_at`` is the
         token of the acknowledgment the caller believes it replaces, ``""`` for none,
         and a mismatch refuses the write whole.
 
-        A new one is taken only where its part fails now (:meth:`acknowledgeable`),
-        and is bound to what it accepted, read here: the status it is set at and the
-        line's occurrence — its type's field, else its reading's identity — or the
-        failing stretch where nothing tells occurrences apart. Its ``problem`` says why
-        where it is not taken. An edit keeps what it was bound to, its creation and
-        its id, and changes its note and its end; one that changes neither writes
-        nothing. Every set and edit is a row of its node, the kind's word and the act
-        (:func:`acknowledgment_cause`) — a line's from what its node showed to what
-        it shows, a node's own changing nothing its node shows. Thread-safe."""
+        A new one is taken only where its part can take it (:meth:`acknowledgeable`)
+        — a *seen* and a *done* where it fails now, a silence on a part that reads ok
+        as well — and is bound to what its kind needs, read here: a *seen* to the
+        status it is set at and the line's occurrence — its type's field, else its
+        reading's identity — or the failing stretch where nothing tells occurrences
+        apart; a silence to its deadline, ``expires_at``, and its ``level``
+        (ADR-0144); a *done* to the failure it closes and its occurrence, which a
+        line's failure has to have (ADR-0146). **A done closes the event that was
+        looked at**: ``occurrence`` is the one its form was drawn with, and where the
+        line reads another now nothing is written. Its ``problem`` says why where it
+        is not taken. An edit keeps what it was bound to, its creation and its id, and
+        changes its note, its end and a silence's level; one that changes none writes
+        nothing.
+
+        **An edit that makes it another kind** — a *seen* made a silence, or one made
+        *seen* — ends the one standing and sets a new one in its place, in one write:
+        the new one has an id and a creation of its own and is bound to what its kind
+        needs as any new one is, so it is taken only where its part takes a new one —
+        a *seen* or a *done* only where it fails now. The end says why it ended, made
+        the other kind (:data:`ENDED_MADE`).
+
+        Every set, edit and end is a row of its node, the kind's word and the act
+        (:func:`acknowledgment_cause`) — a line's from what its node showed to what it
+        shows, a node's own changing nothing its node shows. Thread-safe.
+
+        :raises ValueError: a silence without a deadline or a level, or a *seen* with
+            a level — the caller's to supply, and nothing is written."""
         moment = instants.now()
         with self._lock:
             key = join_path(path)
@@ -3005,52 +4182,91 @@ class StatusTree:
                       else self._acknowledged.get(key))
             if not self._token_matches(stored, expected_set_at):
                 return PinWrite(False, stored, refused=True)
-            if stored is None:
-                problem = self._refusal(key, slug)
+            made = stored is not None and stored.kind != kind
+            if stored is None or made:
+                problem = self._refusal(key, slug, replacing=made, kind=kind)
+                if not problem and kind == DONE and occurrence is not None:
+                    problem = self._moved_on(key, slug, occurrence)
                 if problem:
-                    return PinWrite(False, None, problem=problem)
-                status, occurrence = self._accepting(key, slug)
-                entry = Pin(kind, note, moment, expires_at, set_by,
-                            occurrence=occurrence, status=status)
+                    return PinWrite(False, stored, problem=problem)
+                entry = self._new_acknowledgment(key, slug, kind, note, moment,
+                                                 expires_at, set_by, level)
             else:
-                if stored.kind != kind:
-                    return PinWrite(False, stored, problem=(
-                        f"it is {stored.kind} already, and an edit keeps its kind"))
                 entry = Pin(kind, note, moment, expires_at, set_by,
                             stored.created_at, stored.created_by, stored.id,
-                            occurrence=stored.occurrence, status=stored.status)
+                            occurrence=stored.occurrence, status=stored.status,
+                            level=level)
                 if stored.same_pin_as(entry):
                     return PinWrite(False, stored)
             # One write, at that instant (ADR-0132 decision 2).
             with self._one_write(moment):
-                self._place(key, slug, entry, edited=stored is not None, when=moment)
+                if made:
+                    assert stored is not None
+                    self._remake(key, slug, stored, entry, when=moment)
+                else:
+                    self._place(key, slug, entry, edited=stored is not None,
+                                when=moment)
             self._persist()
             return PinWrite(True, entry)
 
+    def _remake(self, path: str, slug: str, stored: Pin, entry: Pin, *,
+                when: datetime) -> None:
+        """Put ``entry`` in place of ``stored``, an acknowledgment of another kind, on
+        the node at ``path`` or on its line ``slug`` (ADR-0144): the row of the end of
+        the one standing, made the other kind, which changes nothing the node shows,
+        and the new one's row, from what the node showed to what it shows with it —
+        so that the log holds no instant where neither stood."""
+        node = self._find_node(path)
+        before = self._shows_at(path, node)
+        ended = _Ended(slug, stored, ENDED_MADE[entry.kind])
+        self._emit_at(path, node, before, before,
+                      cause=acknowledgment_cause(stored.kind, ENDED, line=bool(slug)),
+                      reason=self._ended_reason(node, ended), when=when,
+                      ended=ended.why, level=stored.level)
+        self._told_end(path, slug, stored, ended.why, when=when, by=entry.set_by)
+        self._place(path, slug, entry, edited=False, when=when)
+
+    def _new_acknowledgment(self, path: str, slug: str, kind: str, note: str,
+                            moment: datetime, expires_at: datetime | None,
+                            set_by: str, level: StatusCode | None) -> Pin:
+        """A new acknowledgment of ``kind`` on the node at ``path``, or on its line
+        ``slug``, bound to what its kind needs (:meth:`set_acknowledgment`): a
+        silence to its deadline and its level, a *seen* to the failure it reads now
+        (:meth:`_accepting`). Asked once :meth:`_refusal` said it can take one."""
+        if kind == SILENCED:
+            return Pin(kind, note, moment, expires_at, set_by, level=level)
+        status, occurrence = self._accepting(path, slug)
+        return Pin(kind, note, moment, expires_at, set_by, occurrence=occurrence,
+                   status=status, level=level)
+
     def set_acknowledgments(self, parts: Iterable[tuple[str, str]], kind: str,
                             note: str, *, expires_at: datetime | None,
-                            set_by: str = "") -> list[tuple[str, str, Pin | None, str]]:
+                            set_by: str = "", level: StatusCode | None = None
+                            ) -> list[tuple[str, str, Pin | None, str]]:
         """Accept each of ``parts`` — a node's path, and a line's slug or empty for
         the node itself — as ``kind``, every one an acknowledgment of its own sharing
-        ``note`` and ``expires_at``, each bound to its own failure as it stands and
-        ending by itself (ADR-0142): what a ringed check on a node that fails from
-        its lines or from beneath it sets. A part that cannot take one now is passed
-        over with the sentence why — it recovered since it was listed, or holds one
-        already. One write for them all, at one instant. Answers each part with the
-        acknowledgment set on it, or ``None`` and why. Thread-safe."""
+        ``note``, ``expires_at`` and a silence's ``level``, each bound to what its kind
+        needs and ending by itself (ADR-0142, ADR-0144): what a ringed check on a node
+        that fails from its lines or from beneath it sets. A part that cannot take one
+        now is passed over with the sentence why — a seen's part recovered since it
+        was listed, or one holds an acknowledgment already. One write for them all, at
+        one instant. Answers each part with the acknowledgment set on it, or ``None``
+        and why. Thread-safe.
+
+        :raises ValueError: as :meth:`set_acknowledgment` does, at the first part that
+            takes one and before any is set, since every part shares them."""
         moment = instants.now()
         answers: list[tuple[str, str, Pin | None, str]] = []
         with self._lock:
             with self._one_write(moment):
                 for path, slug in parts:
                     key = join_path(path)
-                    problem = self._refusal(key, slug)
+                    problem = self._refusal(key, slug, kind=kind)
                     if problem:
                         answers.append((key, slug, None, problem))
                         continue
-                    status, occurrence = self._accepting(key, slug)
-                    entry = Pin(kind, note, moment, expires_at, set_by,
-                                occurrence=occurrence, status=status)
+                    entry = self._new_acknowledgment(key, slug, kind, note, moment,
+                                                     expires_at, set_by, level)
                     self._place(key, slug, entry, edited=False, when=moment)
                     answers.append((key, slug, entry, ""))
             if any(pin is not None for _path, _slug, pin, _problem in answers):
@@ -3058,11 +4274,12 @@ class StatusTree:
         return answers
 
     def clear_acknowledgment(self, path: str, slug: str = "", *,
-                             expected_set_at: str | None = None) -> PinWrite:
+                             expected_set_at: str | None = None,
+                             by: str = "") -> PinWrite:
         """End the acknowledgment on the node at ``path``, or on its line ``slug``,
-        by hand — a row of its node saying so, as every end says why (ADR-0142).
-        Guarded by the same token as a set; ``applied`` is ``False`` where none
-        stood. Thread-safe."""
+        by hand — a row of its node saying so, as every end says why (ADR-0142), and
+        ``by`` whose (ADR-0145 decision 4). Guarded by the same token as a set;
+        ``applied`` is ``False`` where none stood. Thread-safe."""
         with self._lock:
             key = join_path(path)
             stored = (self._entry_acknowledged.get((key, slug)) if slug
@@ -3072,9 +4289,30 @@ class StatusTree:
             if stored is None:
                 return PinWrite(False, None)
             with self._one_write():
-                self._end_acknowledgments(key, [_Ended(slug, stored, ENDED_HAND)])
+                self._end_acknowledgments(key, [_Ended(slug, stored, ENDED_HAND, by)])
             self._persist()
             return PinWrite(True, None)
+
+    def restore_pins(self, nodes: dict[str, Pin], lines: dict[tuple[str, str], Pin],
+                     acknowledged: Mapping[str, Pin],
+                     lines_acknowledged: Mapping[tuple[str, str], Pin],
+                     now: datetime | None = None) -> None:
+        """Replay the whole pins file at startup — the maintenance
+        (:meth:`restore_maintenance`) and what a person acknowledged
+        (:meth:`restore_acknowledgments`), at one instant — and **write the file once,
+        after both**. Each of the two writes it where it drops something, the first
+        always, and a write between them is a file without the acknowledgments: they
+        stood in the process that read them, and were gone after the next start, with
+        no row, since nothing ended them (ADR-0142, ADR-0144). Thread-safe."""
+        moment = _asked_at(now)
+        with self._lock:
+            store, self._pin_store = self._pin_store, None
+            try:
+                self.restore_maintenance(nodes, moment, entry_pins=lines)
+                self.restore_acknowledgments(acknowledged, lines_acknowledged, moment)
+            finally:
+                self._pin_store = store
+            self._persist()
 
     def restore_acknowledgments(self, nodes: Mapping[str, Pin],
                                 lines: Mapping[tuple[str, str], Pin],
@@ -3142,8 +4380,15 @@ class StatusTree:
                 if stored is None or not stored.same_pin_as(pin):
                     self._place(path, slug, pin, edited=stored is not None, when=when)
 
-    def _refusal(self, path: str, slug: str) -> str:
-        """:meth:`acknowledgeable`, under the lock."""
+    def _refusal(self, path: str, slug: str, *, replacing: bool = False,
+                 kind: str = "") -> str:
+        """:meth:`acknowledgeable`, under the lock — and with ``replacing``, whether a
+        new acknowledgment can stand there in place of the one that does, made
+        another kind (ADR-0144): the same question, the one standing aside. A
+        *done* (``kind``) is refused where the failure is no event: a line whose
+        failure has no occurrence of its own, and a node's own failure, which is its
+        failing stretch (ADR-0146). A silence is refused nowhere for reading ok
+        (:func:`_unsilenceable`)."""
         node = self._find_node(path)
         if node is None or node.timestamp is None:
             return f"nothing reports {path} now"
@@ -3162,17 +4407,29 @@ class StatusTree:
                 return f"{path} reports no line {slug} now"
             if (path, slug) in self._entry_maintenance:
                 return f"{line} is in maintenance"
-            if (path, slug) in self._entry_acknowledged:
+            if (path, slug) in self._entry_acknowledged and not replacing:
                 return f"{line} is {self._entry_acknowledged[path, slug].kind} already"
             code = entry.code if entry.code is not None else node.code
+            if kind == SILENCED:
+                return _unsilenceable(line, code)
             if code not in _FAILURES:
                 return f"{line} reads {code.name.lower()} now: nothing fails there"
+            if kind == DONE and not entry.occurrence:
+                return (f"{line} names no event: nothing tells its failure from the "
+                        f"next, so a done has nothing to close")
             return ""
+        if kind == DONE:
+            return (f"{path}'s own failure is a failing stretch, not an event: a done "
+                    f"closes an event on one of its lines")
         if node.members and node.reason_entries:
+            if kind == SILENCED:
+                return f"{path} reads by its lines, and each is silenced on its own"
             return f"{path} fails by its lines, and each is accepted on its own"
-        if path in self._acknowledged:
+        if path in self._acknowledged and not replacing:
             return f"{path} is {self._acknowledged[path].kind} already"
         code = self._own(node, accepted=False)
+        if kind == SILENCED:
+            return _unsilenceable(path, code)
         if code not in _FAILURES:
             return f"{path} reads {code.name.lower()} now: nothing fails there"
         return ""
@@ -3190,12 +4447,26 @@ class StatusTree:
                     entry.occurrence)
         return self._own(node, accepted=False), ""
 
+    def _moved_on(self, path: str, slug: str, occurrence: str) -> str:
+        """Why a new *done* on the line ``slug`` of the node at ``path`` would close
+        another event than the one its form was drawn with, ``occurrence`` — the line
+        reads another now — or empty where it reads that one (ADR-0146). Asked once
+        :meth:`_refusal` said the line can take one."""
+        node = self._find_node(path)
+        assert node is not None
+        entry = next(entry for entry in node.reason_entries if entry.slug == slug)
+        if entry.occurrence == occurrence:
+            return ""
+        return (f"its line {slug} now reads a different event from the one this "
+                f"was opened on")
+
     def _place(self, path: str, slug: str, entry: Pin, *, edited: bool,
                when: datetime) -> None:
         """Hold ``entry`` on the node at ``path``, or on its line ``slug``, and write
         its row (ADR-0142): a line's from what its node showed to what it shows now,
         naming the line and the note; a node's own, which changes nothing its node
-        shows, with its note."""
+        shows, with its note — and a silence's with the level it holds its part at
+        (ADR-0144)."""
         node = self._find_node(path)
         cause = acknowledgment_cause(entry.kind, EDITED if edited else SET,
                                      line=bool(slug))
@@ -3206,11 +4477,12 @@ class StatusTree:
             text = next((line.text for line in node.reason_entries
                          if line.slug == slug), slug) if node is not None else slug
             self._emit_at(path, node, before, self._shows_at(path, node),
-                          cause=cause, reason=(text, *note), when=when)
+                          cause=cause, reason=(text, *note), when=when,
+                          level=entry.level)
         else:
             self._acknowledged[path] = entry
             self._emit_at(path, node, before, before, cause=cause, reason=note,
-                          when=when)
+                          when=when, level=entry.level)
 
     def _end_acknowledgments(self, path: str, ended: Sequence[_Ended], *,
                              when: datetime | None = None) -> None:
@@ -3218,7 +4490,8 @@ class StatusTree:
         row of each, saying why it ended (ADR-0142): the lines' first, the first of
         them from what the node showed to what it shows without them, the rest
         changing nothing more, and the node's own changing nothing its node shows.
-        A write that read the node writes its ends with its own rows instead
+        Each end is told (:meth:`_told_end`), but an adopted file's, which says no
+        why. A write that read the node writes its ends with its own rows instead
         (:meth:`_record_reading`)."""
         node = self._find_node(path)
         before = self._shows_at(path, node)
@@ -3235,8 +4508,10 @@ class StatusTree:
             now_shows = after if item.slug else shown
             self._emit_at(path, node, shown, now_shows, cause=cause,
                           reason=self._ended_reason(node, item), when=moment,
-                          ended=item.why)
+                          ended=item.why, level=item.pin.level)
             shown = now_shows
+            self._told_end(path, item.slug, item.pin, item.why, when=moment,
+                           by=item.by)
 
     @staticmethod
     def _ended_reason(node: Status | None, item: _Ended) -> tuple[str, ...]:
@@ -3252,14 +4527,16 @@ class StatusTree:
     def _acknowledgments_on(self, path: str) -> list[_Ended]:
         """The acknowledgments on the node at ``path`` and on its lines, dropped from
         the tables as ended because the node is no longer reported (ADR-0142): its
-        lines' first, then its own."""
+        lines' first, then its own. A silence stays, held against the path as a pin
+        is (ADR-0109 decision 4), until its deadline (ADR-0144)."""
         ended = [_Ended(slug, pin, ENDED_GONE)
                  for (at, slug), pin in sorted(self._entry_acknowledged.items())
-                 if at == path]
+                 if at == path and pin.kind != SILENCED]
         for item in ended:
             del self._entry_acknowledged[path, item.slug]
-        own = self._acknowledged.pop(path, None)
-        if own is not None:
+        own = self._acknowledged.get(path)
+        if own is not None and own.kind != SILENCED:
+            del self._acknowledged[path]
             ended.append(_Ended("", own, ENDED_GONE))
         return ended
 
@@ -3270,7 +4547,9 @@ class StatusTree:
         line's — whose occurrence is a new one, or which this reading no longer
         reports. A reading whose lines are no members — a check's error, prose —
         says nothing of the lines, whose acknowledgments it leaves suspended, as it
-        leaves their pins (ADR-0036 decision 6)."""
+        leaves their pins (ADR-0036 decision 6). A silence no reading ends
+        (ADR-0144): its line gone from the reading leaves it suspended, as it leaves
+        the line's pin."""
         ended: list[_Ended] = []
         own = self._acknowledged.get(node.path)
         if own is not None:
@@ -3281,7 +4560,7 @@ class StatusTree:
         if node.members and self._entry_acknowledged:
             entries = {entry.slug: entry for entry in node.reason_entries}
             for (path, slug), pin in list(self._entry_acknowledged.items()):
-                if path != node.path:
+                if path != node.path or pin.kind == SILENCED:
                     continue
                 entry = entries.get(slug)
                 why = ENDED_GONE if entry is None else _ending(
@@ -3302,6 +4581,12 @@ class StatusTree:
         """
         moment = _asked_at(now)
         with self._lock:
+            if now is None:
+                # open and closed decided at the snapshot's moment (ADR-0150): what
+                # the tick would open or close a moment later is opened or closed
+                # now, with its rows; a snapshot asked at a moment of its own reads
+                # the windows as the last tick left them
+                self._open_and_close(moment)
             node = self._find_node(path)
             return None if node is None else self._snapshot(node, moment)
 
@@ -3650,7 +4935,7 @@ class StatusTree:
             dependencies = dict(self._dependencies)
             rules = self._rules
             starts = self._rule_starts()
-            accepted = frozenset(self._acknowledged)
+            accepted = dict(self._acknowledged)
         if not logged:
             return [], current
         scope = _scope_of(key, dependencies)
@@ -3776,7 +5061,7 @@ class StatusTree:
                 continue
             by = part.contribution.by
             if not (by == AGGREGATION_RULE or (
-                    by == SEEN_RULE
+                    by in (SEEN_RULE, SILENCED_RULE)
                     and row.cause in ("", CAUSE_READING, CAUSE_REACHED))):
                 continue
             marked = replace(row, suppressed_by=by)
@@ -3859,7 +5144,7 @@ class StatusTree:
                     _is_stale(node, _age_seconds(node.timestamp, now)),
                     node.maintenance, self._damping.get(node.path),
                     node.escalate_after,
-                    accepted=node.path in self._acknowledged)
+                    accepted=_held(self._acknowledged.get(node.path)))
         for path, shows in self._restored_shown.items():
             if (path in given or shows is StatusCode.UNDEFINED
                     or not self._carries(path)):
@@ -3891,14 +5176,14 @@ class StatusTree:
         began = self._beginnings.get(path)
         pinned = path in self._maintenance or (
             shows is StatusCode.MAINTENANCE and began is not None
-            and began.cause in (CAUSE_PIN_SET, CAUSE_PIN_EDITED))
+            and began.cause in (CAUSE_PIN_SET, CAUSE_PIN_EDITED, CAUSE_PIN_OPENED))
         return _Inputs(
             self._restored_reading.get(path, StatusCode.UNDEFINED), shows,
             pinned=pinned,
             damped=(_Damped(published, shows, 1) if published is not None
                     and escalates(published, shows) else None),
             carried=shows is not StatusCode.UNDEFINED,
-            accepted=path in self._acknowledged)
+            accepted=_held(self._acknowledged.get(path)))
 
     def _compare(self, before: Mapping[str, _Part], after: Mapping[str, _Part],
                  at: datetime, *, cause: str | None = None,
@@ -4096,7 +5381,7 @@ class StatusTree:
         replayed = _replayed(events, self._restored_shown, self._restored_reading,
                              self._restored_published, self._beginnings,
                              self._dependencies, rules=self._rules,
-                             accepted=frozenset(self._acknowledged))
+                             accepted=dict(self._acknowledged))
         oldest = events[0].timestamp
         seeded: dict[str, Period] = {}
         for path, part in current.items():
@@ -4137,14 +5422,23 @@ class StatusTree:
         tables: tuple[Table | None, ...] = ()
         if node.members:
             if ruled:
+                # a line a done closes counts toward a rule's count as the OK it
+                # shows, where the acknowledgments are counted (ADR-0146)
                 tables, _marks = _lines_ruled(
                     self._rules.on_lines(node.path),
-                    [(entry.slug, quiet, entry.code) for entry, (quiet, _code)
+                    [(entry.slug, quiet, entry.code, accepted and not quiet and (
+                        _closes(acknowledged.get((node.path, entry.slug)))
+                        or entry.slug in held.done))
+                     for entry, (quiet, _code)
                      in zip(node.reason_entries, lines, strict=True)], node.code)
             if accepted and (acknowledged or held.accepted):
+                # a line whose acknowledgment a reading just ended was a *seen* or a
+                # *done*, both counted by `ACCEPTED`: nothing a reading reads ends a
+                # silence (ADR-0144)
                 tables = _accepted_tables(
-                    tables, [(node.path, entry.slug) in acknowledged
-                             or entry.slug in held.accepted
+                    tables, [_held(acknowledged.get((node.path, entry.slug)))
+                             or (_SEEN_HELD if entry.slug in held.accepted
+                                 else None)
                              for entry in node.reason_entries])
         return _own_code(node.code, lines, node.members,
                          (node.maintenance and node_pin) or held.node, tables)
@@ -4216,7 +5510,7 @@ class StatusTree:
         logged = {event.path for event in self._events
                   if event.cause == CAUSE_REMOVED}
         for path in removed:
-            if (path in logged or path in self._maintenance
+            if (path in logged or path in self._maintenance or path in self._waiting
                     or self._find_node(path) is not None):
                 continue
             del self._restored_shown[path]
@@ -4376,7 +5670,11 @@ class StatusTree:
         parent (:meth:`_withholding_rule`). On a node's first reading after a
         restart its cause is the end of a pin, where one ran out while the instance
         was down and the node would still show what it showed had that pin held;
-        everywhere else a reading moved it.
+        everywhere else a reading moved it. **Every pin that ran out meanwhile** is
+        a row of its end, at its end (ADR-0145 decision 9): the one that moved the
+        node that row, and every other a row of its own that changes nothing more —
+        and a window of one that closed, where its entry stands, the row of its close
+        (ADR-0150).
 
         **What its check reports, where the node does not show it,** is a row of
         its own with the reading's codes, held back: beneath the node's pin, as it
@@ -4395,37 +5693,66 @@ class StatusTree:
         the node shows, the row of that change is its end's, and every other end is
         a row of its own that changes nothing more — a node's own acknowledgment
         never changes what its node shows — after the row of what the node shows,
-        so that the change of a branch above is the end's.
+        so that the change of a branch above is the end's. A line's *done* that a
+        new event ended is never the end that moved its node: the next event on the
+        line is a reading's row as ever, and the done's end a row of its own beside
+        it (ADR-0146).
         """
         shows = self._own(node)
         wrote = moved = False
         pending = list(ended)
+        # The pins that ran out while the instance was down (ADR-0107 decision 5),
+        # each a row of its end, at its end (ADR-0145 decision 9): the node's own,
+        # and its lines' — the one whose end changed what the node shows its row.
+        ran_node = ran_out is not None and ran_out.node
+        ran_lines = sorted(ran_out.lines) if ran_out is not None else []
         if shows is not shown:
             cause, why = CAUSE_READING, ""
-            lines = [item for item in pending if item.slug]
+            # a line's done that a new event ended moved nothing: the next event on
+            # its line is a reading's row as ever (ADR-0146)
+            lines = [item for item in pending if item.slug and not (
+                item.pin.kind == DONE and item.why == ENDED_OCCURRENCE)]
             if ran_out is not None and self._own(node, ran_out) is shown:
-                cause = CAUSE_PIN_ENDED if ran_out.node else CAUSE_LINE_PIN_ENDED
-            elif lines and self._own(node, _RanOut(accepted=frozenset(
-                    item.slug for item in lines))) is shown:
+                why = ENDED_CLOCK
+                if ran_node:
+                    cause, ran_node = _ran_cause(ran_out, ""), False
+                else:
+                    cause = _ran_cause(ran_out, ran_lines[0])
+                    ran_lines = ran_lines[1:]
+            elif lines and self._own(node, _RanOut(
+                    accepted=frozenset(item.slug for item in lines),
+                    done=frozenset(item.slug for item in lines
+                                   if item.pin.kind == DONE))) is shown:
                 cause = acknowledgment_cause(lines[0].pin.kind, ENDED, line=True)
                 why = lines[0].why
                 pending.remove(lines[0])
             self._emit(node, shown, shows, cause=cause,
                        mark=self._withholding_rule(node), ended=why)
             wrote = moved = True
+        if ran_node:
+            self._emit(node, shows, shows, cause=_ran_cause(ran_out, ""),
+                       ended=ENDED_CLOCK)
+            wrote = True
+        for slug in ran_lines:
+            self._emit(node, shows, shows, cause=_ran_cause(ran_out, slug),
+                       reason=tuple(line.text for line in node.reason_entries
+                                    if line.slug == slug), ended=ENDED_CLOCK)
+            wrote = True
         for item in sorted(pending, key=lambda item: item.slug == ""):
             self._emit(node, shows, shows, cause=acknowledgment_cause(
                 item.pin.kind, ENDED, line=bool(item.slug)),
-                reason=self._ended_reason(node, item), ended=item.why)
+                reason=self._ended_reason(node, item), ended=item.why,
+                level=item.pin.level)
             wrote = True
         if node.code is not reported and (
                 not moved or (reported, node.code) != (shown, shows)):
             self._emit(node, reported, node.code, cause=CAUSE_READING,
-                       mark=self._hiding_rule(node, reported), shown=False)
+                       mark=self._hiding_rule(node, reported, ended), shown=False)
             wrote = True
         return wrote
 
-    def _hiding_rule(self, node: Status, reported: StatusCode) -> str:
+    def _hiding_rule(self, node: Status, reported: StatusCode,
+                     ended: Sequence[_Ended] = ()) -> str:
         """Which rule keeps a reading from what the node shows — the mark of the row
         :meth:`_record_reading` writes for a reading the node did not show, the
         change from ``reported`` to the node's code: a pin, on the node or on a line,
@@ -4435,13 +5762,26 @@ class StatusTree:
         also where the reading the node did not show was the one before this, and
         nothing hides the one now. A rule holds back only what it lowered: where a
         floor raised what the node shows to at least both ends of the change, the
-        row is no rule's (:func:`_held_below`)."""
+        row is no rule's (:func:`_held_below`).
+
+        **A line's acknowledgment this reading ended** (``ended``) is such a one
+        before it: where none stands any more, the row is the kind of the first the
+        reading ended — a seen or a done that got worse or recovered, a done whose
+        next run passed — which hid the reading before it; not maintenance, which
+        nothing here held (ADR-0142, ADR-0146)."""
         if node.maintenance or not node.members:
             return MAINTENANCE_RULE
         pins, acknowledged = self._entry_maintenance, self._entry_acknowledged
         keys = [(node.path, entry.slug) for entry in node.reason_entries]
         pinned = any(key in pins for key in keys)
-        accepted = any(key in acknowledged and key not in pins for key in keys)
+        # the kind of the first line a person's acknowledgment stands on, which is
+        # the rule its row names: seen, silenced or done (ADR-0142, ADR-0144,
+        # ADR-0146) — or, where none stands now, of the first this reading ended
+        kind = next((acknowledged[key].kind for key in keys
+                     if key in acknowledged and key not in pins), "") or next(
+            (item.pin.kind for item in ended
+             if item.slug and (node.path, item.slug) not in pins), "")
+        accepted = bool(kind)
         ruled = bool(self._rules.on_lines(node.path))
         if not (pinned or accepted or ruled):
             return MAINTENANCE_RULE
@@ -4453,48 +5793,50 @@ class StatusTree:
             if ruled and self._own(node, ruled=False) is node.code:
                 return lowered
             if accepted and self._own(node, accepted=False) is node.code:
-                return SEEN_RULE
+                return kind
         if pinned:
             return MAINTENANCE_RULE
         if accepted:
-            return SEEN_RULE
+            return kind
         return lowered
 
-    def _showing(self, paths: Iterable[str]) -> list[tuple[Status, StatusCode]]:
-        """Each node among ``paths`` that the tree holds, with what it shows — taken
-        before its lines' pins change, to see afterwards whether that changed it.
-        A node no check has written in this process has no lines for a pin to
-        act on, so it shows the same after as before, and its first reading
-        settles it (ADR-0107 decision 5)."""
-        showing: list[tuple[Status, StatusCode]] = []
-        for path in sorted(set(paths)):
-            node = self._find_node(path)
+    def _line_pin_rows(self, path: str, acts: Sequence[_LineAct],
+                       shown: StatusCode) -> None:
+        """Write a row of the node at ``path`` for each act on one of its lines'
+        pins, whatever it does to what the node shows (ADR-0145 decision 9, ADR-0107
+        decision 1): ``acts``, each a line's slug, its pin, the act — set, edited or
+        ended — and why an end ended and by whom; ``shown`` what the node showed
+        before them. The first row goes from that to what the node shows now, and
+        every other changes nothing more, each reached, like a node's own pin
+        (ADR-0041 decision 8), and dated by the act. A set's and an edit's reason is
+        the line by its text and the pin's note, an end's the line — plain strings,
+        since a slug means nothing once its line is gone (ADR-0036 decision 11), and
+        one row a pin has to say which — where its node reports the line: a line it
+        does not report now is named by nothing, its slug, often a hash, saying
+        nothing to a reader. Where no node stands at ``path`` nothing is written:
+        the pin is held against its path, and there is no line yet. Every end is
+        told (:meth:`_told_end`), a row or none."""
+        node = self._find_node(path)
+        moment = self._instant()
+        shows = self._shows_at(path, node)
+        for act in acts:
             if node is not None:
-                showing.append((node, self._own(node)))
-        return showing
-
-    def _emit_line_pins(self, showing: list[tuple[Status, StatusCode]],
-                        cause: Callable[[Status], str],
-                        reason: Callable[[Status], tuple[str, ...]] | None = None
-                        ) -> None:
-        """Write the event of each node in ``showing`` that shows something else
-        now that its lines' pins changed (ADR-0107 decision 1): one for a node,
-        however many of its lines' pins went together, and none for one that
-        shows what it showed. It reached, like a node's own pin (ADR-0041 decision
-        8), and it is dated by the act."""
-        when = self._instant()
-        for node, shown in showing:
-            shows = self._own(node)
-            if shows is not shown:
-                self._emit(node, shown, shows, cause=cause(node),
-                           reason=None if reason is None else reason(node),
-                           when=when)
+                text = tuple(line.text for line in node.reason_entries
+                             if line.slug == act.slug)
+                ends = act.act in (ENDED, CLOSED)
+                self._emit(node, shown, shows, cause=_LINE_PIN_CAUSES[act.act],
+                           reason=text if ends else (*text, act.pin.note),
+                           when=moment, ended=act.why if ends else "")
+                shown = shows
+            if act.act == ENDED:
+                self._told_end(path, act.slug, act.pin, act.why, when=moment,
+                               by=act.by)
 
     def _emit(self, node: Status, old: StatusCode, new: StatusCode, *,
               cause: str, mark: str = "",
               reason: tuple[str, ...] | None = None,
               when: datetime | None = None, shown: bool = True,
-              ended: str = "") -> None:
+              ended: str = "", level: StatusCode | None = None) -> None:
         """Record an event of this node (ADR-0107): a change of what it **shows**,
         from ``old`` to ``new`` — or, under a ``mark`` that hides the reading, a
         change of what its check reports that it did not show.
@@ -4516,7 +5858,9 @@ class StatusTree:
         a pin's end start none, and a wait under way ends with the failure its pin
         silences. Every cause but a reading is a pin's here (decision 3) or the end
         of a wait, which has published the status already (ADR-0119): a removal is
-        no event of a node the tree holds, and :meth:`prune` writes it.
+        no event of a node the tree holds, and :meth:`prune` writes it. A row of a
+        line's pin or of an acknowledgment that changes nothing its node shows
+        publishes nothing (:data:`_QUIET_UNCHANGED`).
         """
         stamp = when or node.timestamp
         # A check's event is never about an unobserved node (ADR-0027); an admin's
@@ -4527,15 +5871,13 @@ class StatusTree:
             path=node.path, name=node.name, old=old, new=new,
             reason=tuple(node.reason) if reason is None else reason,
             timestamp=stamp, suppressed_by=mark, cause=cause, reported=reported,
-            shown=shown, ended=ended))
+            shown=shown, ended=ended, level=level))
         if node.timestamp is None:
             # Only a pin writes about a node no check has written yet, and a pin's
             # row is what the node shows.
             self._restored_shown[node.path] = new
-        if cause != CAUSE_READING and not (cause in ACKNOWLEDGMENT_CAUSES
+        if cause != CAUSE_READING and not (cause in _QUIET_UNCHANGED
                                            and new is old):
-            # An acknowledgment's row that changes nothing the node shows publishes
-            # nothing either: what a wait holds back, it still holds (ADR-0142).
             self._damping[node.path] = _Damped(new, None, 0)
 
     def _damp(self, node: Status) -> bool:
@@ -4615,7 +5957,8 @@ class StatusTree:
 
     def _apply_maintenance(self, path: str, entry: Pin, *,
                            replay: bool = False,
-                           when: datetime | None = None) -> None:
+                           when: datetime | None = None,
+                           cause: str = "") -> None:
         """Pin a node and record its entry, emitting a transition on change — and on
         an **edit**, which the code alone cannot see.
 
@@ -4644,7 +5987,8 @@ class StatusTree:
         log last showed.
 
         ``when`` is the instant of a write the tree **sees**: an admin's set or
-        edit, whose row is dated as the store dates it. Without it the tree is
+        edit, whose row is dated as the store dates it, or a window's opening, the
+        ``cause`` its row says (ADR-0150). Without it the tree is
         learning of the pin — at a start's replay, or with an adopted table — and
         the row is dated now; a pin new to the tree then begins its period at its
         creation and not at that row (:meth:`_date_pin`, ADR-0110 decision 6).
@@ -4669,12 +6013,19 @@ class StatusTree:
         edited = previous is not None and not previous.same_pin_as(entry)
         continued = replay and (suspended or old is StatusCode.MAINTENANCE)
         if edited or (previous is None and not continued):
+            if edited:
+                cause = CAUSE_PIN_EDITED
+            elif not cause:
+                # one the tree sees is set; one it learns of was set or opened by a
+                # window of it, as :meth:`_began` reads it
+                cause = (CAUSE_PIN_OPENED if when is None
+                         and self._began(entry, self._instant())[1]
+                         else CAUSE_PIN_SET)
             # The event's reason is the pin's own explanation — *why* it moved — not
             # the check's reading, which did not change and is still on the node.
             self._emit_at(key, node, old,
                           old if suspended else StatusCode.MAINTENANCE,
-                          cause=CAUSE_PIN_EDITED if edited else CAUSE_PIN_SET,
-                          reason=(entry.note,) if entry.note else (),
+                          cause=cause, reason=(entry.note,) if entry.note else (),
                           when=when or self._instant())
         if previous is None and when is None and not suspended:
             self._date_pin(key, entry, old, prior)
@@ -4683,24 +6034,30 @@ class StatusTree:
                   prior: Beginning | None) -> None:
         """Say when the period began of the node at ``path``, whose pin the tree
         has just learned of and did not see set (ADR-0110 decision 6): at the pin's
-        creation, which the store keeps. ``shown`` is what the node showed before
-        the pin was applied, and ``prior`` what was kept of when that began.
+        creation, which the store keeps — or, where the window of a series it holds
+        by opened after that, at the window's start (:meth:`_began`, ADR-0150).
+        ``shown`` is what the node showed before the pin was applied, and ``prior``
+        what was kept of when that began.
 
         A node that showed ``MAINTENANCE`` already keeps a beginning no later than
-        the pin's creation — it showed that before it was pinned — and gives up a
-        later one: the date of an earlier replay, or a bound. One that showed
-        something else showed it until the pin was created, whatever instant the
-        row just written carries."""
-        created = entry.created_at
+        that — it showed that before it was pinned — and gives up a later one: the
+        date of an earlier replay, or a bound. One that showed something else showed
+        it until then, whatever instant the row just written carries."""
+        began, opened = self._began(entry, self._instant())
         was: StatusCode | None = shown
         if shown is StatusCode.MAINTENANCE:
-            if prior is not None and prior.at <= created:
+            if prior is not None and prior.at <= began:
                 return
             was = None if prior is None else prior.was
-        self._beginnings[path] = Beginning(created, was=was, cause=CAUSE_PIN_SET)
+        self._beginnings[path] = Beginning(
+            began, was=was, cause=CAUSE_PIN_OPENED if opened else CAUSE_PIN_SET)
 
-    def _clear_node(self, path: str) -> bool:
+    def _clear_node(self, path: str, *, why: str = "", by: str = "",
+                    closing: bool = False) -> bool:
         """Unpin a node and drop its entry. Returns whether anything was cleared.
+        Its row says ``why`` it ended — by hand, at its end, no longer reported —
+        and nothing where an adopted file's holder ended it, and its end is told
+        (ADR-0145 decisions 4 and 9), with ``by``, who ended it by hand.
 
         Nothing is restored because nothing was destroyed: the node has been holding
         the check's real reading the whole time, so releasing the pin simply lets it
@@ -4716,22 +6073,320 @@ class StatusTree:
         """
         node = self._find_node(path)
         key = node.path if node is not None else join_path(path)
-        existed = self._maintenance.pop(key, None) is not None
+        gone = self._maintenance.pop(key, None)
+        moment = self._instant()
+        # A window that closes keeps its entry, which stands for the windows to come
+        # (ADR-0150): its row says it closed, and nothing of it ended.
+        cause = CAUSE_PIN_CLOSED if closing else CAUSE_PIN_ENDED
+        if gone is not None and closing:
+            self._waiting[key] = gone
+            why = why or ENDED_CLOCK
+        elif gone is not None:
+            self._told_end(key, "", gone, why, when=moment, by=by)
         if node is None:
-            if existed:
+            if gone is not None:
                 old = self._shows_at(key, None)
                 self._emit_at(key, None, old,
                               StatusCode.UNDEFINED
                               if old is StatusCode.MAINTENANCE else old,
-                              cause=CAUSE_PIN_ENDED, reason=(),
-                              when=self._instant())
-            return existed
+                              cause=cause, reason=(), when=moment,
+                              ended=why)
+            return gone is not None
         if not node.maintenance:
-            return existed
+            return gone is not None
         node.maintenance = False
         self._emit(node, StatusCode.MAINTENANCE, self._own(node),
-                   cause=CAUSE_PIN_ENDED, when=self._instant())
+                   cause=cause, when=moment, ended=why)
         return True
+
+    # --- an entry's windows (ADR-0150) -----------------------------------------------
+
+    def use_holidays(self, holidays: Holidays) -> None:
+        """Hand the tree the deployment's holidays (ADR-0149), which an entry's
+        ``not_on`` names: the start's, read once, before the pins are restored."""
+        with self._lock:
+            self._holidays = holidays
+            self._windows_of.clear()
+            self._years_of.clear()
+
+    def windows(self, pin: Pin) -> tuple[Window, ...]:
+        """A maintenance entry's windows as the tree reads them (ADR-0150): its
+        schedule's, each changed alone where it says, the rule's on the days its
+        holiday list names and in the years it is not complete for left out — and
+        none at all where it names a list that cannot be had, which keeps it from
+        applying (ADR-0032 rule 7). The one implementation every reader asks, worked
+        out once a schedule."""
+        assert pin.schedule is not None
+        key = (pin.schedule, pin.not_on, pin.changed)
+        found = self._windows_of.get(key)
+        if found is None:
+            days_off = None
+            if pin.not_on:
+                days_off = self._holidays.get(pin.not_on)
+            changed = {each.start: each.end for each in pin.changed}
+            found = (() if pin.not_on and days_off is None
+                     else pin.schedule.windows(days_off=days_off, changed=changed))
+            if len(self._windows_of) > 4096:
+                self._windows_of.clear()
+            self._windows_of[key] = found
+        return found
+
+    def _window_of(self, pin: Pin, at: datetime) -> Window | None:
+        """The window of an entry that holds, open at ``at`` — or, for a snapshot asked
+        at a moment of its own, the one the last tick left open, the last to have
+        started by then (:meth:`snapshot`). ``None`` only for an entry with no window,
+        which holds nothing."""
+        windows = self.windows(pin)
+        found = open_at(windows, at)
+        if found is None and windows:
+            index = bisect_right([window.start for window in windows], at) - 1
+            found = windows[max(index, 0)]
+        return found
+
+    def open_window(self, pin: Pin) -> Window | None:
+        """The window of a maintenance entry that holds, open now, as a snapshot
+        carries it (:meth:`_window_of`): its end is the entry's time left, which every
+        block says (ADR-0150), and never a series' schedule's end a year away."""
+        with self._lock:
+            return self._window_of(pin, _asked_at(None))
+
+    def open_series(self, pin: Pin) -> OpenWindow | None:
+        """The window of a maintenance entry open now and what comes after it, as its
+        block's two rows say them (ADR-0150, landing 4): its end, who extended it, the
+        next window to open, whether it is its schedule's last and what of the windows
+        after it its holiday list stops — ``None`` where no window of it is open."""
+        with self._lock:
+            moment = _asked_at(None)
+            if pin.schedule is None:
+                return None
+            windows = self.windows(pin)
+            window = open_at(windows, moment)
+            if window is None:
+                return None
+            upcoming = next_after(windows, window.end)
+            text = pin.schedule.windows(
+                changed={each.start: each.end for each in pin.changed})
+            natural = dict(pin.schedule.spans())
+            extended = [each for each in pin.changed if each.start in window.starts
+                        and each.end > natural.get(each.start, each.end)]
+            return OpenWindow(
+                window,
+                extended_by=(max(extended, key=lambda each: each.at or each.start).by
+                             if extended else ""),
+                next=upcoming,
+                last=not any(each.start > window.end for each in text),
+                shut=self._shut(pin, window.end, upcoming))
+
+    def list_stops(self, years: Iterable[int],
+                   moment: datetime | None = None) -> tuple[ListStop, ...]:
+        """What the holiday lists stop of the maintenance entries that stand (ADR-0149
+        decision 3, ADR-0150): for each list an entry names that cannot be had, how
+        many entries name it — none of their windows applies — and for each of
+        ``years`` that a list an entry names is not complete for, how many entries have
+        a window of their rule starting in it after ``moment``, the clock's where it is
+        given none. What the instance's node says of the lists, read from what the
+        tree holds."""
+        with self._lock:
+            at = _asked_at(moment)
+            wanted = tuple(years)
+            unhad: Counter[str] = Counter()
+            short: Counter[tuple[str, int]] = Counter()
+            for pin in (*self._maintenance.values(), *self._waiting.values(),
+                        *self._entry_maintenance.values(),
+                        *self._waiting_lines.values()):
+                if not pin.not_on or pin.schedule is None:
+                    continue
+                days_off = self._holidays.get(pin.not_on)
+                if days_off is None:
+                    unhad[pin.not_on] += 1
+                    continue
+                starts = self._rule_years(pin.schedule)
+                for year in wanted:
+                    last = starts.get(year)
+                    if last is not None and last > at and not days_off.covers(year):
+                        short[(pin.not_on, year)] += 1
+            stops = [ListStop(key, count, why_not=(self._holidays.why_not(key)
+                                                   or f"no list {key}"))
+                     for key, count in sorted(unhad.items())]
+            stops += [ListStop(key, count, year=year)
+                      for (key, year), count in sorted(short.items())]
+            return tuple(stops)
+
+    def _rule_years(self, schedule: Schedule) -> Mapping[int, datetime]:
+        """Each year a window of ``schedule``'s rule starts in, with the last such
+        start (:meth:`~little_sister.schedule.Schedule.rule_years`), worked out once a
+        schedule."""
+        years = self._years_of.get(schedule)
+        if years is None:
+            years = schedule.rule_years()
+            if len(self._years_of) > 4096:
+                self._years_of.clear()
+            self._years_of[schedule] = years
+        return years
+
+    def _planned(self, pin: Pin, at: datetime) -> Planned:
+        """An entry that stands and holds nothing at ``at``, as a snapshot lists it:
+        its next window, and what of its windows its holiday list stops."""
+        upcoming = next_after(self.windows(pin), at)
+        return Planned(pin, upcoming, self._shut(pin, at, upcoming))
+
+    def _shut(self, pin: Pin, at: datetime, upcoming: Window | None) -> Shut | None:
+        """What of an entry's windows its holiday list stops, from ``at`` on — every
+        one, where it cannot be had; those from the first year it does not state that
+        a window of its rule starts in; or, with no window to come, every one left,
+        each on a day it names — or ``None`` where it stops none (ADR-0149 decision
+        3)."""
+        if not pin.not_on:
+            return None
+        assert pin.schedule is not None
+        days_off = self._holidays.get(pin.not_on)
+        if days_off is None:
+            return Shut(pin.not_on, why_not=(self._holidays.why_not(pin.not_on)
+                                             or f"no list {pin.not_on}"))
+        years = self._rule_years(pin.schedule)
+        year = min((year for year, last in years.items()
+                    if last > at and not days_off.covers(year)), default=0)
+        if year:
+            return Shut(pin.not_on, year=year,
+                        begins=pin.schedule.year_begins(year))
+        return Shut(pin.not_on) if upcoming is None else None
+
+    def list_name(self, key: str) -> str:
+        """The name a holiday list's ``key`` reads as after *not on* (ADR-0149
+        decision 2), or the key itself where the list cannot be had."""
+        with self._lock:
+            found = self._holidays.get(key)
+        return key if found is None else found.name
+
+    def _holds(self, pin: Pin, at: datetime) -> bool:
+        """Whether a maintenance entry holds at ``at``: one of its windows is open.
+        Whether it stands is its schedule's end (:meth:`Pin.is_expired`): a window
+        its holiday list leaves out is not open, and not the entry's end either."""
+        return open_at(self.windows(pin), at) is not None
+
+    def _began(self, pin: Pin, at: datetime) -> tuple[datetime, bool]:
+        """When the maintenance an entry holds at ``at`` began, and whether a window's
+        opening began it (ADR-0150): a window that opened after the entry was made — a
+        series', or a one-off's planned ahead — at its start; anything else at the
+        entry's creation, which the store keeps (ADR-0110 decision 6) — a one-off set
+        now starting where it was made, and keeping its start through every edit."""
+        window = open_at(self.windows(pin), at)
+        if window is not None and window.start > pin.created_at:
+            return window.start, True
+        return pin.created_at, False
+
+    @staticmethod
+    def _kept_start(stored: Pin | None, end: datetime | None, moment: datetime
+                    ) -> Schedule | None:
+        """The one window a write that names an end alone sets on what ``stored`` is
+        (ADR-0150): an edit of a one-off keeps its start — an open window's has
+        passed, and a planned one's is moved by naming another — and one that turns a
+        series into one window starts it at ``moment``. ``None`` for a new entry, which
+        starts where it is made (:class:`~little_sister.pins.Pin`)."""
+        if end is None or stored is None or stored.schedule is None:
+            return None
+        start = stored.schedule.starts_at if stored.schedule.is_one_off else moment
+        return Schedule.one_off(min(start, end - timedelta(seconds=1)), end,
+                                stored.schedule.zone)
+
+    def _windows_due(self, moment: datetime) -> _Due:
+        """What of the maintenance entries ``moment`` opens, closes and ends
+        (ADR-0150), a line's and a node's: an entry that holds and holds no more ends
+        where its schedule has ended, and closes where a window of it is to come; one
+        that holds nothing and holds now opens; and one that holds nothing, its
+        schedule ended, is spent."""
+        lines_out = [key for key, pin in self._entry_maintenance.items()
+                     if not self._holds(pin, moment)]
+        nodes_out = [path for path, pin in self._maintenance.items()
+                     if not self._holds(pin, moment)]
+        return _Due(
+            ending_lines=tuple(key for key in lines_out
+                               if self._entry_maintenance[key].is_expired(moment)),
+            closing_lines=tuple(key for key in lines_out
+                                if not self._entry_maintenance[key].is_expired(moment)),
+            opening_lines=tuple(key for key, pin in self._waiting_lines.items()
+                                if self._holds(pin, moment)),
+            spent_lines=tuple(key for key, pin in self._waiting_lines.items()
+                              if pin.is_expired(moment)),
+            ending=tuple(path for path in nodes_out
+                         if self._maintenance[path].is_expired(moment)),
+            closing=tuple(path for path in nodes_out
+                          if not self._maintenance[path].is_expired(moment)),
+            opening=tuple(path for path, pin in self._waiting.items()
+                          if self._holds(pin, moment)),
+            spent=tuple(path for path, pin in self._waiting.items()
+                        if pin.is_expired(moment)))
+
+    def _open_and_close(self, moment: datetime) -> list[str]:
+        """Open, close and end what ``moment`` is due to (:meth:`_windows_due`), one
+        write, each a row of its node, and write the file through: what a snapshot at
+        the clock's moment does first, so that open and closed are decided at the
+        moment it is asked, between two ticks as at one. Returns the paths whose own
+        entry ended."""
+        due = self._windows_due(moment)
+        if not due:
+            return []
+        with self._one_write():
+            self._lines_due(due)
+            ended = self._nodes_due(due)
+        self._persist()
+        return ended
+
+    def _lines_due(self, due: _Due) -> None:
+        """Move the lines' entries that ``due`` says across, each a row of its node —
+        what ends and what closes out of what holds, what opens into it, a node's
+        first row from what it showed before any of them moved
+        (:meth:`_line_pin_rows`) — and drop what is spent, its end told and no row
+        written, since it held nothing."""
+        paths = sorted({key[0] for key in (*due.ending_lines, *due.closing_lines,
+                                           *due.opening_lines)})
+        shown = {path: self._shows_at(path, self._find_node(path)) for path in paths}
+        acts: dict[str, list[_LineAct]] = {}
+        moved: list[tuple[tuple[str, str], Pin]] = []
+        for key in sorted(due.ending_lines):
+            acts.setdefault(key[0], []).append(_LineAct(
+                key[1], self._entry_maintenance.pop(key), ENDED, ENDED_CLOCK))
+        for key in sorted(due.closing_lines):
+            pin = self._entry_maintenance.pop(key)
+            self._waiting_lines[key] = pin
+            acts.setdefault(key[0], []).append(_LineAct(key[1], pin, CLOSED,
+                                                        ENDED_CLOCK))
+            moved.append((key, pin))
+        for key in sorted(due.opening_lines):
+            pin = self._waiting_lines.pop(key)
+            self._entry_maintenance[key] = pin
+            acts.setdefault(key[0], []).append(_LineAct(key[1], pin, OPENED))
+            moved.append((key, pin))
+        for path in paths:
+            self._line_pin_rows(path, acts[path], shown[path])
+        for key, pin in moved:
+            self._told_window(key[0], key[1], pin, when=self._instant(),
+                              why=ENDED_CLOCK)
+        for key in due.spent_lines:
+            pin = self._waiting_lines.pop(key)
+            self._told_end(key[0], key[1], pin, ENDED_CLOCK,
+                           when=pin.expires_at or self._instant())
+
+    def _nodes_due(self, due: _Due) -> list[str]:
+        """Close, end and open the nodes' entries that ``due`` says, each a row of its
+        node, and drop what is spent, its end told and no row written. Returns the
+        paths whose own entry ended."""
+        for path in due.closing:
+            pin = self._maintenance[path]
+            self._clear_node(path, closing=True)
+            self._told_window(path, "", pin, when=self._instant(), why=ENDED_CLOCK)
+        for path in due.ending:
+            self._clear_node(path, why=ENDED_CLOCK)
+        for path in due.opening:
+            pin = self._waiting.pop(path)
+            self._apply_maintenance(path, pin, when=self._instant(),
+                                    cause=CAUSE_PIN_OPENED)
+            self._told_window(path, "", pin, when=self._instant(), why=ENDED_CLOCK)
+        for path in due.spent:
+            pin = self._waiting.pop(path)
+            self._told_end(path, "", pin, ENDED_CLOCK,
+                           when=pin.expires_at or self._instant())
+        return list(due.ending)
 
     def _shows_at(self, path: str, node: Status | None) -> StatusCode:
         """What the node at ``path`` shows, as a change of it is measured from
@@ -4750,25 +6405,27 @@ class StatusTree:
 
     def _emit_at(self, path: str, node: Status | None, old: StatusCode,
                  new: StatusCode, *, cause: str, reason: tuple[str, ...],
-                 when: datetime, ended: str = "") -> None:
+                 when: datetime, ended: str = "",
+                 level: StatusCode | None = None) -> None:
         """Record a pin's event at ``path``, dated ``when`` — the act's instant:
         through the node where the tree holds one (:meth:`_emit`), and otherwise as
         a row of the path alone, which moves what is kept of it as an unwritten
         node's row does."""
         if node is not None:
             self._emit(node, old, new, cause=cause, reason=reason, when=when,
-                       ended=ended)
+                       ended=ended, level=level)
             return
         self._log(Event(
             path=path, name=leaf_name(path), old=old, new=new, reason=reason,
             timestamp=when, cause=cause,
             reported=self._restored_reading.get(path, StatusCode.UNDEFINED),
-            ended=ended))
+            ended=ended, level=level))
         self._restored_shown[path] = new
 
     def _persist(self) -> None:
         if self._pin_store is not None:
-            self._pin_store.save(self._maintenance, self._entry_maintenance,
+            self._pin_store.save({**self._waiting, **self._maintenance},
+                                 {**self._waiting_lines, **self._entry_maintenance},
                                  self._acknowledged, self._entry_acknowledged)
 
     def _ensure_node(self, path: str) -> Status:
@@ -4816,10 +6473,63 @@ class StatusTree:
         return self._snapshot_of(node, now)
 
     def _snapshot_of(self, node: Status, now: datetime) -> StatusSnapshot:
-        snapshot, _mounts, _mount_stamp, _mount_run = (
+        held = self._lines_held(now)
+        snapshot, _mounts, _mount_stamp, _mount_run, _unheld = (
             self._snapshot_subtree(node, now, self._change_counts(now),
-                                   self._shields(now), self._tags_above(node)))
+                                   self._shields(now), self._tags_above(node),
+                                   held=held, gone=self._nodes_held(held, now)))
         return snapshot
+
+    def _lines_held(self, now: datetime) -> dict[str, dict[str, ReasonLine]]:
+        """What stands on every line, by its node's path and its slug, as a line with
+        no text: its pin that holds with its window open, its entry planned with its
+        next window, and a person's acknowledgment — read once for a snapshot, under
+        its lock, so that the lines a run does not report now are said by the same
+        snapshot, at the same moment, as the lines it does
+        (``StatusSnapshot.not_reported``)."""
+        held: dict[str, dict[str, ReasonLine]] = {}
+        for (path, slug), pin in self._entry_maintenance.items():
+            held.setdefault(path, {})[slug] = ReasonLine(
+                slug, "", pin, window=self._window_of(pin, now))
+        for (path, slug), pin in self._waiting_lines.items():
+            held.setdefault(path, {})[slug] = ReasonLine(
+                slug, "", planned=self._planned(pin, now))
+        for (path, slug), acknowledgment in self._entry_acknowledged.items():
+            line = held.setdefault(path, {}).get(slug) or ReasonLine(slug, "")
+            held[path][slug] = replace(line, acknowledgment=acknowledgment)
+        return held
+
+    def _nodes_held(self, lines: Mapping[str, Mapping[str, ReasonLine]],
+                    now: datetime) -> dict[str, tuple[NodeNotReported, ...]]:
+        """What stands on every path no node stands at now, by the path of the nearest
+        node above it that stands (``StatusSnapshot.nodes_not_reported``): the path's
+        own pin with its window open, its entry planned, a person's acknowledgment on
+        it and what stands on its lines, from ``lines`` (:meth:`_lines_held`), read
+        once for a snapshot under its lock — so that a node its check no longer
+        reports, or has not written since the start, is said by the same snapshot, at
+        the same moment, as the nodes that stand. The root always stands, so a path
+        whose whole branch is gone stands beside it."""
+        held: dict[str, list[NodeNotReported]] = {}
+        for path in {*self._maintenance, *self._waiting, *self._acknowledged, *lines}:
+            above = self._root
+            for segment in split_path(path):
+                child = _child_by_name(above, segment)
+                if child is None:
+                    break
+                above = child
+            else:
+                # a node stands there, and carries what stands on it itself
+                continue
+            holding = self._maintenance.get(path)
+            waiting = self._waiting.get(path)
+            held.setdefault(above.path, []).append(NodeNotReported(
+                path, holding, self._acknowledged.get(path),
+                tuple(sorted(lines.get(path, {}).values(), key=_set_order)),
+                maintenance_window=(None if holding is None
+                                    else self._window_of(holding, now)),
+                planned_entry=None if waiting is None else self._planned(waiting, now)))
+        return {path: tuple(sorted(found, key=_first_set))
+                for path, found in held.items()}
 
     def _tags_above(self, node: Status) -> frozenset[str]:
         """Every tag written for a node above ``node`` (ADR-0139 decision 2), which
@@ -4921,15 +6631,22 @@ class StatusTree:
 
     def _snapshot_subtree(self, node: Status, now: datetime,
                           changes: dict[str, int], shields: dict[str, str],
-                          above: frozenset[str] = frozenset()
+                          above: frozenset[str] = frozenset(), *,
+                          held: Mapping[str, Mapping[str, ReasonLine]],
+                          gone: Mapping[str, tuple[NodeNotReported, ...]]
                           ) -> tuple[StatusSnapshot, int, datetime | None,
-                                     RunFacts | None]:
+                                     RunFacts | None, _Unheld | None]:
         """``node``'s snapshot, plus the values its parent needs to resolve its
         own observation time (ADR-0027) and run facts (ADR-0044): how many
         **checks** this subtree holds and, when that count is exactly one, the
-        sole mount's own stamp and its check's last-run facts. ``above`` is every
-        tag written for a node above it, which it carries with its own and hands
-        down (ADR-0139 decision 2).
+        sole mount's own stamp and its check's last-run facts — and, where a
+        person's silence stands on it, what it would pass up without the silence,
+        which a rule counting its parent's children reads (ADR-0144). ``above`` is
+        every tag written for a node above it, which it carries with its own and
+        hands down (ADR-0139 decision 2). ``held`` is what stands on every line
+        (:meth:`_lines_held`), and ``gone`` on every node not reported now, by the
+        node it stands beside (:meth:`_nodes_held`), each read once for the whole
+        snapshot.
 
         One recursion computes all the roll-ups — effective code, staleness, the
         published timestamp and the run facts — under the one lock (ADR-0002).
@@ -4944,7 +6661,8 @@ class StatusTree:
         own_tags = self._own_tags(node)
         carried = above.union(own_tags) if own_tags else above
         results = tuple(
-            self._snapshot_subtree(child, now, changes, shields, carried)
+            self._snapshot_subtree(child, now, changes, shields, carried, held=held,
+                                   gone=gone)
             for child in sorted(node.get_children(), key=_sibling_key)
         )
         children = tuple(result[0] for result in results)
@@ -4957,7 +6675,7 @@ class StatusTree:
         mounts = 0
         mount_stamp: datetime | None = None
         mount_run: RunFacts | None = None
-        for _child, child_mounts, child_stamp, child_run in results:
+        for _child, child_mounts, child_stamp, child_run, _unheld in results:
             mounts += child_mounts
             if child_mounts == 1:
                 mount_stamp = child_stamp
@@ -4993,39 +6711,55 @@ class StatusTree:
         age = _age_seconds(node.timestamp, now)
         stale_self = _is_stale(node, age)
         timestamp = node.timestamp if node.timestamp is not None else mount_stamp
-        # The reasons, joined with whatever is pinned on them (ADR-0036 decision 5)
-        # and whatever a person accepted of them (ADR-0142). A pin whose slug this
-        # run did not report simply does not appear — it is suspended, not deleted
-        # (decision 6, ADR-0032 rule 7) — and an acknowledgment is suspended the same
-        # way while the node's lines are no members.
-        pins = self._entry_maintenance
-        acknowledged = self._entry_acknowledged
+        # The reasons, joined with whatever is pinned on them (ADR-0036 decision 5),
+        # whatever is planned for them (ADR-0150) and whatever a person accepted of
+        # them (ADR-0142). What stands on a slug this run did not report does not
+        # appear among them — suspended, not deleted (decision 6, ADR-0032 rule 7) —
+        # and nor does any of it while the node's lines are no members.
+        on_lines = held.get(node.path, {})
+        nothing = ReasonLine("", "")
         lines = tuple(
-            ReasonLine(entry.slug, entry.text,
-                       pins.get((node.path, entry.slug)) if node.members else None,
+            ReasonLine(entry.slug, entry.text, standing.maintenance,
                        code=entry.code, running=entry.running,
                        subject=entry.subject, data=entry.data,
                        refused=entry.refused, form=entry.form,
                        grading=entry.grading,
-                       acknowledgment=(acknowledged.get((node.path, entry.slug))
-                                       if node.members else None),
-                       occurrence=entry.occurrence)
-            for entry in node.reason_entries)
+                       acknowledgment=standing.acknowledgment,
+                       occurrence=entry.occurrence,
+                       window=standing.window, planned=standing.planned)
+            for entry in node.reason_entries
+            for standing in [on_lines.get(entry.slug, nothing) if node.members
+                             else nothing])
+        # What stands on a line this run does not report — on every line while the
+        # node's lines are no members — joined here once, beside the lines and never
+        # among them, in the order it was set: the check's order went with the line,
+        # and a slug is opaque.
+        joined = ({entry.slug for entry in node.reason_entries} if node.members
+                  else set())
+        not_reported = tuple(sorted(
+            (line for slug, line in on_lines.items() if slug not in joined),
+            key=_set_order))
         # The configured rules on the node's lines (ADR-0137): each line counts as
         # the rule that decides it makes it, and keeps its true color under its mark
-        # — but a line a person accepted, which counts as they said, and carries
-        # their mark alone (ADR-0142).
+        # — but a line a person accepted, seen or done, which counts as they said,
+        # and carries their mark alone (ADR-0142, ADR-0146); and a line a person
+        # silenced, which counts as the stricter of the two, and keeps the rule
+        # beside its silence so that the one that decided is named (ADR-0144).
         tables: tuple[Table | None, ...] = ()
         if node.members and lines:
             tables, marks = _lines_ruled(
                 self._rules.on_lines(node.path),
-                [(line.slug, line.quiet, line.code) for line in lines], node.code)
+                [(line.slug, line.quiet, line.code, _done(line)) for line in lines],
+                node.code)
             if marks:
-                lines = tuple(line if mark is None or line.accepted
-                              else replace(line, rule=mark)
+                lines = tuple(line if mark is None
+                              or (line.accepted and _accepted_alone(line))
+                              else replace(line, rule=_beside_silence(line, mark))
                               for line, mark in zip(lines, marks, strict=True))
             if any(line.accepted for line in lines):
-                tables = _accepted_tables(tables, [line.accepted for line in lines])
+                tables = _accepted_tables(tables, [
+                    _held(line.acknowledgment) if line.accepted else None
+                    for line in lines])
         # Own status is now a **derived** value: the entries are virtual children,
         # and a node whose members are all pinned has nothing left reporting.
         own = _own_code(node.code, [(line.quiet, line.code) for line in lines],
@@ -5036,18 +6770,16 @@ class StatusTree:
         children_rule: RuleAt | None = None
         counting = self._rules.counting_children(node.path) if children else None
         if counting is not None:
-            counted_now, failing, named = _counting(
-                counting, [(child.name, child.code, child.contribution, child.stale)
-                           for child in children], root=node.path == "/")
+            ruled, failing, named = _counting(
+                counting, [(child.name, child.code, child.contribution, child.stale,
+                            result[4])
+                           for child, result in zip(children, results, strict=True)],
+                root=node.path == "/")
             restated: list[StatusSnapshot] = []
-            for child, after, picked in zip(children, counted_now, named,
-                                            strict=True):
-                if not picked:
-                    restated.append(child)
-                    continue
-                restated.append(replace(
-                    child, contribution=after, parent_rule=_ruled_at(
-                        counting, child.code, child.contribution, after, failing)))
+            for child, (after, at), picked in zip(children, ruled, named,
+                                                  strict=True):
+                restated.append(replace(child, contribution=after, parent_rule=at)
+                                if picked else child)
             children = tuple(restated)
             children_rule = RuleAt(counting, failing=failing, changes=any(
                 _acts(child.parent_rule) for child in children))
@@ -5058,10 +6790,10 @@ class StatusTree:
         counted = tuple(child.counted for child in children)
         shielded_by = shields.get(node.path)
         own_acknowledgment = self._acknowledged.get(node.path)
-        _rollup, code, contribution, damping = _derive(
-            node.code, own, stale_self, node.maintenance, counted, shielded_by,
-            self._damping.get(node.path), node.escalate_after,
-            accepted=own_acknowledgment is not None)
+        accepted = _held(own_acknowledgment)
+        derived = (node.code, own, stale_self, node.maintenance, counted, shielded_by,
+                   self._damping.get(node.path), node.escalate_after)
+        _rollup, code, contribution, damping = _derive(*derived, accepted=accepted)
         # The pin that withholds the node is named beside its kind, where its own
         # pin is what does (ADR-0141 decision 3): not where every line of it is
         # pinned, nor where its check reports maintenance itself. An acknowledgment
@@ -5070,18 +6802,23 @@ class StatusTree:
         if (own_pin is not None and contribution is not None
                 and contribution.by == MAINTENANCE_RULE):
             contribution = replace(contribution, rule=own_pin.id)
-        elif (own_acknowledgment is not None and contribution is not None
-                and contribution.by == SEEN_RULE):
+        elif (own_acknowledgment is not None and accepted is not None
+                and contribution is not None and contribution.by == accepted.by):
             contribution = replace(contribution, rule=own_acknowledgment.id)
         # The configured rule on what the node passes up, last at its boundary: on
-        # what damping publishes, and never beneath what a stale reading counts.
+        # what damping publishes, and never beneath what a stale reading counts —
+        # and beside a silence, the stricter of the two (ADR-0144). What the node
+        # would pass up without a person's acknowledgment is kept beside it: a rule
+        # counting the node's siblings counts it toward its count by that.
         rule: RuleAt | None = None
+        unheld = (_Unheld(_derive(*derived)[2], accepted.by) if accepted is not None
+                  else None)
         boundary = self._rules.boundary(node.path)
         if boundary is not None:
-            prior = contribution
-            contribution = _through(boundary.table, code, prior, stale,
-                                    boundary.name)
-            rule = _ruled_at(boundary, code, prior, contribution)
+            contribution, rule = _ruled(boundary, code, contribution, unheld, stale)
+            if unheld is not None:
+                unheld = _Unheld(_through(boundary.table, code, unheld.contribution,
+                                          stale, boundary.name), unheld.by)
         snapshot = StatusSnapshot(
             path=node.path, name=node.name, own_code=own, code=code,
             reported_code=node.code,
@@ -5100,11 +6837,17 @@ class StatusTree:
             show_when_quiet=node.show_when_quiet,
             maintenance=node.maintenance,
             maintenance_entry=own_pin, acknowledgment=own_acknowledgment,
+            maintenance_window=(None if own_pin is None
+                                else self._window_of(own_pin, now)),
+            planned_entry=(None if (planned := self._waiting.get(node.path)) is None
+                           else self._planned(planned, now)),
             stale=stale,
             own_stale=stale_self,
             stale_after_seconds=node_stale_after(node),
             age_seconds=age, children=children,
-            reasons=lines, members=node.members, run=mount_run,
+            reasons=lines, members=node.members, not_reported=not_reported,
+            nodes_not_reported=gone.get(node.path, ()),
+            run=mount_run,
             contribution=contribution, damping=damping,
             rule=rule, children_rule=children_rule,
             # The measurement, withheld on a shared mount for the same reason the
@@ -5121,7 +6864,7 @@ class StatusTree:
             # and the period of its own status only where it has one to name
             own_period=(None if own is StatusCode.UNDEFINED and children
                         else self._beginnings.get(node.path)))
-        return snapshot, mounts, mount_stamp, mount_run
+        return snapshot, mounts, mount_stamp, mount_run, unheld
 
 
 def _given_details(node: Status) -> Details:
@@ -5333,33 +7076,58 @@ def _ruled_at(rule: AggregationRule, code: StatusCode, prior: Contribution | Non
 
 
 def _counting(rule: AggregationRule,
-              children: Sequence[tuple[str, StatusCode, Contribution | None, bool]],
+              children: Sequence[tuple[str, StatusCode, Contribution | None, bool,
+                                       _Unheld | None]],
               *, root: bool
-              ) -> tuple[list[Contribution | None], int, list[bool]]:
+              ) -> tuple[list[tuple[Contribution | None, RuleAt]], int, list[bool]]:
     """Each child's contribution once the rule counting a node's children has had
-    its say (ADR-0137), with how many of the children it names report a status its
-    table names: the table applies while fewer than its count do, and from there on
-    every child counts as it is. ``children`` are each child's name, what it rolls
-    up to, what its parent counted of it before the rule and whether a reading at
-    or beneath it is past its tolerance. The instance's own branch is no child of
-    the root's that any rule counts. With them, which of the children the rule
-    names."""
+    its say (ADR-0137), and where the rule stands on the child, with how many of the
+    children it names report a status its table names: the table applies while fewer
+    than its count do, and from there on every child counts as it is. ``children``
+    are each child's name, what it rolls up to, what its parent counted of it before
+    the rule, whether a reading at or beneath it is past its tolerance, and what it
+    would pass up without a person's acknowledgment on it, where one stands.
+
+    **A child a person holds counts toward the count as it reads** (ADR-0144): a
+    *seen* or a silence holds what the parent counts of that child, not what the
+    rule counts of its siblings, so that a replica silenced while it flaps does not
+    let a second one fail unseen. The child itself still counts as held — beside a
+    silence, the stricter of the two (:func:`_ruled`). A node's lines are counted so
+    too (:func:`_lines_ruled`), but a *done*, which stands on a line alone and is
+    counted as the OK it shows (ADR-0146): a child whose one failure is done reads
+    OK, and counts so here. The instance's own branch is no child of the root's
+    that any rule counts. With them, which of the children the rule names."""
     named = [rule.names_child(name) and not (root and name == _OWN_BRANCH)
-             for name, _code, _prior, _stale in children]
-    failing = sum(1 for (_name, code, prior, _stale), picked in zip(children, named,
-                                                                    strict=True)
-                  if picked and rule.table.names(_counted_code(code, prior)))
+             for name, _code, _prior, _stale, _unheld in children]
+    failing = sum(1 for (_name, code, prior, _stale, unheld), picked
+                  in zip(children, named, strict=True)
+                  if picked and rule.table.names(_counted_code(
+                      code, prior if unheld is None else unheld.contribution)))
     if rule.count is not None and failing >= rule.count:
-        return [prior for _name, _code, prior, _stale in children], failing, named
-    return [_through(rule.table, code, prior, stale, rule.name) if picked
-            else prior
-            for (_name, code, prior, stale), picked
+        return [(prior, _ruled_at(rule, code, prior, prior, failing))
+                for _name, code, prior, _stale, _unheld in children], failing, named
+    return [_ruled(rule, code, prior, unheld, stale, failing) if picked
+            else (prior, _ruled_at(rule, code, prior, prior, failing))
+            for (_name, code, prior, stale, unheld), picked
             in zip(children, named, strict=True)], failing, named
 
 
 #: The statuses an acknowledgment accepts (ADR-0142): a part reading anything else
 #: has nothing for one to stand on.
 _FAILURES = frozenset({StatusCode.WARN, StatusCode.ERROR})
+
+
+def _unsilenceable(part: str, code: StatusCode) -> str:
+    """Why ``part`` — a node's path, or *its line* and a slug — takes no new silence
+    while it reads ``code``, or empty where it takes one. A silence is bound to no
+    failure (ADR-0144 decision 1), so a part that reads ok, or nothing yet, takes one
+    that changes nothing until it fails and then counts at its level until its
+    deadline; but one its own check reads as in maintenance takes none, since no
+    silence counts over maintenance (decision 2)."""
+    if code is StatusCode.MAINTENANCE:
+        return (f"{part} reads maintenance now: its check holds it, and no silence "
+                f"counts over that")
+    return ""
 
 
 def _ending(pin: Pin, code: StatusCode, occurrence: str | None) -> str:
@@ -5369,9 +7137,22 @@ def _ending(pin: Pin, code: StatusCode, occurrence: str | None) -> str:
     status is no longer reported; one that reads ``OK``, or that its check says is in
     maintenance, recovered; a line whose ``occurrence`` is not the one it was bound to
     failed anew; and one worse than it was set at got worse. A part bound to its
-    failing stretch, a node's own among them, has no occurrence to compare."""
+    failing stretch, a node's own among them, has no occurrence to compare.
+
+    A silence holds through all of it (ADR-0144): it ends at its deadline, by hand,
+    or made another kind, and a reading ends none of them.
+
+    **A done ends when it no longer covers anything** (ADR-0146), judged on what its
+    line reads and never on the OK it makes the line show: its event is asked first,
+    so that the line's next run is a new occurrence whether it fails or passes; the
+    same event read OK recovered, read worse got worse, and read the same or milder
+    it holds, for a year if need be."""
+    if pin.kind == SILENCED:
+        return ""
     if code is StatusCode.UNDEFINED:
         return ENDED_GONE
+    if pin.kind == DONE and occurrence != pin.occurrence:
+        return ENDED_OCCURRENCE
     if code not in _FAILURES:
         return ENDED_RECOVERY
     if occurrence is not None and pin.occurrence and occurrence != pin.occurrence:
@@ -5382,40 +7163,54 @@ def _ending(pin: Pin, code: StatusCode, occurrence: str | None) -> str:
 
 
 def _accepted_tables(tables: Sequence[Table | None],
-                     accepted: Sequence[bool]) -> tuple[Table | None, ...]:
+                     holds: Sequence[_Held | None]) -> tuple[Table | None, ...]:
     """The table each of a node's lines counts by in its own status once a person's
-    acknowledgments have had their say (ADR-0142): :data:`ACCEPTED` on a line one
-    stands on, over whatever a configured rule makes of it, and the configured
-    rule's on every other line. A pinned line is the pin's whatever it holds."""
-    return tuple(ACCEPTED if flag else (tables[index] if index < len(tables) else None)
-                 for index, flag in enumerate(accepted))
+    acknowledgments have had their say: a *seen*'s on a line one stands on, over
+    whatever a configured rule makes of it (ADR-0142); on a line a silence stands on,
+    the stricter of the silence's and the configured rule's (ADR-0144); and the
+    configured rule's on every other line. A pinned line is the pin's whatever it
+    holds."""
+    counted: list[Table | None] = []
+    for index, held in enumerate(holds):
+        rule = tables[index] if index < len(tables) else None
+        if held is None:
+            counted.append(rule)
+        elif held.by == SILENCED_RULE:
+            counted.append(_stricter_table(rule, held.table))
+        else:
+            counted.append(held.table)
+    return tuple(counted)
 
 
 def _lines_ruled(rules: Sequence[AggregationRule],
-                 lines: Sequence[tuple[str, bool, StatusCode | None]],
+                 lines: Sequence[tuple[str, bool, StatusCode | None, bool]],
                  reported: StatusCode
                  ) -> tuple[tuple[Table | None, ...], tuple[RuleAt | None, ...]]:
     """The table that decides how each of a node's lines counts in its own status
     now, and where each rule stands on its line (ADR-0137): ``rules`` are the rules
     on lines that pick the node, in order, and a line is decided by the first whose
-    ``lines:`` names it. ``lines`` are each line's address, whether it is pinned and
-    the code it declared, the node's reported code standing in where it declared
-    none. A rule with a count counts the lines it decides that report a status its
-    table names, and from its count on none of them is changed. A pinned line is the
-    pin's: no rule's mark stands on it, and it counts toward no rule's count."""
+    ``lines:`` names it. ``lines`` are each line's address, whether it is pinned, the
+    code it declared, the node's reported code standing in where it declared none,
+    and whether a *done* closes it. A rule with a count counts the lines it decides
+    that report a status its table names, and from its count on none of them is
+    changed. A pinned line is the pin's: no rule's mark stands on it, and it counts
+    toward no rule's count. A line a person holds counts toward it as it reads, seen
+    or silenced (ADR-0144) — but a done line as the OK it shows: its event is over,
+    and every other surface takes it as OK (ADR-0146)."""
     if not rules:
         return (), ()
     deciding = [None if quiet else next(
         (rule for rule in rules if rule.names_line(slug_)), None)
-        for slug_, quiet, _declared in lines]
+        for slug_, quiet, _declared, _closed in lines]
     failing: dict[str, int] = {}
-    for rule, (_slug, _quiet, declared) in zip(deciding, lines, strict=True):
-        if rule is not None and rule.table.names(
-                declared if declared is not None else reported):
+    for rule, (_slug, _quiet, declared, closed) in zip(deciding, lines, strict=True):
+        reads = (StatusCode.OK if closed
+                 else declared if declared is not None else reported)
+        if rule is not None and rule.table.names(reads):
             failing[rule.key] = failing.get(rule.key, 0) + 1
     tables: list[Table | None] = []
     marks: list[RuleAt | None] = []
-    for rule, (_slug, _quiet, declared) in zip(deciding, lines, strict=True):
+    for rule, (_slug, _quiet, declared, _closed) in zip(deciding, lines, strict=True):
         if rule is None:
             tables.append(None)
             marks.append(None)
@@ -5431,7 +7226,8 @@ def _lines_ruled(rules: Sequence[AggregationRule],
 
 def _derive(reported: StatusCode, own: StatusCode, stale: bool, pinned: bool,
             counted: Sequence[StatusCode], shielded_by: str | None,
-            damped: _Damped | None, escalate_after: int, *, accepted: bool = False
+            damped: _Damped | None, escalate_after: int, *,
+            accepted: _Held | None = None
             ) -> tuple[StatusCode, StatusCode, Contribution | None, Damping | None]:
     """What one node rolls up to, from what it holds and what its children
     contribute: what it counts for itself (:func:`_counts_for_itself`), what it rolls
@@ -5454,10 +7250,11 @@ def _derive(reported: StatusCode, own: StatusCode, stale: bool, pinned: bool,
     advance and the hold would never end; the degraded raw code goes up instead.
 
     **A person's acknowledgment on the node** (``accepted``, ADR-0142) comes last,
-    and changes what its parent counts of its own part alone: ``OK`` — at least a
-    warning where its reading went stale — beside what its children contribute, so
-    that a failure beneath it still climbs. It names itself over the counter it
-    outranks, and never over a rule that withholds the node.
+    and changes what its parent counts of its own part alone: what its table makes
+    of it — ``OK`` for a *seen*, ``OK`` or at most ``WARN`` for a silence by its level
+    (ADR-0144), and at least a warning where its reading went stale — beside what its
+    children contribute, so that a failure beneath it still climbs. It names itself
+    over the counter it outranks, and never over a rule that withholds the node.
     """
     rollup = _counts_for_itself(reported, own, stale)
     cancels = _cancels_beneath(rollup, reported, pinned)
@@ -5477,12 +7274,70 @@ def _derive(reported: StatusCode, own: StatusCode, stale: bool, pinned: bool,
             publishes = effective_code(damped.published, counted)
             if publishes is not code:
                 contribution = Contribution(publishes, DAMPING_RULE)
-        if accepted:
-            itself = _mapped(ACCEPTED, rollup, stale)
-            seen = _rolls_up(rollup if itself is None else itself, counted, cancels)
-            if seen is not code:
-                contribution = Contribution(seen, SEEN_RULE)
+        if accepted is not None:
+            itself = _mapped(accepted.table, rollup, stale)
+            held = _rolls_up(rollup if itself is None else itself, counted, cancels)
+            if held is not code:
+                contribution = Contribution(held, accepted.by)
     return rollup, code, contribution, damping
+
+
+def _stricter(code: StatusCode, configured: Contribution | None,
+              held: Contribution | None) -> Contribution | None:
+    """Of what a configured rule and a person's silence each make of one part, what
+    its parent counts (ADR-0144): the stricter cap — the silence's where the part
+    counts for less under it, and the configured rule's otherwise, which is also
+    where the two count it the same, since it would count so without the silence. A
+    part the rule leaves out stays out."""
+    if escalates(_counted_code(code, held), _counted_code(code, configured)):
+        return held
+    return configured
+
+
+def _ruled(rule: AggregationRule, code: StatusCode, prior: Contribution | None,
+           unheld: _Unheld | None, stale: bool, failing: int = 0
+           ) -> tuple[Contribution | None, RuleAt]:
+    """What a node's parent counts of it once a configured rule has had its say
+    (ADR-0137) — the rule on what it passes up, or one counting its parent's children
+    — and where the rule stands on it: the rule on what came before it, ``prior``. A
+    *seen* counts first and the rule after it, from what it passes (ADR-0142) — its
+    ``unheld`` is a count's to read, never this.
+
+    **Where a person's silence stands on the node**, ``unheld`` is what it would pass
+    up without it, and the stricter of the two counts (ADR-0144): the rule reads what
+    the node passes up without the silence, and changes the count only where it counts
+    for less than the silence does. A node a pin, a shield or no reading withholds is
+    left alone by both."""
+    if (unheld is None or unheld.by != SILENCED_RULE
+            or (prior is not None and prior.code is None)):
+        after = _through(rule.table, code, prior, stale, rule.name)
+        return after, _ruled_at(rule, code, prior, after, failing)
+    configured = _through(rule.table, code, unheld.contribution, stale, rule.name)
+    after = _stricter(code, configured, prior)
+    return after, _ruled_at(
+        rule, code, unheld.contribution,
+        configured if after is configured else unheld.contribution, failing)
+
+
+def _stricter_table(configured: Table | None, held: Table) -> Table:
+    """The table a line counts by where a person's silence and a configured rule both
+    stand on it (ADR-0144): each failure counting as the stricter cap of the two — the
+    silence's where it counts for less, the configured rule's otherwise — and the
+    configured rule's alone where it leaves the line out, which counts nothing
+    whatever the silence holds. Without a configured rule, the silence's."""
+    if configured is None:
+        return held
+    if configured.left_out:
+        return configured
+    entries: list[tuple[StatusCode, StatusCode]] = []
+    for status in (StatusCode.WARN, StatusCode.ERROR):
+        by_rule = configured.counts(status)
+        by_silence = held.counts(status)
+        counts = (by_silence if by_rule is not None and by_silence is not None
+                  and escalates(by_silence, by_rule) else by_rule)
+        if counts is not None and counts is not status:
+            entries.append((status, counts))
+    return Table(tuple(entries))
 
 
 def _shields_over(dependencies: Mapping[str, str],
@@ -5572,23 +7427,28 @@ def _evaluate(beneath: Mapping[str, Sequence[str]],
         stale = held.stale or any(parts[child].stale for child in children)
         counting = rules.counting_children(path) if children else None
         if counting is not None:
-            counted_now, _failing, _named = _counting(
+            ruled, _failing, _named = _counting(
                 counting, [(leaf_name(child), parts[child].code,
-                            parts[child].contribution, parts[child].stale)
+                            parts[child].contribution, parts[child].stale,
+                            parts[child].unheld)
                            for child in children], root=path == "/")
-            for child, after in zip(children, counted_now, strict=True):
+            for child, (after, _at) in zip(children, ruled, strict=True):
                 if after is not parts[child].contribution:
                     parts[child] = replace(
                         parts[child], contribution=after,
                         counted=_counted_code(parts[child].code, after))
-        own, code, contribution, _damping = _derive(
-            held.reported, held.own, held.stale, held.pinned,
-            [parts[child].counted for child in children], shield, held.damped,
-            held.escalate_after, accepted=held.accepted)
+        derived = (held.reported, held.own, held.stale, held.pinned,
+                   [parts[child].counted for child in children], shield, held.damped,
+                   held.escalate_after)
+        own, code, contribution, _damping = _derive(*derived, accepted=held.accepted)
+        unheld = (_Unheld(_derive(*derived)[2], held.accepted.by)
+                  if held.accepted is not None else None)
         boundary = rules.boundary(path)
         if boundary is not None:
-            contribution = _through(boundary.table, code, contribution, stale,
-                                    boundary.name)
+            contribution, _at = _ruled(boundary, code, contribution, unheld, stale)
+            if unheld is not None:
+                unheld = _Unheld(_through(boundary.table, code, unheld.contribution,
+                                          stale, boundary.name), unheld.by)
         parts[path] = _Part(
             code=code, counted=_counted_code(code, contribution), own=own,
             shield=shield,
@@ -5597,7 +7457,8 @@ def _evaluate(beneath: Mapping[str, Sequence[str]],
             beneath=children, order=order, carried=held.carried,
             carrying=held.carried or any(parts[child].carrying
                                          for child in children),
-            contribution=contribution, stale=stale, accepted=held.accepted)
+            contribution=contribution, stale=stale, accepted=held.accepted,
+            unheld=unheld)
     return parts
 
 
@@ -5618,13 +7479,13 @@ def _link(path: str, beneath: dict[str, list[str]],
 
 
 def _own_part(part: _Part | None
-              ) -> tuple[StatusCode, str | None, StatusCode | None, bool]:
+              ) -> tuple[StatusCode, str | None, StatusCode | None, _Held | None]:
     """What a change moves of a node (ADR-0132 decision 4): what it counts for
-    itself, the shield on it, what a wait publishes for it and whether a person has
-    accepted its own failure (ADR-0142) — the four a node the tree does not hold has
-    none of."""
+    itself, the shield on it, what a wait publishes for it and what a person's
+    acknowledgment makes of its own failure (ADR-0142, ADR-0144) — the four a node
+    the tree does not hold has none of."""
     if part is None:
-        return StatusCode.UNDEFINED, None, None, False
+        return StatusCode.UNDEFINED, None, None, None
     return part.own, part.shield, part.held, part.accepted
 
 
@@ -5749,7 +7610,7 @@ def _replayed(events: Sequence[Event], shown: Mapping[str, StatusCode],
               timeline: list[Period] | None = None,
               rules: RuleSet = NO_RULES,
               starts: Mapping[str, datetime] | None = None,
-              accepted: frozenset[str] = frozenset()) -> dict[str, Period]:
+              accepted: Mapping[str, Pin] | None = None) -> dict[str, Period]:
     """The period of what each branch showed at the end of a log, replayed from its
     rows through the roll-up (ADR-0132): what each node showed — the ``old`` of its
     first row, or its kept entry where the log holds none of it — moved by every row
@@ -5774,9 +7635,12 @@ def _replayed(events: Sequence[Event], shown: Mapping[str, StatusCode],
     since nothing keeps what it was.
 
     **A person's acknowledgment on a node** (ADR-0142) counts from its set to its
-    end, as its rows say them; where the log holds no row of one, whether it stands
-    on the node now — ``accepted``, the paths it stands on — says whether it stood
-    throughout. One on a line needs nothing: the rows say what its node showed."""
+    end, as its rows say them, a silence at the level its rows say (ADR-0144); where
+    the log holds no row of one, the one that stands on the node now — ``accepted``,
+    by path — says what stood throughout. A row says the level it leaves standing, so
+    a silence whose first row in the log is an edit of its level is read at that
+    level from the log's start, since nothing keeps what it was. One on a line needs
+    nothing: the rows say what its node showed."""
     first: dict[str, Event] = {}
     shown_first: dict[str, Event] = {}
     pin_first: dict[str, Event] = {}
@@ -5785,7 +7649,8 @@ def _replayed(events: Sequence[Event], shown: Mapping[str, StatusCode],
         first.setdefault(event.path, event)
         if event.shown:
             shown_first.setdefault(event.path, event)
-        if event.cause in (CAUSE_PIN_SET, CAUSE_PIN_EDITED, CAUSE_PIN_ENDED):
+        if event.cause in (CAUSE_PIN_SET, CAUSE_PIN_EDITED, CAUSE_PIN_ENDED,
+                           CAUSE_PIN_OPENED, CAUSE_PIN_CLOSED):
             pin_first.setdefault(event.path, event)
         if event.cause in _NODE_ACKNOWLEDGMENT_CAUSES:
             acknowledged_first.setdefault(event.path, event)
@@ -5794,7 +7659,8 @@ def _replayed(events: Sequence[Event], shown: Mapping[str, StatusCode],
     shows: dict[str, StatusCode] = {}
     reads: dict[str, StatusCode] = {}
     pins: dict[str, bool] = {}
-    accepts: dict[str, bool] = {}
+    accepts: dict[str, _Held | None] = {}
+    acknowledged_now = accepted or {}
     publishes: dict[str, StatusCode] = {}
     for path in paths:
         row = shown_first.get(path)
@@ -5809,15 +7675,18 @@ def _replayed(events: Sequence[Event], shown: Mapping[str, StatusCode],
                            else earliest.reported)
         pin_row = pin_first.get(path)
         start = began.get(path)
-        pins[path] = (pin_row.cause != CAUSE_PIN_SET if pin_row is not None
+        pins[path] = (pin_row.cause not in (CAUSE_PIN_SET, CAUSE_PIN_OPENED)
+                      if pin_row is not None
                       else shows[path] is StatusCode.MAINTENANCE
                       and start is not None
-                      and start.cause in (CAUSE_PIN_SET, CAUSE_PIN_EDITED))
+                      and start.cause in (CAUSE_PIN_SET, CAUSE_PIN_EDITED,
+                                          CAUSE_PIN_OPENED))
         publishes[path] = (shows[path] if path in first
                            else published.get(path, shows[path]))
         said = acknowledged_first.get(path)
-        accepts[path] = (not said.cause.endswith(f"-{SET}") if said is not None
-                         else path in accepted)
+        accepts[path] = (_held(acknowledged_now.get(path)) if said is None
+                         else None if said.cause.endswith(f"-{SET}")
+                         else _held_by_row(said))
 
     beneath: dict[str, list[str]] = {"/": []}
     keys: dict[str, tuple[int, str]] = {"/": (0, "")}
@@ -5845,12 +7714,13 @@ def _replayed(events: Sequence[Event], shown: Mapping[str, StatusCode],
         read = _reported_after(event, reads.get(path))
         if read is not None:
             reads[path] = read
-        if event.cause in (CAUSE_PIN_SET, CAUSE_PIN_EDITED):
+        if event.cause in (CAUSE_PIN_SET, CAUSE_PIN_EDITED, CAUSE_PIN_OPENED):
             pins[path] = True
-        elif event.cause == CAUSE_PIN_ENDED:
+        elif event.cause in (CAUSE_PIN_ENDED, CAUSE_PIN_CLOSED):
             pins[path] = False
         elif event.cause in _NODE_ACKNOWLEDGMENT_CAUSES:
-            accepts[path] = not event.cause.endswith(f"-{ENDED}")
+            accepts[path] = (None if event.cause.endswith(f"-{ENDED}")
+                             else _held_by_row(event))
         elif not event.cause and not event.suppressed_by:
             # A log written before a row said what moved its node: an unmarked row
             # to MAINTENANCE is an admin's pin set, and one from it the pin's end

@@ -4,8 +4,7 @@ Three keys decide how the wall first draws a node — ``chips``, whether its chi
 start as chips; ``fold_ok``, whether its healthy lines and children start folded
 behind *✓ +N ok*; ``reason_cap``, its box's line budget — and the claim beside them,
 ``show_when_quiet``, rides the same addresses. They are stated in four files, each a
-layer, and the first statement found wins (§3.4 and §7.9 of the interactive wall's
-note):
+layer, and the first statement found wins (ADR-0128 decision 2):
 
 1. ``nodes.yaml``: the node's path, then its parent's path's ``children:`` — the only
    place a container no check speaks for gets a look of its own;
@@ -37,8 +36,8 @@ the status tree keeps beside its mounts as runs write them
 (``StatusTree.named_by_run``). The built-in look counts what a level would draw, so
 here it is *nobody said* and :func:`draw` decides it for the page it draws.
 
-**What the server draws** (:func:`draw`, §7.5 and §7.9 of the note) is the second
-half: the looks of a page's nodes turned into the faces it renders as it arrives.
+**What the server draws** (:func:`draw`) is the second half: the looks of a page's
+nodes turned into the faces it renders as it arrives.
 The cards a page shows start open — the wall's root and a page's node take no
 ``chips`` — and beneath them a node starts closed where its parent's ``chips`` says
 so and it claims no ``show_when_quiet``, where a ``depth=`` closes its level, and,
@@ -220,12 +219,12 @@ class FirstLooks:
 # --- what the server draws ------------------------------------------------------------
 
 #: How many failures the first look hides that each card opens, with the nodes on
-#: their paths (backlog #91 §3.3): the failure budget, which holds the wall's shape
+#: their paths (ADR-0127 decision 5): the failure budget, which holds the wall's shape
 #: in an outage — a card grows by at most this many paths.
 FAILURE_BUDGET = 3
 #: How many boxes a level nobody configured may draw opened before it starts as
 #: chips: the net for the level nobody expected to be big, a run that suddenly
-#: names a great many children (backlog #91 §2, 2026-10-24). Counted all the way
+#: names a great many children (ADR-0128 decision 8). Counted all the way
 #: down, each child as it has decided, and never by a status — the same on every
 #: screen, the planner pricing what it decides. The library's, not a setting: a
 #: deployment that wants a level otherwise states its ``chips``.
@@ -256,9 +255,9 @@ class Drawn:
 
 def draw(page: StatusSnapshot, looks: FirstLooks, *, depth_closed: int | None = None,
          failures_open: bool = True) -> Drawn:
-    """The first look of ``page``'s nodes, as the server draws it (§7.5, §7.9 of the
-    interactive wall's note): ``page`` is the wall's root or the node a page is about,
-    its children the page's cards, level 1, which start open.
+    """The first look of ``page``'s nodes, as the server draws it (ADR-0128):
+    ``page`` is the wall's root or the node a page is about, its children the page's
+    cards, level 1, which start open.
 
     Beneath them a node starts closed where its parent's ``chips`` says so, unless it
     claims ``show_when_quiet``, and open where it says otherwise — beneath a mount two

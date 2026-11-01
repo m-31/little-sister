@@ -38,12 +38,16 @@ from little_sister.checks.ssh.metrics import (
     parse_metrics,
     reading,
     readings,
-    refuse_thresholds,
     unavailable,
 )
 from little_sister.status import StatusCode, join_path
 
 DEFAULT_SCRIPT = "qnap-health.sh"
+
+#: The key this type's file takes beside every check's, its gradings' and the
+#: connection's (ADR-0151); the retired ``thresholds:`` block is a key it does not
+#: take, refused as any other.
+CONFIG_KEYS = ("descriptions",)
 
 #: What each node reads, in a sentence (ADR-0133 decision 2). A branch's is the default
 #: its entry in the ``descriptions:`` block replaces (ADR-0012); a drive's names its
@@ -132,14 +136,12 @@ class QnapMetricsCheck(SshScriptCheck):
     def __init__(self, *, descriptions: dict[str, str] | None = None,
                  **kwargs: Any) -> None:
         super().__init__(subnode_defaults=SUBNODE_DEFAULTS, measure_defaults=MEASURES,
-                         gradings=GRADINGS, **kwargs)
+                         gradings=GRADINGS, config_keys=CONFIG_KEYS, **kwargs)
         self.descriptions = descriptions or {}
 
     @classmethod
     def _extra_from_config(cls, config: dict[str, Any],
                            base_dir: Path) -> dict[str, Any]:
-        refuse_thresholds(config.get("thresholds"),
-                          {"temperature": ("max_temperature", "")})
         return {
             **cls._connection_from_config(config, base_dir, DEFAULT_SCRIPT),
             "descriptions": parse_descriptions(config.get("descriptions")),

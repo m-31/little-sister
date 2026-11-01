@@ -365,7 +365,9 @@
                             <td><code>{{ filler.slot }}</code></td>
                             <td>{{ filler.package }}</td>
                             <td class="text-muted">{{ filler.template }}</td>
-                            <td class="text-muted">{% if filler.context %}provider{% else %}—{% endif %}</td>
+                            {#- what is attached beside the template: a provider, and the
+                                draft function of a slot in a form (ADR-0148) -#}
+                            <td class="text-muted">{{ [('provider' if filler.context else ''), ('draft' if filler.draft else '')] | select | join(', ') or '—' }}</td>
                             {#- Which kind: a dependent package's registration, or
                                 the library's own declarative action list, which
                                 fills the same slots through the same seam

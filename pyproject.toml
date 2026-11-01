@@ -1,6 +1,6 @@
 [project]
 name = "little-sister"
-version = "0.3.22"
+version = "0.3.23"
 description = "Self-hosted status monitoring — checks are plain Python, from a homelab to a team"
 authors = [
     { name = "Michael Meyling" }
@@ -48,6 +48,13 @@ dev = [
     "mypy>=2.1.0",
     "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
+    "pytest-xdist>=3.8.0",
+    # A maintenance entry's schedule is RFC 5545 text, and tests/test_schedule_ical.py
+    # reads every text the subset writes with a calendar library and compares its
+    # windows with the library's own (ADR-0150). Here and never in the library's
+    # dependencies: it is LGPL-3.0-or-later and brings three of its own, and the
+    # library works its windows out itself, on `zoneinfo`.
+    "recurring-ical-events>=3.8.2",
     "ruff>=0.16.1",
     # ShellCheck as a wheel, so the shell half of the gate runs through `uv run`
     # like the rest and needs nothing installed on the machine.
@@ -56,8 +63,10 @@ dev = [
 ]
 # The browser boundary checks (tests/test_dashboard_browser.py, ADR-0056) hold
 # the layout model against real paint. Deliberately *not* in `dev`: the
-# everyday gate must not grow a browser download, and the tests skip cleanly
-# without one. Install and run them explicitly — see docs/testing-the-gui.md:
+# everyday gate must not grow a browser download. Holding the group does not run
+# them either: a run that collects `tests/` leaves every `test_*_browser.py` out
+# (`tests/conftest.py`), so they run where they are named, skipping where no browser
+# starts. See docs/testing-the-gui.md, Mode 5:
 #     uv sync --group browser && uv run playwright install chromium
 #     uv run pytest tests/test_dashboard_browser.py
 # `axe-playwright-python` (MIT, needing only Playwright) carries axe-core (MPL-2.0,
@@ -68,6 +77,20 @@ browser = [
     "playwright>=1.49",
 ]
 
+[tool.uv]
+# uv-required-version:begin
+# A **floor** on uv, never a pin. `uv.lock` carries a `revision`, uv's backwards-
+# compatible format marker: an older uv reads a newer revision without a word, leaves
+# the file alone while nothing changes, and writes its own revision the first time a
+# re-lock changes anything — so two machines a release of uv apart rewrite the line back
+# and forth, and every lock's diff carries it. The floor is the uv the device VM's image
+# brings, which no session there can change: a pin would stop every session on it the
+# day the image moves, and a lower floor would let an older uv write an older revision
+# again. When the image's uv writes a newer revision, the floor rises in every project
+# at once, and the other machines follow.
+# uv-required-version:end
+required-version = ">=0.13.4"
+
 [tool.ruff]
 # The **floor**, not the interpreter this is developed on: the `UP` rules exist to
 # propose modern idioms, and one the floor cannot run is a proposal to break the
@@ -77,12 +100,12 @@ target-version = "py311"
 [tool.ruff.lint]
 # ruff-selection:begin
 # One selection for the whole family, so every project lints identically and a
-# fix argued in one of them is a fix in all of them. Beyond ruff's default (E, F):
-# import sorting (I), pyupgrade (UP), bugbear (B), comprehensions (C4), the
-# time-zone rules (DTZ) and Ruff's own rules (RUF). DTZ refuses a clock read and a
-# time built without a zone, and a time that is meant as a wall time says so with
-# a `noqa` and its reason (little-sister ADR-0120). Selecting explicitly also pins
-# the gate against ruff's own defaults shifting between releases.
+# fix argued in one of them is a fix in all of them. Beyond ruff's default
+# (`E`, `F`): import sorting (`I`), pyupgrade (`UP`), bugbear (`B`), comprehensions
+# (`C4`), the time-zone rules (`DTZ`) and Ruff's own rules (`RUF`). `DTZ` refuses a
+# clock read and a time built without a zone, and a time that is meant as a wall time
+# says so with a `noqa` and its reason (little-sister ADR-0120). Selecting explicitly
+# also pins the gate against ruff's own defaults shifting between releases.
 #
 # The ambiguous-unicode rules are off, and stay off. This family's user-facing
 # text — reasons, subnode titles, chip labels — uses typographic "—", "…", "×" and
@@ -109,7 +132,10 @@ files = ["src", "wsgi.py"]
 strict = true
 
 [tool.pytest.ini_options]
-addopts = "--cov=little_sister --cov-report=term-missing"
+# The suite on workers, as many as the machine has CPUs — here rather than in
+# `hooks/pre-commit`, which is one file in every project; `-n 0` runs it in one
+# process. No coverage: the release table's gate below measures it.
+addopts = "-n auto"
 # pytest-testpaths:begin
 # The suite and nothing else. Without this pytest collects from the project's root,
 # `var/` included, so a `test_*.py` that a copy or a review leaves there runs with

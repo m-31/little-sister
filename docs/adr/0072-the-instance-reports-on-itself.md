@@ -93,7 +93,7 @@ take the scheduler down with it.
    seen, so the line stands while the condition does and clears when it stops, with
    a count rather than a repetition and, where the occurrence has a size, the worst
    inside the window as the one reported. The engine's late-tick line is the first
-   on that shape. Both are plumbing (F28): a package with the same two shapes uses
+   on that shape. Both are plumbing: a package with the same two shapes uses
    them rather than writing its own. **Both write claims**: a note or an occurrence
    carries a code, WARN unless said otherwise. A fact — what the process knows and
    does not grade — is not a line on either record but the contributor's *report*

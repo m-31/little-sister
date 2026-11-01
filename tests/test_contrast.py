@@ -33,9 +33,11 @@ the number measured here is the composite.
 """
 import re
 from pathlib import Path
+from typing import ClassVar
 from unittest import TestCase
 
 import little_sister
+from little_sister.tree import RAIL_STATES
 
 STYLESHEET = (Path(little_sister.__file__).parent
               / "static" / "css" / "overview.css")
@@ -246,7 +248,7 @@ class StylesheetTests(TestCase):
 
     def test_the_way_out_keeps_its_ink_as_a_button_and_takes_the_rows_wash(self):
         # Log out is drawn as a button, an edge of its own ink around the word
-        # (backlog #91): the button sets no ink of its own, so what MENU_ROWS measures
+        # (ADR-0029): the button sets no ink of its own, so what MENU_ROWS measures
         # is what it paints, and under the pointer it washes as a row does, at the alpha
         # measured there
         button = self.blocks[".ls-menu__who .ls-menu__logout"]
@@ -647,7 +649,7 @@ class MenuContrastTests(TestCase):
                           palette["--ls-toggle-press-wash"]), ("60%", "0%", "12%"))
         heads = r":is\(\.status-card__head, \.tree-box > \.status-node__self\)"
         own = (r":not\(:has\(:is\(\.node-icons, \.node-actions, \.node-more, "
-               r"\.node-actions-menu, \.maintenance-pip\):{0}\)\)")
+               r"\.node-actions-menu, \[data-door\]\):{0}\)\)")
         hover = re.search(
             r"@media \(hover: hover\)\s*\{\s*" + heads + ":hover" + own.format("hover")
             + r"\s*\{([^}]*)\}", sheet)
@@ -678,8 +680,11 @@ class MenuContrastTests(TestCase):
         self.assertRegex(sheet, r"(?m)^\.status-node__self\s*\{\s*cursor: default;")
         self.assertNotIn("tree-caret", sheet)
         self.assertNotIn(".status-card__name:hover", sheet)
+        # nor a block on the wall, a link that washes, nor a head's mark or its lit ◇,
+        # links that are signs (ADR-0147 decision 7)
         self.assertRegex(sheet, r'(?m)^\.status-node a:not\(\[data-control="toggle"\], '
-                                r'\.tree-chip\):hover\s*\{\s*'
+                                r'\.tree-chip, \.rule-block--door, \.head-mark,\s+'
+                                r'\.door-mark\):hover\s*\{\s*'
                                 r'text-decoration: underline;')
 
     def test_a_chip_answers_the_pointer_as_the_row_does(self):
@@ -992,13 +997,9 @@ class CyberpunkCulpritTests(TestCase):
                     for part in _selectors(selector):
                         self.assertTrue(part.startswith(THEME + " "), part)
 
-    def test_the_pip_keeps_its_edge_and_the_warned_mark_its_amber(self):
-        # two marks painted from the vivid fills, which the glass turned dark: the
-        # pause pip on a parent's head is ringed in maintenance's neon, and the warned
+    def test_the_warned_mark_keeps_its_amber(self):
+        # a mark painted from the vivid fills, which the glass turned dark: the warned
         # triangle on a measure's curve filled with the warning's
-        pip = self.rules[f"{THEME} .maintenance-pip"]
-        self.assertRegex(pip, r"box-shadow:\s*0 0 0 1px "
-                              r"var\(--ls-tint-maintenance-ink\)")
         warned = self.rules[f"{THEME} .ls-curve__warned"]
         self.assertIn("fill: var(--ls-tint-warn-ink)", warned)
         amber = _ratio(_rgb(self.theme["--ls-tint-warn-ink"]), _rgb(DROPDOWN["dark"]))
@@ -1266,9 +1267,10 @@ class PaleWordsTests(TestCase):
 
 class UnfilledBlockTests(TestCase):
     """A block with no fill of its own stands on its node's fill, whichever status gives
-    it (ADR-0137): `tests/sweep_contrast.py` measures its dashes at 75 % of its ink and
-    its note mark's wash at 8 %, on a red, an amber and a green node in every theme, and
-    this is what holds the sheet to what was measured."""
+    it (ADR-0137): `tests/sweep_contrast.py` measures its dashes at 75 % of its ink and,
+    on the wall, its sentence on its link's wash at 8 % (ADR-0147 decision 7), on a red,
+    an amber and a green node in every theme, and this is what holds the sheet to what
+    was measured."""
 
     @classmethod
     def setUpClass(cls):
@@ -1279,11 +1281,119 @@ class UnfilledBlockTests(TestCase):
             self.rules['.rule-block:not([data-rule="maintenance"])'],
             r"border-color:\s*color-mix\(in srgb, currentColor 75%,\s*transparent\);")
 
-    def test_its_marks_wash_at_the_alpha_measured(self):
-        for state in (":hover", '[aria-expanded="true"]'):
+    def test_its_link_washes_at_the_alpha_measured(self):
+        # laid over the node's fill as an inset shadow, under the sentence
+        self.assertRegex(
+            self.rules['a.rule-block--door:not([data-rule="maintenance"]):hover'],
+            r"box-shadow:\s*inset 0 0 0 100vmax color-mix\(in srgb, currentColor 8%,"
+            r"\s*transparent\);")
+
+
+class HandledPartTests(TestCase):
+    """How a handled part looks (ADR-0143): its job's mark and, wherever one level up
+    counts it as something other than it shows, a rail in the ink of the status it
+    counts as — the undefined ink where it counts as nothing. A line's mark and rail
+    stand on the line's own tint; a box's rail, and a line's with no tint of its own,
+    on a strip of the page, since a vivid fill takes the inks under the bar; a head's
+    mark on its own tint, as a status sign is, which `test_a_status_sign_clears_aa_on_
+    its_own_tint` measures. Each is a graphic, so the bar is 3:1."""
+
+    #: What each rail and each mark is drawn in: the state's tint ink, a part counted
+    #: as nothing in the undefined ink.
+    INKS: ClassVar[dict[str, str]] = {"ok": "ok", "warn": "warn", "error": "error",
+                                      "nothing": "undefined"}
+    #: The tints a handled line wears: a failure's, which a seen and a configured
+    #: rule stand on, and ok's, which a done line shows and a silenced one between its
+    #: flaps.
+    TINTS = ("ok", "warn", "error")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.blocks = _blocks(STYLESHEET.read_text(encoding="utf-8"))
+        cls.rules = _by_selector(cls.blocks)
+
+    def test_the_rails_and_marks_paint_the_inks_measured_here(self):
+        # every state the tree draws a rail in has its ink here, and nothing else does
+        self.assertEqual(tuple(self.INKS), RAIL_STATES)
+        for state, ink in self.INKS.items():
             with self.subTest(state=state):
-                self.assertRegex(
-                    self.rules['.rule-block:not([data-rule="maintenance"]) '
-                               f'.block-button{state}'],
-                    r"background:\s*color-mix\(in srgb, currentColor 8%,"
-                    r"\s*transparent\);")
+                self.assertEqual(self.rules[f".rail-{state}"].strip(),
+                                 f"--ls-rail: var(--ls-tint-{ink}-ink);")
+                self.assertIn(f"--ls-mark: var(--ls-tint-{ink}-ink);",
+                              self.rules[f".mark-{state}"])
+                self.assertIn(f"--ls-mark-tint: var(--ls-tint-{ink});",
+                              self.rules[f".mark-{state}"])
+        self.assertIn("--ls-mark: var(--ls-tint-maintenance-ink);",
+                      self.rules[".mark-maintenance"])
+        self.assertIn("color: var(--ls-mark)", self.rules[".line-mark"])
+        # and over a box's links, which take their line's ink (`.status-node a`) —
+        # the mark measured in the line's own ink on the wall until this said so
+        self.assertIn("color: var(--ls-mark)", self.rules[
+            ":is(.status-node__reason, .check-reason__box, .check-reason__rail)"
+            " > .line-mark"])
+
+    def test_a_lit_door_wears_the_tint_every_handled_surface_wears(self):
+        # ◇ lit with its number, and the kiosk's mark of it (ADR-0147 decision 2):
+        # maintenance's tint pair, measured above as the quiet block's, whatever fill
+        # the head it stands on wears
+        for rule in (".node-icon.door.is-lit", ".door-mark"):
+            with self.subTest(rule=rule):
+                self.assertIn(f"background: var({QUIET_SURFACE})", self.rules[rule])
+                self.assertIn(f"color: var({QUIET_INK})", self.rules[rule])
+
+    def test_a_line_s_mark_and_rail_clear_the_bar_on_its_tint(self):
+        for theme, selector, _ in THEMES:
+            palette = _tokens(self.blocks, selector)
+            for tint in self.TINTS:
+                for state, ink in self.INKS.items():
+                    with self.subTest(theme=theme, tint=tint, counts=state):
+                        ratio = _ratio(_rgb(palette[f"--ls-tint-{ink}-ink"]),
+                                       _rgb(palette[f"--ls-tint-{tint}"]))
+                        self.assertGreaterEqual(
+                            round(ratio, 2), GRAPHICS,
+                            f"a line on the {tint} tint counted as {state} draws "
+                            f"{ratio:.2f}:1 in {theme}")
+
+    def test_a_rail_on_the_page_s_strip_clears_the_bar_against_it(self):
+        for theme, selector, _ in THEMES:
+            palette = _tokens(self.blocks, selector)
+            for state, ink in self.INKS.items():
+                with self.subTest(theme=theme, counts=state):
+                    ratio = _ratio(_rgb(palette[f"--ls-tint-{ink}-ink"]),
+                                   _rgb(palette["--ls-canvas"]))
+                    self.assertGreaterEqual(
+                        round(ratio, 2), GRAPHICS,
+                        f"a rail counted as {state} is {ratio:.2f}:1 on the page "
+                        f"in {theme}")
+
+    def test_what_stands_on_a_fill_stands_on_the_page_s_strip(self):
+        strip = "inset -6px 0 0 var(--ls-canvas)"
+        self.assertIn(strip, self.rules[":is(.status-card, .status-node).has-rail"])
+        self.assertIn(strip, self.rules[
+            ":is(.status-node__reason, .check-reason).has-rail"
+            ":not(.is-coded, .is-quiet)"])
+        # a line on its own tint draws straight on it, and nothing dims either
+        self.assertNotIn(strip, self.rules[
+            ":is(.status-node__reason, .check-reason).has-rail"])
+        for rule in (".line-mark", ".head-mark",
+                     ".line-mark.on-fill > .line-mark__glyph"):
+            with self.subTest(rule=rule):
+                self.assertNotRegex(self.rules[rule], r"opacity\s*:")
+
+    def test_a_tube_with_a_rail_draws_the_rail_over_its_glass(self):
+        # cyberpunk's failing box is a tube of shadows (ADR-0028), which a box's own
+        # rail would replace: a railed tube draws the rail and its strip first, then
+        # the very tube, so that the glass keeps its glow and the rail its strip
+        tube = self.rules[f"{THEME} :is(.status-card, .status-node)"
+                          ":is(.s-error, .s-warn, .s-maintenance, .s-undefined)"
+                          ":not(.dim)"]
+        railed = self.rules[f"{THEME} :is(.status-card, .status-node).has-rail"
+                            ":is(.s-error, .s-warn, .s-maintenance, .s-undefined)"
+                            ":not(.dim)"]
+        rail = "inset -4px 0 0 var(--ls-rail), inset -6px 0 0 var(--ls-canvas),"
+
+        def shadow(body):
+            return " ".join(re.search(r"box-shadow:([^;]+);", body).group(1).split())
+
+        self.assertTrue(shadow(railed).startswith(rail), shadow(railed))
+        self.assertEqual(shadow(railed)[len(rail):].strip(), shadow(tube))

@@ -10,7 +10,7 @@ output as a single leaf), both shared so the family behaves consistently.
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
@@ -68,26 +68,36 @@ DEFAULT_MAX_CHARS = 1000
 _PACKAGED_SCRIPTS = Path(str(files("little_sister"))) / "scripts"
 
 
+#: The connection keys every SSH check's file takes (ADR-0151), which the base adds to
+#: what a type states; and the output keys ``ssh-command`` and ``ssh-script`` take.
+CONNECTION_KEYS = ("host", "user", "port", "sudo", "identity_file", "debug",
+                   "options")
+OUTPUT_KEYS = ("capture", "max_chars", "keep")
+
+
 class SshCheckBase(Check):
     """Base for every SSH check: owns the shared connection block.
 
     Parses ``host`` / ``user`` / ``port`` / ``sudo`` / ``identity_file`` /
     ``options`` / ``debug`` and exposes them as an :class:`SshConnection`.
     ``BatchMode`` is forced (non-interactive, key-based auth; host key already
-    known); ``sudo: true`` runs the remote command under ``sudo -n``.
+    known); ``sudo: true`` runs the remote command under ``sudo -n``. Those are the
+    keys it adds to what a type states its file takes (:data:`CONNECTION_KEYS`).
     """
 
     def __init__(self, *, host: str, user: str | None = None,
                  port: int | None = None, sudo: bool = False,
                  identity_file: str | None = None, debug: bool = False,
-                 options: tuple[str, ...] = (), **kwargs: Any) -> None:
+                 options: tuple[str, ...] = (),
+                 config_keys: Iterable[str] = (), **kwargs: Any) -> None:
         # The **host** is the object every check in this family reads, whichever
         # of them it is: `/hosts/nas/system` measures `nas01`. Not `user@host:port`
         # — that is how we got there, and a login moved to another account is the
         # same machine — and not the node's path, which is the deployment's label.
         # Two methods on one host are still two series, because a series is keyed
         # by the check as well as the object.
-        super().__init__(subject=host, **kwargs)
+        super().__init__(subject=host, config_keys=(*CONNECTION_KEYS, *config_keys),
+                         **kwargs)
         self.host = host
         self.user = user
         self.port = port
@@ -196,7 +206,7 @@ class SshCheckBase(Check):
         would be declaring a number the check itself can beat.
 
         Shared, because every check in this family carries that half and none of
-        them should have to re-derive the same number (F28)."""
+        them should have to re-derive the same number."""
         return TRANSPORT_RECORD_BYTES + (
             DEBUG_RECORD_BYTES if self.debug else 0)
 
@@ -315,14 +325,15 @@ class SshCheckBase(Check):
 class SshScriptCheck(SshCheckBase):
     """Base for checks that pipe a bundled script to a host over SSH.
 
-    Adds the ``script_path`` piped to the host's shell via ``interpreter``.
+    Adds the ``script_path`` piped to the host's shell via ``interpreter`` — and
+    ``script``, the key that names one, to what a type states its file takes.
     Subclasses add their own config and parse the script's ``key=value`` stdout (the
     metrics checks) or return its raw output (``ssh-script``).
     """
 
     def __init__(self, *, script_path: str, interpreter: str = "bash",
-                 **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+                 config_keys: Iterable[str] = (), **kwargs: Any) -> None:
+        super().__init__(config_keys=("script", *config_keys), **kwargs)
         self.script_path = script_path
         self.interpreter = interpreter
 

@@ -1,6 +1,8 @@
-"""The ringed check in a real browser (ADR-0142): the page's one editor cloned into a
-box, the head's own on a node's page, a line's beside its line, and the refresh that
-waits while one is open.
+"""A failure marked seen in a real browser (ADR-0142, as ADR-0147 amends it): marked in
+the drawer a door opens — a head's for each failure at and beneath it, a line's for
+the line — the part keeping its color under the ringed check, the line's mark standing
+where its door stood, the block's editor on a node's page, and the refresh that waits
+while it is open.
 
 What the server answers to `POST /pins/seen` and what a page draws of it is
 `tests/test_seen_pages.py`'s; what the tree does with it `tests/test_seen.py`'s. Served
@@ -13,7 +15,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 
 from little_sister import app as app_module
 from little_sister.pins import SEEN
@@ -24,10 +26,21 @@ from tests.test_pin_browser import _BrowserCase
 
 _FOCUS_IN_NOTE = ("document.activeElement !== null"
                   " && document.activeElement.name === 'note'")
-_NO_CLONE = "document.querySelector('#status-grid details.is-clone') === null"
 _FRAGMENT = re.compile(r"[?&]fragment=1")
-_PAUSED = ("document.getElementById('status-updated').textContent"
-           ".trim().endsWith('paused while editing')")
+#: The page waits for an open editor, and the editor says so at the top of its form,
+#: the stamp keeping its width (ADR-0147 decision 4).
+_PAUSED = ("Array.from(document.querySelectorAll('#status-grid .ls-paused'))"
+           ".some(line => line.checkVisibility())")
+_EDITING = ("document.documentElement.classList"
+            ".contains('maintenance-edit-enhanced')")
+#: The drawer open with its page whole in its frame, and shut (ADR-0147).
+_DRAWN = ("(function () { var f = document.querySelector('.ls-drawer__frame');"
+          " var d = f && f.contentDocument;"
+          " return document.getElementById('ls-drawer').open"
+          " && d && d.readyState === 'complete' && d.body"
+          " && d.body.hasAttribute('data-ls-panel'); })()")
+_SHUT = ("!document.getElementById('ls-drawer').open"
+         " && document.querySelector('.ls-drawer__frame') === null")
 #: The page's clock where a test holds it, as ``tests/test_pin_browser.py`` does.
 _NOON = datetime(2026, 10, 3, 12, 0, 0, tzinfo=UTC)
 
@@ -49,7 +62,8 @@ def _wall() -> StatusTree:
 
 
 class SeenBrowserTests(_BrowserCase):
-    """✓ on a card, on a page's head and on a line — in Chromium."""
+    """A seen set in the drawer, on a head and on a line, and its block's editor — in
+    Chromium."""
 
     estate = staticmethod(_wall)
 
@@ -64,9 +78,7 @@ class SeenBrowserTests(_BrowserCase):
         if clock:
             self.page.clock.install(time=_NOON)
         self.page.goto(f"{self.base}{url}")
-        self.page.wait_for_function(
-            "document.documentElement.classList"
-            ".contains('maintenance-edit-enhanced')")
+        self.page.wait_for_function(_EDITING)
         if clock:
             # short of the first tick, which is ten seconds in
             self.page.clock.pause_at(_NOON + timedelta(seconds=5))
@@ -76,172 +88,128 @@ class SeenBrowserTests(_BrowserCase):
             has=self.page.locator(f'.status-card__head[data-path="/{name}"]'))
 
     @staticmethod
-    def _check_of(card: Any) -> Any:
-        return card.locator('.status-card__head [data-control="ack"]')
+    def _door_of(card: Any) -> Any:
+        """◇ on the card's head — among its icons, or lit in its state."""
+        return card.locator('.status-card__head [data-control="door"]')
 
-    @staticmethod
-    def _scope(within: Any) -> str:
-        said = within.locator(".rule-block__scope strong").inner_text()
-        return " ".join(said.split())
+    def _line(self, text: str) -> Any:
+        return self.page.locator(".check-reason").filter(
+            has=self.page.locator(".check-reason__body", has_text=text))
 
     def _accepted(self) -> tuple[list[str], list[tuple[str, str]]]:
         nodes, lines = app_module.status_tree.acknowledgments()
         return sorted(nodes), sorted(lines)
 
-    def test_a_cards_check_marks_each_failure_beneath_it_from_the_pages_editor(self):
+    def test_a_cards_door_marks_each_failure_beneath_it_in_the_drawer(self):
         page = self.page
         self._wall_at()
-        # one editor for the page, outside the grid, and none in a card until ✓
-        self.assertEqual(page.locator("template#ack-editor").count(), 1)
-        self.assertEqual(page.locator("#status-grid details.ack-setter").count(), 0)
         card = self._card("hemulen")
-        check = self._check_of(card)
-        digest = check.get_attribute("data-ack-parts")
-        self.assertEqual(check.get_attribute("data-ack-count"), "2")
-        check.click()
-        page.wait_for_function(_FOCUS_IN_NOTE)
-        clone = card.locator("details.ack-setter.is-clone")
-        self.assertEqual(clone.count(), 1)
-        self.assertEqual(check.get_attribute("aria-expanded"), "true")
-        self.assertEqual(self._scope(clone), "Mark seen the 2 failures at and beneath "
-                                             "hemulen, each its own.")
-        self.assertEqual(clone.locator("input[name=path]").input_value(), "/hemulen")
-        self.assertEqual(clone.locator("input[name=parts]").input_value(), digest)
-        # a leaf that fails for itself is the one failure at it
-        self._check_of(self._card("uplink")).click()
-        page.wait_for_function(_FOCUS_IN_NOTE)
-        self.assertEqual(clone.count(), 0)                  # one editor at a time
-        uplink = self._card("uplink").locator("details.ack-setter.is-clone")
-        self.assertEqual(self._scope(uplink), "Mark seen the one failure at uplink.")
-        page.keyboard.press("Escape")
-        page.wait_for_function(_NO_CLONE, timeout=3000)
-
-        check.click()
-        page.wait_for_function(_FOCUS_IN_NOTE)
-        page.keyboard.type("the disk is on order")
-        with page.expect_navigation():
-            card.locator("details.ack-setter button[type=submit]").click()
-        self.assertEqual(urlsplit(page.url).path, "/status")
+        self._door_of(card).click()
+        page.wait_for_function(_DRAWN)
+        frame = page.frame_locator(".ls-drawer__frame")
+        frame.locator(".ack-kind", has_text="Seen").click()
+        form = frame.locator(".ls-kind-form[data-kind=seen]")
+        # each failure at and beneath the head, each its own
+        self.assertEqual(form.locator("select[name=slug] option:checked")
+                         .inner_text().strip(),
+                         "all 2 failures listed above, each its own")
+        form.locator("textarea[name=note]").fill("the disk is on order")
+        form.locator("button[type=submit]").click()
+        page.wait_for_function(_SHUT, timeout=5000)
         self.assertEqual(self._accepted(),
                          (["/hemulen/disk", "/hemulen/memory"], []))
         pin = app_module.status_tree.acknowledgment("/hemulen/disk")
         assert pin is not None
         self.assertEqual((pin.kind, pin.note, pin.set_by, pin.expires_at),
                          (SEEN, "the disk is on order", "pan", None))
-        # what was marked offers no check any longer, and each box beneath the head
-        # states its seen
-        self.assertEqual(self._check_of(self._card("hemulen")).count(), 0)
-        self.assertEqual(self._check_of(self._card("uplink")).count(), 1)
-        stated = self._card("hemulen").locator('.rule-block[data-rule="seen"]')
-        self.assertEqual(stated.count(), 2)
-        self.assertIn("Seen by pan at", " ".join(stated.first.inner_text().split()))
+        # the wall is up to date at once: each part keeps its color under the ringed
+        # check, and the card's door counts them
+        page.wait_for_function(
+            "document.querySelectorAll('#status-grid"
+            " .tree-node[data-node^=\"/hemulen/\"] .head-ack').length === 2",
+            timeout=3000)
+        disk = page.locator(
+            '.status-node:has(> .status-node__self[data-path="/hemulen/disk"])')
+        memory = page.locator(
+            '.status-node:has(> .status-node__self[data-path="/hemulen/memory"])')
+        self.assertIn("s-error", disk.get_attribute("class"))
+        self.assertIn("s-warn", memory.get_attribute("class"))
+        self.assertEqual(self._door_of(self._card("hemulen")).inner_text().strip(), "2")
+        self.assertEqual(urlsplit(page.url).path, "/status")
 
-    def test_its_check_and_its_pause_mark_share_the_one_place(self):
-        # ✓ and ‖ open their editors where the block will stand, one at a time:
-        # the one opened last takes the other's place
+    def test_a_line_marked_seen_keeps_its_color_its_mark_where_its_door_stood(self):
         page = self.page
-        self._wall_at()
-        card = self._card("hemulen")
-        self._check_of(card).click()
-        page.wait_for_function(_FOCUS_IN_NOTE)
-        card.locator('.status-card__head [data-control="pin"]').click()
-        page.wait_for_function(_FOCUS_IN_NOTE)
-        self.assertEqual(card.locator("details.ack-setter").count(), 0)
-        self.assertEqual(card.locator("details.pin-setter.is-clone").count(), 1)
-        self.assertEqual(self._check_of(card).get_attribute("aria-expanded"), "false")
-        page.keyboard.press("Escape")
-        page.wait_for_function(_NO_CLONE, timeout=3000)
-        # Escape gives the focus back to what opened the editor, which says so
-        self._check_of(card).click()
-        page.wait_for_function(_FOCUS_IN_NOTE)
-        page.keyboard.type("not after all")
-        page.keyboard.press("Escape")
-        page.wait_for_function(_NO_CLONE, timeout=3000)
-        check = self._check_of(card)
-        self.assertTrue(check.evaluate("check => check === document.activeElement"))
-        self.assertEqual(check.get_attribute("aria-expanded"), "false")
-        self.assertEqual(self._accepted(), ([], []))
+        self._wall_at("/status/ci/build")
+        line = self._line("test fails")
+        door = line.locator(".line-door")
+        stood = door.bounding_box()
+        row = line.bounding_box()
+        assert stood is not None and row is not None
+        seat = (stood["x"] - row["x"], stood["y"] - row["y"])
+        door.click()
+        page.wait_for_function(_DRAWN)
+        frame = page.frame_locator(".ls-drawer__frame")
+        frame.locator(".ack-kind", has_text="Seen").click()
+        form = frame.locator(".ls-kind-form[data-kind=seen]")
+        self.assertEqual(form.locator("select[name=slug] option:checked")
+                         .inner_text().strip(), "its line: test fails")
+        form.locator("textarea[name=note]").fill("flaky since the runner move")
+        # a leaf's page, which nothing refreshes, is loaded again
+        with page.expect_navigation():
+            form.locator("button[type=submit]").click()
+        page.wait_for_function(_EDITING)
+        self.assertEqual(self._accepted(), ([], [("/ci/build", "test")]))
+        line = self._line("test fails")
+        self.assertIn("s-error", line.get_attribute("class"))
+        self.assertIn("This line is marked seen by pan",
+                      " ".join(line.locator('.rule-block[data-rule="seen"]')
+                               .first.inner_text().split()))
+        # the door used became the mark where it stood (ADR-0147 decision 7)
+        self.assertEqual(line.locator(".line-door").count(), 0)
+        mark = line.locator(".line-ack").bounding_box()
+        now = line.bounding_box()
+        assert mark is not None and now is not None
+        self.assertLessEqual(abs(mark["x"] - now["x"] - seat[0]), 1.5)
+        self.assertLessEqual(abs(mark["y"] - now["y"] - seat[1]), 1.5)
+        # the line that still warns keeps its door
+        self.assertEqual(self._line("lint warns").locator(".line-door").count(), 1)
 
-    def test_the_refresh_waits_while_its_editor_is_open(self):
+    def test_a_seen_s_editor_on_a_branch_s_page_makes_the_refresh_wait(self):
+        # a branch with lines of its own, one of them marked seen: its page's head
+        # states the line's block, whose editor stands in what the refresh swaps
+        tree = app_module.status_tree
+        tree.upsert("/ci", StatusCode.WARN, [
+            Entry("queue", "the queue is long", StatusCode.WARN)], members=True)
+        write = tree.set_acknowledgment("/ci", "queue", SEEN, "known",
+                                        expires_at=None, set_by="ada")
+        assert write.current is not None, write.problem
         page = self.page
-        self._wall_at(clock=True)
-        self._check_of(self._card("uplink")).click()
+        self._wall_at("/status/ci", clock=True)
+        line = page.locator(".viewed-head .check-reason").filter(
+            has=page.locator(".check-reason__body", has_text="the queue is long"))
+        line.locator(".rule-block__edit > summary").click()
         page.wait_for_function(_FOCUS_IN_NOTE)
         page.wait_for_function(_PAUSED, timeout=3000)
-        page.keyboard.type("half a sentence")
+        page.keyboard.type(", and growing")
         page.clock.run_for(35_000)
         page.wait_for_timeout(300)          # room for a request that must not come
         self.assertEqual(self.fragments, [])
         self.assertEqual(page.evaluate("document.activeElement.value"),
-                         "half a sentence")
+                         "known, and growing")
         page.keyboard.press("Escape")
-        page.wait_for_function(_NO_CLONE, timeout=3000)
         page.wait_for_function(f"!({_PAUSED})", timeout=3000)
 
-    def test_a_pages_check_opens_the_editor_its_head_keeps_listing_each(self):
-        page = self.page
-        page.goto(f"{self.base}/status/hemulen")
-        head = page.locator(".viewed-head")
-        check = head.locator('.node-icons > [data-control="ack"]')
-        setter = head.locator(":scope > details.ack-setter")
-        check.wait_for(state="visible")
-        self.assertTrue(setter.is_hidden())
-        self.assertEqual(check.get_attribute("aria-expanded"), "false")
-        check.click()
-        page.wait_for_function(_FOCUS_IN_NOTE)
-        self.assertTrue(setter.is_visible())
-        self.assertEqual(check.get_attribute("aria-expanded"), "true")
-        listed = [" ".join(item.split())
-                  for item in setter.locator(".ack-parts li").all_inner_texts()]
-        self.assertEqual(listed, ["/hemulen/disk, its own failure",
-                                  "/hemulen/memory, its own failure"])
-        page.keyboard.type("both known")
-        with page.expect_navigation():
-            setter.locator("button[type=submit]").click()
-        self.assertEqual(self._accepted(),
-                         (["/hemulen/disk", "/hemulen/memory"], []))
-        self.assertEqual(urlsplit(page.url).path, "/status/hemulen")
-        # the page offers it no longer
-        self.assertEqual(page.locator('.viewed-head [data-control="ack"]').count(), 0)
-
-    def test_a_line_is_marked_beside_it_and_the_write_comes_back_to_it(self):
-        page = self.page
-        page.goto(f"{self.base}/status/ci/build")
-        line = page.locator(".check-reason").filter(
-            has=page.locator(".check-reason__body", has_text="test fails"))
-        line.locator(".reason-ack > summary").click()
-        page.wait_for_function(_FOCUS_IN_NOTE)
-        self.assertEqual(self._scope(line.locator(".reason-ack")),
-                         "Mark seen this line.")
-        page.keyboard.type("flaky since the runner move")
-        with page.expect_navigation():
-            line.locator(".reason-ack button[type=submit]").click()
-        where = urlsplit(page.url)
-        self.assertEqual((where.path, parse_qs(where.query), where.fragment),
-                         ("/status/ci/build", {"reason": ["test"]}, "pinned-reason"))
-        self.assertEqual(self._accepted(), ([], [("/ci/build", "test")]))
-        marked = page.locator("#pinned-reason")
-        self.assertIn("This line is marked seen by pan",
-                      " ".join(marked.locator('.rule-block[data-rule="seen"]')
-                               .first.inner_text().split()))
-        self.assertEqual(marked.locator(".line-ack").count(), 1)
-        self.assertEqual(marked.locator(".reason-ack").count(), 0)
-        # the line that still warns keeps its own
-        lint = page.locator(".check-reason").filter(
-            has=page.locator(".check-reason__body", has_text="lint warns"))
-        self.assertEqual(lint.locator(".reason-ack").count(), 1)
-
-    def test_without_script_a_cards_check_is_a_link_to_the_nodes_page(self):
+    def test_without_script_a_cards_door_is_a_link_to_the_tab(self):
         page = self._signed_in(java_script_enabled=False, **self.drawn_in)
         page.goto(f"{self.base}/status")
         card = page.locator(".status-card").filter(
             has=page.locator('.status-card__head[data-path="/hemulen"]'))
         with page.expect_navigation():
-            card.locator('.status-card__head [data-control="ack"]').click()
-        self.assertEqual(urlsplit(page.url).path, "/status/hemulen")
-        # whose head keeps *Mark seen*, the browser's own disclosure
-        head = page.locator(".viewed-head")
-        form = head.locator("details.ack-setter form.maintenance-editor-form")
-        self.assertFalse(form.is_visible())
-        head.locator("details.ack-setter > summary").click()
+            card.locator('.status-card__head [data-control="door"]').click()
+        self.assertEqual(urlsplit(page.url).path, "/notes/hemulen")
+        # whose form marks each failure seen, every kind's form whole without script
+        form = page.locator(".ls-kind-form[data-kind=seen]")
         self.assertTrue(form.is_visible())
+        self.assertEqual(form.locator("select[name=slug] option:checked")
+                         .inner_text().strip(),
+                         "all 2 failures listed above, each its own")

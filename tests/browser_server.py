@@ -3,7 +3,7 @@
 ``wsgiref``'s server answers one request at a time, and the connections that arrive
 meanwhile wait in its socket's listen queue, which ``socketserver`` makes five long. A
 page is a burst of them — its stylesheets and scripts, more than a dozen on a node's
-page, six at a time — and a server slowed by the gate's coverage is still on the first
+page, six at a time — and a server slowed by coverage is still on the first
 when the rest arrive. Linux holds a connection that finds the queue full until there is
 room; macOS resets it (``net::ERR_CONNECTION_RESET``), and the page loads without that
 file: a script that never ran, and a test that waits thirty seconds for what the script

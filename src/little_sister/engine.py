@@ -1120,7 +1120,7 @@ class Engine:
         # liveness rather than a check, so it neither blocks nor feeds that roll-up
         # (and the dashboard lifts it out of the grid anyway, ADR-0056).
         # And, beside it, where a check is reached *through* another one
-        # (ADR-0032 rule 3, backlog #38 A). Registration only, exactly like the
+        # (ADR-0032 rule 3, ADR-0084). Registration only, exactly like the
         # mount above: whether the shield is in force is derived per snapshot
         # from what the dependency is reporting right now. The loader has
         # already refused an unknown target and any cycle, so every target here
@@ -1712,8 +1712,8 @@ class Engine:
                     description=CHILD_DESCRIPTION, stale_after=tolerance,
                     title=report.title or None, about=report.about or None,
                     report=report.report)
-        # Expire maintenance pins past their window (ADR-0014); a real transition,
-        # so the next check refills the node.
+        # Open and close the maintenance windows, and end each pin past its end
+        # (ADR-0014, ADR-0150): real transitions, each a row of its node.
         self._tree.sweep_expired()
         # and what the start registered beside it, the notes' retention among them
         self._run_sweeps()
@@ -2463,7 +2463,7 @@ class Engine:
         show_when_quiet = None if is_root else (
             bool(declared) if declared is not None else result.show_when_quiet)
         # An about past about 400 characters is named once, when it first fills its
-        # node (backlog #91 §3.5): a later run's fills nothing, and one nodes.yaml
+        # node (ADR-0127 decision 8): a later run's fills nothing, and one nodes.yaml
         # declared keeps the field, so the run's never reaches the band to be named.
         # The tree is asked only for an about that long.
         long_about = (about if about is not None

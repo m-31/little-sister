@@ -1,9 +1,12 @@
 """The canonical incident-copy documents — the tree's, and one node's."""
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta, timezone
-from unittest import TestCase
+from datetime import UTC, date, datetime, timedelta, timezone
+from pathlib import Path
+from unittest import TestCase, mock
 from zoneinfo import ZoneInfo
 
+from little_sister import instants
+from little_sister.aggregation import ALL, AggregationRule, RuleSet, Table
 from little_sister.copy_status import (
     TimeStyle,
     format_copy_markdown,
@@ -12,9 +15,10 @@ from little_sister.copy_status import (
     status_icon,
     written_out,
 )
+from little_sister.pins import SEEN, SILENCED
 from little_sister.reasons import Entry
 from little_sister.render import render_markdown
-from little_sister.status import StatusCode
+from little_sister.status import StatusCode, split_path
 from little_sister.tree import StatusTree
 
 # A fixed clock for the documents, standing in for the deployment's configured
@@ -26,6 +30,25 @@ BERLIN = TimeStyle(ZoneInfo("Europe/Berlin"))
 def _utc(*moment: int) -> datetime:
     """An instant, by its date and its time in UTC."""
     return datetime(*moment, tzinfo=UTC)
+
+
+def _in_january():
+    """The clock at 2026-01-15 10:00 in Berlin, where the documents' instants are
+    chosen: a pin set to run to the 20th holds then, its window open (ADR-0150)."""
+    return mock.patch.object(instants, "now", lambda: _utc(2026, 1, 15, 9, 0))
+
+
+def _lines_rule(name: str, under: str, counts_as: dict[StatusCode, StatusCode], *,
+                count: int | None = None,
+                lines: tuple[str, ...] = (ALL,)) -> AggregationRule:
+    """A configured rule on the lines of the node at ``under`` (ADR-0137) — every
+    one of them, or those ``lines`` names — as a start accepts it."""
+    return AggregationRule(
+        name=name, under=under, segments=tuple(split_path(under)),
+        table=Table(tuple(sorted(counts_as.items(), key=lambda item: item[0].value))),
+        note=f"{name}'s note", since=date(2026, 10, 1),
+        file=Path("config/aggregation.yaml"), root=Path("config"), lines=lines,
+        children=None, count=count)
 
 
 class CopyStatusTests(TestCase):
@@ -274,6 +297,7 @@ class TimeStyleTests(TestCase):
                               tzinfo=timezone(timedelta(hours=2)))),
             "07:30 +00:00")
 
+    @_in_january()
     def test_the_tree_document_dates_a_pin_the_same_way(self):
         # One formatter, so /copy gained the offset with the node document: an
         # expiry read in another office is exactly the instant that needs it.
@@ -424,6 +448,7 @@ class NodeCopyTests(TestCase):
 
         self.assertIn("- **Stale** — last observed 2h 7m ago", document)
 
+    @_in_january()
     def test_a_pin_keeps_the_measurement_and_says_a_pin_is_in_force(self):
         # A pin changes what the tree *reports*; it does not change what the check
         # *measured*, and a hand-off is about the measurement.
@@ -456,6 +481,152 @@ class NodeCopyTests(TestCase):
         self.assertNotIn("Shown as", document)
         self.assertNotIn("Maintenance", document)
 
+    def test_a_rule_on_its_lines_is_stated_beneath_what_it_shows(self):
+        # A rule on lines changes what their node shows, as a line's pin does
+        # (ADR-0137); the document says so by the rule, in its block's words, and
+        # claims no pin (ADR-0135).
+        self.tree.use_aggregation(RuleSet([_lines_rule(
+            "a short review queue", "/ci/reviews", {StatusCode.WARN: StatusCode.OK},
+            count=6)]))
+        self.tree.upsert("/ci/reviews", StatusCode.WARN, [
+            Entry("pr-1", "PR one waits", code=StatusCode.WARN),
+            Entry("pr-2", "PR two waits", code=StatusCode.WARN)], members=True)
+
+        document = self._document(self._leaf("/ci/reviews"))
+
+        self.assertIn(
+            "- **Reported:** warn ⚠️\n"
+            "- **Shown as:** ok ✅ — rolled up from its lines; the reported reading "
+            "above is what the check measured.\n"
+            "- § On its lines, warn ⚠️ counts as ok ✅ while fewer than 6 fail — 2 "
+            "do, by the rule **a short review queue**, since 2026-10-01\n"
+            "  - a short review queue's note\n",
+            document)
+        self.assertNotIn("maintenance pin", document)
+        # and each line it changes carries its mark, as the page draws it (ADR-0143)
+        self.assertIn(
+            "- ⚠️ PR one waits\n"
+            "  - § Counts as ok ✅ by the rule **a short review queue**\n"
+            "- ⚠️ PR two waits\n"
+            "  - § Counts as ok ✅ by the rule **a short review queue**",
+            document)
+
+    def test_a_rule_on_some_of_its_lines_marks_which(self):
+        self.tree.use_aggregation(RuleSet([_lines_rule(
+            "the bot's reviews wait", "/ci/reviews", {StatusCode.WARN: StatusCode.OK},
+            lines=("pr-2",))]))
+        self.tree.upsert("/ci/reviews", StatusCode.WARN, [
+            Entry("pr-1", "PR one passed", code=StatusCode.OK),
+            Entry("pr-2", "PR two waits", code=StatusCode.WARN),
+            Entry("pr-3", "PR three passed", code=StatusCode.OK)], members=True)
+        node = self._leaf("/ci/reviews")
+
+        document = self._document(node)
+
+        self.assertIn("- § On 1 of its lines, warn ⚠️ counts as ok ✅, by the rule "
+                      "**the bot's reviews wait**, since 2026-10-01\n", document)
+        self.assertIn(
+            "- ✅ PR one passed\n"
+            "- ⚠️ PR two waits\n"
+            "  - § Counts as ok ✅ by the rule **the bot's reviews wait**\n"
+            "- ✅ PR three passed",
+            document)
+        # the line's own document says it too
+        (line,) = [each for each in node.reasons if each.slug == "pr-2"]
+        self.assertIn("- ⚠️ PR two waits\n"
+                      "  - § Counts as ok ✅ by the rule **the bot's reviews wait**",
+                      format_reason_markdown(node, line, BERLIN))
+
+    def test_a_silence_beside_a_rule_is_the_line_s_mark(self):
+        # the louder fact is the person's, as on the page (ADR-0143, ADR-0144)
+        later = datetime.now(UTC) + timedelta(days=1)
+        self.tree.use_aggregation(RuleSet([_lines_rule(
+            "reviews heal", "/ci/reviews", {StatusCode.WARN: StatusCode.OK})]))
+        self.tree.upsert("/ci/reviews", StatusCode.WARN, [
+            Entry("pr-1", "PR one waits", code=StatusCode.WARN)], members=True)
+        self.tree.set_acknowledgment("/ci/reviews", "pr-1", SILENCED, "it flaps",
+                                     expires_at=later, set_by="pan",
+                                     level=StatusCode.WARN)
+        node = self._leaf("/ci/reviews")
+        (line,) = node.reasons
+        assert line.rule is not None and line.rule.changes, "the rule decides it"
+
+        document = self._document(node)
+
+        self.assertIn("- ⚠️ PR one waits\n  - 🔕 Silenced — by pan", document)
+        self.assertNotIn("§ Counts as", document)
+
+    def test_a_rule_that_changes_nothing_now_is_not_why(self):
+        later = datetime.now(UTC) + timedelta(days=1)
+        self.tree.use_aggregation(RuleSet([_lines_rule(
+            "reviews heal", "/ci/reviews", {StatusCode.WARN: StatusCode.OK})]))
+        self.tree.upsert("/ci/reviews", StatusCode.ERROR, [
+            Entry("pr-1", "PR one failed", code=StatusCode.ERROR),
+            Entry("pr-2", "PR two passed", code=StatusCode.OK)], members=True)
+        self.tree.set_entry_maintenance("/ci/reviews", "pr-1", "ticket filed",
+                                        expires_at=later, set_by="pan")
+
+        document = self._document(self._leaf("/ci/reviews"))
+
+        self.assertIn("- **Shown as:** ok ✅ — rolled up from its lines, of which 1 "
+                      "is in maintenance; ", document)
+        self.assertNotIn("§", document)
+
+    def test_lines_a_person_marked_or_pinned_are_said_in_what_it_shows(self):
+        later = datetime.now(UTC) + timedelta(days=1)
+        self.tree.upsert("/ci/reviews", StatusCode.ERROR, [
+            Entry("pr-1", "PR one failed", code=StatusCode.ERROR),
+            Entry("pr-2", "PR two failed", code=StatusCode.ERROR),
+            Entry("pr-3", "PR three waits", code=StatusCode.WARN),
+            Entry("pr-4", "PR four failed", code=StatusCode.ERROR)], members=True)
+        for slug in ("pr-1", "pr-4"):
+            self.tree.set_acknowledgment("/ci/reviews", slug, SEEN, "known",
+                                         expires_at=None, set_by="pan")
+        self.tree.set_acknowledgment("/ci/reviews", "pr-2", SILENCED, "it flaps",
+                                     expires_at=later, set_by="pan",
+                                     level=StatusCode.OK)
+        self.tree.set_entry_maintenance("/ci/reviews", "pr-3", "ticket filed",
+                                        expires_at=later, set_by="pan")
+
+        document = self._document(self._leaf("/ci/reviews"))
+
+        self.assertIn(
+            "- **Shown as:** ok ✅ — rolled up from its lines, of which 1 is in "
+            "maintenance, 2 are seen and 1 is silenced; the reported reading above is "
+            "what the check measured.\n",
+            document)
+        self.assertNotIn("maintenance pin", document)
+        self.assertNotIn("§", document, "no rule stands on them")
+
+    def test_every_line_in_maintenance_is_said_so(self):
+        later = datetime.now(UTC) + timedelta(days=1)
+        self.tree.upsert("/ci/reviews", StatusCode.ERROR, [
+            Entry("pr-1", "PR one failed", code=StatusCode.ERROR),
+            Entry("pr-2", "PR two failed", code=StatusCode.ERROR)], members=True)
+        for slug in ("pr-1", "pr-2"):
+            self.tree.set_entry_maintenance("/ci/reviews", slug, "ticket filed",
+                                            expires_at=later, set_by="pan")
+
+        document = self._document(self._leaf("/ci/reviews"))
+
+        self.assertIn(
+            "- **Shown as:** maintenance 🛠️ — every line of its own is in "
+            "maintenance; the reported reading above is what the check measured.\n",
+            document)
+
+    def test_lines_that_say_more_than_their_node_s_reading_roll_up(self):
+        # a node's lines count for it as children would, each its own code (ADR-0042)
+        self.tree.upsert("/ci/reviews", StatusCode.WARN, [
+            Entry("pr-1", "PR one failed", code=StatusCode.ERROR)], members=True)
+
+        document = self._document(self._leaf("/ci/reviews"))
+
+        self.assertIn(
+            "- **Shown as:** error ⛔ — rolled up from its lines; the reported reading "
+            "above is what the check measured.\n",
+            document)
+
+    @_in_january()
     def test_a_pinned_entry_is_attributed_beside_its_own_line(self):
         self.tree.upsert("/ci/reviews", StatusCode.ERROR,
                          {"pr-1": "PR one failed", "pr-2": "PR two failed"})
@@ -630,6 +801,7 @@ class CodedLineTests(TestCase):
         self.assertIn("**literal**", rich)          # inside the fence, not bold
         self.assertNotIn("<strong>literal</strong>", rich)
 
+    @_in_january()
     def test_a_pinned_coded_line_keeps_both_its_cue_and_its_attribution(self):
         self._workflows()
         self.tree.set_entry_maintenance(
@@ -698,6 +870,7 @@ class ReasonCopyTests(TestCase):
         self.assertNotIn("Configuration", document)
         self.assertNotIn("GITHUB_TOKEN", document)
 
+    @_in_january()
     def test_a_pinned_line_brings_its_pin_with_it(self):
         self.tree.set_entry_maintenance(
             "/ci/reviews", "pr-412", "waiting on the author",

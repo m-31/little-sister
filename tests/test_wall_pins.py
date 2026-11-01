@@ -1,17 +1,22 @@
-"""The wall and a branch's page edit a pin in place (ADR-0104 decisions 2, 3 and 7).
+"""The wall and a branch's page state a pin where it stands (ADR-0104 decisions 2, 3
+and 7, as ADR-0147 amends them).
 
 The third of the pin block's three surfaces. A card on the wall states its node's pin
-as the block a node's own page states it in, and an unpinned card's pause mark opens
-the pin's editor in the card; a branch's page states its node's pin in its head and
-sets one from there. With them the dialog that floated over the wall, its script and
-the card at the foot of a branch's page are gone.
+as a block while *◇ details* is on — one link that opens the node's *Notes* tab in the
+drawer at that pin, where it is changed (ADR-0147 decisions 6 and 7) — and a branch's
+page states its node's pin whole in its head and changes it there, as the card a page
+draws at depth 0 does. A new pin is set on the node's Notes tab, which every head's
+door opens (ADR-0147 decision 1). With them the dialog that floated over the wall, its
+script, the card at the foot of a branch's page, and ‖ and the editor it cloned into a
+card are gone.
 
 The editors stand inside the part of the page the ten-second refresh swaps, so the
-refresh waits while one is open. That half is the browser's to show
-(`tests/test_pin_browser.py`); what the gate holds of it is that the fragment carries
-the same editors as the page, each with the page's own address to come back to, and
-what the script and the sheet go by: the shape of an editor, the stamp's words, the
-minute, and the rules that keep a mark on its seat.
+refresh waits while one is open, as it waits while the drawer is. That half is the
+browser's to show (`tests/test_pin_browser.py`, `tests/test_drawer_browser.py`); what
+the gate holds of it is that the fragment carries the same blocks as the page, every
+editor with the page's own address to come back to, and what the script and the sheet
+go by: the shape of an editor, the stamp's words, the minute, and the rules that keep
+a mark on its seat.
 
 The pages are read as trees (`tests/page_tree.py`) wherever the claim is about
 *where* something stands.
@@ -20,8 +25,10 @@ from __future__ import annotations
 
 import os
 import re
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest import TestCase
+from unittest.mock import patch
 
 os.environ.setdefault("SECRET_KEY", "test-key")
 
@@ -65,6 +72,11 @@ class _WallCase(TestCase):
 
     def _kiosk(self) -> None:
         self.client.set_cookie("ls_prefs", "layout=kiosk")
+
+    def _details(self) -> None:
+        """*◇ details* on, as the band's switch leaves it in a cookie (ADR-0147
+        decision 6): the wall draws the blocks of what handles a part."""
+        self.client.set_cookie("handled_details", "1")
 
     def _pin(self, path: str, note: str | None = NOTE, by: str = "lex",
              left: timedelta = LEFT) -> Pin:
@@ -117,38 +129,26 @@ class _WallCase(TestCase):
                 if box.attrs.get("type") == "hidden"}
 
     @staticmethod
-    def _setter(where: Element) -> Element:
-        """The one disclosure in ``where`` that sets a pin still to be set."""
-        found = [details for details in where.all(tag="details")
-                 if details.all("rule-block--new")]
-        assert len(found) == 1, f"{len(found)} setters, wanted one"
-        return found[0]
-
-    @staticmethod
-    def _mark(head: Element) -> Element | None:
-        """An admin's ‖ among the head's icons, or None."""
-        found = [icon for icon in head.all("node-icon")
-                 if icon.attrs.get("data-control") == "pin"]
+    def _door(head: Element) -> Element | None:
+        """The door, ◇, on the head — among its icons, or lit in its state cluster under
+        the looks whose toolbar shows only under the pointer — or None (ADR-0147)."""
+        found = [link for link in head.all(tag="a")
+                 if link.attrs.get("data-control") == "door"]
         assert len(found) <= 1
         return found[0] if found else None
-
-    @staticmethod
-    def _editor(page: Element) -> Element:
-        """The page's one editor of a pin still to be set, in its template."""
-        found = [t for t in page.all(tag="template")
-                 if t.attrs.get("id") == "pin-editor"]
-        assert len(found) == 1, f"{len(found)} pin editors on the page, wanted one"
-        return found[0].one("pin-setter")
 
     def _until(self, entry: Pin) -> str:
         return str(app_module._localtime(entry.expires_at))
 
 
 class CardBlockTests(_WallCase):
-    """Decisions 1 and 2: on the wall the block stands in the card."""
+    """Decisions 1 and 2, as ADR-0147 decisions 6 and 7 amend them: on the wall the
+    block stands in the card while *◇ details* is on, one link that opens the drawer at
+    it; off, the library's default, the card says its pin by its color and its door."""
 
     def test_a_pinned_card_states_its_pin_as_the_block(self):
         entry = self._pin("/gaffsie")
+        self._details()
         raw = self._body()
         card = self._card(parse(raw), "/gaffsie")
         blocks = self._stated(card)
@@ -168,11 +168,31 @@ class CardBlockTests(_WallCase):
         self.assertNotIn("pin-banner", raw)
         self.assertEqual(raw.count("In maintenance by"), 1)
 
+    def test_without_details_a_card_says_its_pin_by_its_door(self):
+        # ADR-0147 decision 6: off, the library's default, no block stands on the
+        # wall and the server draws none — and nothing that counts goes with it
+        self._pin("/gaffsie")
+        self._pin("/nexus/qnap", note="disk swap")
+        raw = self._body()
+        page = parse(raw)
+        self.assertEqual(self._stated(page), [])
+        self.assertNotIn("In maintenance by", raw)
+        self.assertNotIn("rule-block", raw)
+        for head, title in (
+                (self._card(page, "/gaffsie").one("status-card__head"),
+                 "Handle it — 1 handled: 1 node in maintenance"),
+                (self._row(page, "/nexus/qnap"),
+                 "Handle it — 1 handled: 1 node in maintenance")):
+            door = self._door(head)
+            assert door is not None
+            self.assertEqual(door.attrs.get("title"), title)
+
     def test_a_cards_expiry_keeps_its_date_and_its_time_whole(self):
-        # #89's B12, seen in a card: *until 2026-10-*, and the day and the time on
+        # Seen in a card: *until 2026-10-*, and the day and the time on
         # the next line. A card is the narrowest place a block stands in.
         entry = self._pin("/gaffsie")
         boxed = self._pin("/nexus/qnap", left=timedelta(hours=5, minutes=30))
+        self._details()
         page = self._page()
         for where, pin, left in (
                 (self._card(page, "/gaffsie"), entry, "1d 23h left"),
@@ -185,89 +205,93 @@ class CardBlockTests(_WallCase):
                     [span.text() for span in said.all("text-nowrap")],
                     [date, time, f"· {left}"])
 
-    def test_the_note_waits_behind_its_mark(self):
-        # ADR-0135 decision 3: on the wall a block says its sentence, and its note
-        # opens from a mark of its own — whole, in a card; it no longer stands in
-        # the card at full length
+    def test_the_block_is_one_link_to_the_drawer_at_its_pin(self):
+        # ADR-0147 decision 7: its sentence its name, a chevron at its end, a door
+        # as every mark is — and nothing inside it to click, nor the note, its mark,
+        # its card or the pencil that went
         self._pin("/gaffsie")
+        self._details()
         block = self._stated(self._card(self._page(), "/gaffsie"))[0]
+        self.assertEqual(block.tag, "a")
         self.assertTrue(block.has("rule-block--wall"))
-        self.assertEqual(block.all("rule-block__note"), [])
-        mark = block.one("rule-note-mark")
-        self.assertEqual(mark.tag, "a")
-        self.assertEqual(mark.attrs.get("href"), "/status/gaffsie")
-        self.assertEqual(mark.attrs.get("title"), "Note")
-        self.assertEqual(mark.text(), "Note")
-        self.assertEqual(mark.attrs.get("data-note-key"), "/gaffsie|")
-        source = block.one("rule-note-src")
-        self.assertEqual(source.tag, "template")
-        note = source.one("note-card__note")
-        self.assertEqual(len(note.all(tag="p")), 3)
-        self.assertEqual(note.all(tag="a")[0].attrs["href"],
-                         "https://tickets.example.org/OPS-1511")
-        self.assertTrue(source.one("note-card__record").text().startswith(
-            "Pinned by lex "))
+        self.assertTrue(block.has("rule-block--door"))
+        self.assertEqual(block.attrs.get("href"), "/notes/gaffsie?at=maintenance#at")
+        self.assertIn("data-door", block.attrs)
+        chevron = block.one("rule-block__chevron")
+        self.assertEqual((chevron.attrs.get("aria-hidden"), chevron.text()),
+                         ("true", "›"))
+        self.assertEqual(block.all(tag="a") + block.all(tag="form")
+                         + block.all(tag="button") + block.all(tag="details")
+                         + block.all(tag="template"), [])
+        for gone in ("rule-block__note", "rule-note-mark", "rule-note-src",
+                     "block-button", "rule-block__clear-now", "rule-block__edit"):
+            with self.subTest(gone=gone):
+                self.assertEqual(block.all(gone), [])
 
-    def test_a_block_without_a_note_has_no_mark(self):
-        self._pin("/gaffsie", note="maintenance")    # the stored absence of a note
-        block = self._stated(self._card(self._page(), "/gaffsie"))[0]
-        self.assertEqual(block.all("rule-note-mark") + block.all("rule-note-src"), [])
-
-    def test_an_admin_edits_with_a_pencil_and_clears_in_the_editor(self):
-        # ADR-0135 decision 4: on the wall every button is a mark that opens
-        # something, and the one act with an effect that cannot wait — Clear —
-        # stands in words in the editor the pencil opens
+    def test_the_drawer_it_opens_states_the_block_whole_its_editor_open(self):
+        # what the link opens is the node's Notes tab at that pin: the note whole,
+        # who set it, its editor open for an admin, and Clear — and a Clear there
+        # ends the pin as the wall's did
         entry = self._pin("/gaffsie")
+        self._details()
         block = self._stated(self._card(self._page(), "/gaffsie"))[0]
-        edit = block.one("rule-block__edit")
-        self.assertEqual(edit.tag, "details")
-        pencil = edit.first()
-        self.assertEqual(pencil.tag, "summary")
-        self.assertTrue(pencil.has("block-button"))
-        self.assertEqual(pencil.attrs.get("title"), "Edit")
-        self.assertEqual(pencil.text(), "Edit this node's maintenance, /gaffsie")
-        kept = app_module._expiry_input(entry.expires_at)
-        form = edit.one(tag="form")
-        self.assertEqual(
-            self._hidden(form),
-            {"path": "/gaffsie", "set_at": entry.token, "next": "/status",
-             "expiry_was": kept})
+        tab = self._page(block.attrs["href"].split("#")[0])
+        at = tab.with_id("at")
+        self.assertTrue(at.has("rule-block"))
+        self.assertEqual(len(at.one("rule-block__note").all(tag="p")), 3)
+        edit = at.one("rule-block__edit")
+        self.assertIn("open", edit.attrs)
         self.assertEqual(edit.one(tag="textarea").source(), NOTE)
-        buttons = [button for button in form.all(tag="button")
-                   if button.attrs.get("type") == "submit"]
-        # Save first, the button Enter presses; Clear beside it, past the fields'
-        # checks
-        self.assertEqual([(button.attrs.get("name"), button.attrs.get("value"))
-                          for button in buttons],
-                         [("action", "set"), ("action", "clear")])
-        self.assertEqual(buttons[1].text(), "Clear this node's maintenance, /gaffsie")
-        self.assertIn("formnovalidate", buttons[1].attrs)
-        self.assertEqual(block.all("rule-block__clear"), [])
-        # the Clear in the editor ends the pin, as the one it replaced did
-        response = self.client.post("/pins/maintenance", data={
-            **self._hidden(form), "action": "clear"})
+        clear = at.one("rule-block__clear")
+        self.assertEqual(self._hidden(clear)["set_at"], entry.token)
+        response = self.client.post("/pins/maintenance", data=self._hidden(clear))
         self.assertEqual(response.status_code, 302)
         self.assertIsNone(self.tree.maintenance_entry("/gaffsie"))
 
-    def test_a_viewer_reads_the_block_without_buttons(self):
+    def test_a_viewer_reads_the_block_and_its_drawer(self):
+        # the note is a viewer's to read too: the block is the same link
         self._pin("/gaffsie")
         self._viewer()
+        self._details()
         block = self._stated(self._card(self._page(), "/gaffsie"))[0]
+        self.assertEqual(block.attrs.get("href"), "/notes/gaffsie?at=maintenance#at")
         self.assertEqual(block.all(tag="form") + block.all(tag="details"), [])
-        # the note is a viewer's to read too
-        self.assertEqual(len(block.one("rule-note-src").one(
-            "note-card__note").all(tag="p")), 3)
-        self.assertTrue(block.all("rule-note-mark"))
+        at = self._page("/notes/gaffsie?at=maintenance").with_id("at")
+        self.assertEqual(len(at.one("rule-block__note").all(tag="p")), 3)
+        self.assertEqual(at.all(tag="form"), [])
 
-    def test_the_kiosk_s_block_has_no_buttons(self):
-        # the kiosk is the wall display: nothing on it is to be clicked
+    def test_the_kiosk_follows_the_deployment_and_its_block_is_plain(self):
+        # the kiosk has no band to say it with, so a browser's cookie says nothing
+        # there; the deployment's default does, and its block is the sentence alone
         self._pin("/gaffsie")
         self._kiosk()
-        block = self._stated(self._card(self._page(), "/gaffsie"))[0]
-        self.assertEqual(block.all(tag="form") + block.all(tag="details"), [])
+        self._details()
+        self.assertEqual(self._stated(self._page()), [])
+        with patch.object(app_module, "config",
+                          replace(app_module.config, handled_details=True)):
+            self.client.set_cookie("handled_details", "0")
+            block = self._stated(self._card(self._page(), "/gaffsie"))[0]
+        self.assertEqual(block.tag, "div")
+        self.assertEqual(block.all(tag="form") + block.all(tag="details")
+                         + block.all(tag="a") + block.all("rule-block__chevron"), [])
+        self.assertNotIn("href", block.attrs)
+
+    def test_the_deployments_default_stands_until_a_browser_says_otherwise(self):
+        # `settings.yaml`'s handled_details gives the switch's default; the switch,
+        # set, is kept in a cookie as hide ok and hide idle are
+        self._pin("/gaffsie")
+        with patch.object(app_module, "config",
+                          replace(app_module.config, handled_details=True)):
+            self.assertEqual(len(self._stated(self._card(self._page(), "/gaffsie"))),
+                             1)
+            response = self.client.get("/status?view=1")
+            self.assertIn("handled_details=0",
+                          " ".join(response.headers.getlist("Set-Cookie")))
+            self.assertEqual(self._stated(self._page()), [])
 
     def test_a_box_inside_a_card_states_its_pin_as_the_block_too(self):
         entry = self._pin("/nexus/qnap")
+        self._details()
         raw = self._body()
         box = self._box(parse(raw), "/nexus/qnap")
         blocks = self._stated(box)
@@ -275,35 +299,29 @@ class CardBlockTests(_WallCase):
         self.assertEqual(
             blocks[0].one("rule-block__what").text(),
             f"In maintenance by lex until {self._until(entry)} · 1d 23h left")
-        self.assertEqual(
-            self._hidden(blocks[0].one("rule-block__edit").one(tag="form"))["path"],
-            "/nexus/qnap")
+        self.assertEqual(blocks[0].attrs.get("href"),
+                         "/notes/nexus/qnap?at=maintenance#at")
         self.assertNotIn("pin-banner", raw)
 
-    def test_a_box_deeper_down_states_its_pin_with_its_buttons(self):
+    def test_a_box_deeper_down_states_its_pin_as_its_link(self):
         # a box inside a box is drawn by the same hand, one level further in
-        outer = self._pin("/nexus/qnap", note="shelf swap")
-        inner = self._pin("/nexus/qnap/smart", note="firmware")
+        self._pin("/nexus/qnap", note="shelf swap")
+        self._pin("/nexus/qnap/smart", note="firmware")
+        self._details()
         page = self._page()
         blocks = {path: self._stated(self._box(page, path))
                   for path in ("/nexus/qnap", "/nexus/qnap/smart")}
         # the outer box holds the inner one, and so its block too
         self.assertEqual([len(found) for found in blocks.values()], [2, 1])
-        block, = blocks["/nexus/qnap/smart"]
-        self.assertEqual(
-            self._hidden(block.one("rule-block__edit").one(tag="form")),
-            {"path": "/nexus/qnap/smart", "set_at": inner.token, "next": "/status",
-             "expiry_was": app_module._expiry_input(inner.expires_at)})
-        self.assertTrue(block.all("rule-block__clear-now"))
-        self.assertEqual(
-            self._hidden(blocks["/nexus/qnap"][0].one("rule-block__edit").one(
-                tag="form"))["set_at"],
-            outer.token)
+        self.assertEqual([block.attrs.get("href") for block in blocks["/nexus/qnap"]],
+                         ["/notes/nexus/qnap?at=maintenance#at",
+                          "/notes/nexus/qnap/smart?at=maintenance#at"])
         ids = [element.attrs["id"] for element in page.walk()
                if "id" in element.attrs]
         self.assertEqual(sorted(ids), sorted(set(ids)))
 
     def test_the_card_of_a_page_at_depth_zero_states_its_pin(self):
+        # the node's own head at depth 0, which states its blocks whole either way
         entry = self._pin("/gaffsie")
         page = self._page("/status/gaffsie?depth=0")
         card = self._card(page, "/gaffsie")
@@ -313,16 +331,20 @@ class CardBlockTests(_WallCase):
             f"In maintenance by lex until {self._until(entry)} · 1d 23h left")
         self.assertEqual(self._hidden(block.one("rule-block__clear"))["next"],
                          "/status/gaffsie?depth=0")
-        # the card is the node there: no head says it a second time, and a
-        # pinned card has no mark
+        # the card is the node there: no head says it a second time, and its door
+        # counts the pin (ADR-0147 decision 2)
         self.assertEqual(page.all("viewed-head"), [])
         self.assertEqual(len(self._stated(page)), 1)
-        self.assertIsNone(self._mark(card.one("status-card__head")))
+        door = self._door(card.one("status-card__head"))
+        assert door is not None
+        self.assertEqual(door.attrs.get("title"),
+                         "Handle it — 1 handled: 1 node in maintenance")
 
     def test_a_pin_on_everything_is_stated_on_the_overviews_own_card(self):
-        # At depth 0 the overview is one card, every node there is. A pin on it
-        # is not set from the wall, but one that stands is stated like any other
-        # and changed there, as on *Handled*.
+        # At depth 0 the overview is one card, every node there is, the root's head.
+        # A pin on it is not set from the wall, but one that stands is stated whole
+        # like any other, whichever way *◇ details* is set, and changed there, as on
+        # *Handled*: the root has no Notes tab for a drawer to frame.
         write = self.tree.set_maintenance(
             "", "datacenter move", expires_at=datetime.now(UTC) + LEFT, set_by="lex")
         entry = write.current
@@ -332,92 +354,62 @@ class CardBlockTests(_WallCase):
         self.assertEqual(
             block.one("rule-block__what").text(),
             f"In maintenance by lex until {self._until(entry)} · 1d 23h left")
+        # an open one-off's editor says so (`open_once`, ADR-0150, landing 4), its
+        # month, which it asks for when it is wanted, keeping none (decision 17)
         self.assertEqual(
             self._hidden(block.one("rule-block__edit").one(tag="form")),
-            {"path": "/", "set_at": entry.token, "next": "/status?depth=0",
-             "expiry_was": app_module._expiry_input(entry.expires_at)})
-        self.assertTrue(block.all("rule-block__clear-now"))
-        self.assertEqual(page.one("status-grid").all("pin-setter"), [])
-        self.assertIsNone(self._mark(page.one("status-card__head")))
+            {"path": "/", "action": "set", "set_at": entry.token,
+             "next": "/status?depth=0",
+             "expiry_was": app_module._expiry_input(entry.expires_at),
+             "open_once": "1"})
+        self.assertEqual(self._hidden(block.one("rule-block__clear"))["action"],
+                         "clear")
+        self.assertEqual(page.one("status-grid").all("rule-block--new"), [])
+        # the root has no Notes tab, so its card has no door
+        self.assertIsNone(self._door(page.one("status-card__head")))
 
 
 class CardSetterTests(_WallCase):
-    """Decision 3, as the head's row has it (ADR-0127 decision 3): a pin is set
-    where its block will stand — on the wall in the card's panel or a box — by ‖
-    among the head's icons, which clones the page's one editor there; without
-    script ‖ is a link to the node's page."""
+    """Decision 3, as ADR-0147 decision 1 amends it: nothing new is set on the wall.
+    The last of a head's icons is its door, ◇, a link to the node's Notes tab, where a
+    pin is set, for every reader; a pin that stands is changed where its block
+    stands."""
 
-    def test_a_cards_mark_is_the_pin_icon_and_the_page_holds_one_editor(self):
+    def test_a_cards_door_is_its_last_icon_and_the_page_holds_no_editor(self):
         page = self._page()
         card = self._card(page, "/hemulen")
-        mark = self._mark(card.one("status-card__head"))
-        assert mark is not None
-        # the last of the head's icons: a link to the node's page without script
-        self.assertEqual(mark.tag, "a")
-        self.assertEqual(mark.attrs.get("href"), "/status/hemulen")
-        self.assertEqual(mark.attrs.get("aria-label"), "set maintenance for /hemulen")
-        self.assertEqual(mark.attrs.get("title"), "Set maintenance")
-        self.assertIn("data-beneath", mark.attrs)     # the pin would cover others
+        door = self._door(card.one("status-card__head"))
+        assert door is not None
+        self.assertEqual(door.tag, "a")
+        self.assertEqual(door.attrs.get("href"), "/notes/hemulen")
+        self.assertEqual(door.attrs.get("aria-label"), "handle /hemulen")
+        self.assertEqual(door.attrs.get("title"), "Handle it")
         icons = [icon.attrs.get("data-control") for icon in
                  card.one("status-card__head").one("node-icons").all("node-icon")]
-        self.assertEqual(icons[-1], "pin")
-        # the card carries no editor; the page holds one, outside the grid, which
-        # the script clones into the card's panel, where the pin's block stands
+        self.assertEqual(icons[-1], "door")
+        # no editor of a new pin, in the card or on the page
         self.assertEqual(card.all("maintenance-editor-form"), [])
-        self.assertEqual(page.one("status-grid").all("pin-setter"), [])
-        setter = self._editor(page)
-        self.assertTrue(setter.has("maintenance-editor-disclosure"))
-        editor = setter.one("rule-block--new")
-        self.assertEqual(editor.one("rule-block__scope").text(),
-                         "Maintenance for this node.")
-        self.assertTrue(editor.one("pin-editor__what"))
-        form = editor.one(tag="form")
-        self.assertEqual(form.attrs.get("action"), "/pins/maintenance")
-        self.assertEqual(
-            self._hidden(form),
-            {"path": "", "action": "set", "set_at": "", "next": "/status"})
-        self.assertEqual(form.one(tag="textarea").attrs.get("name"), "note")
-        expiry, = [box for box in form.all(tag="input")
-                   if box.attrs.get("name") == "duration"]
-        self.assertEqual(expiry.attrs.get("value"), "")
-        self.assertIn("default 7d", expiry.attrs.get("placeholder", ""))
-        self.assertEqual([button.text() for button in form.all(tag="button")],
-                         ["Set maintenance", "Cancel"])
+        self.assertEqual([t for t in page.all(tag="template")
+                          if t.attrs.get("id") == "pin-editor"], [])
+        self.assertEqual(page.all("rule-block--new"), [])
 
-    def test_a_leafs_mark_says_the_pin_covers_the_node_alone(self):
-        mark = self._mark(self._card(self._page(), "/uplink").one("status-card__head"))
-        assert mark is not None
-        self.assertNotIn("data-beneath", mark.attrs)
-
-    def test_a_card_the_filter_emptied_still_covers_what_is_beneath_it(self):
-        # hide ok drops gaffsie's three children from the page. A pin on gaffsie
-        # covers them all the same, and its mark says so.
-        self.tree.upsert("/gaffsie", StatusCode.WARN, "the fan is loud")
-        page = self._page("/status?hide_ok=1")
-        card = self._card(page, "/gaffsie")
-        self.assertEqual(card.all("node-children"), [])
-        mark = self._mark(card.one("status-card__head"))
-        assert mark is not None
-        self.assertIn("data-beneath", mark.attrs)
-        # and so does the node's own card, on its page at depth 0
-        card = self._card(self._page("/status/gaffsie?depth=0"), "/gaffsie")
-        mark = self._mark(card.one("status-card__head"))
-        assert mark is not None
-        self.assertIn("data-beneath", mark.attrs)
-
-    def test_a_pinned_card_has_no_mark_to_set_another(self):
-        # its block carries Edit and Clear instead
+    def test_a_pinned_card_s_door_counts_its_pin(self):
+        # its block carries Edit and Clear; its door counts it
         self._pin("/gaffsie")
         card = self._card(self._page(), "/gaffsie")
-        self.assertIsNone(self._mark(card.one("status-card__head")))
-        self.assertEqual(card.all("pin-setter"), [])
+        door = self._door(card.one("status-card__head"))
+        assert door is not None
+        self.assertEqual(door.attrs.get("title"),
+                         "Handle it — 1 handled: 1 node in maintenance")
+        self.assertEqual(card.all("rule-block--new"), [])
 
-    def test_a_viewer_gets_no_mark(self):
+    def test_a_viewer_gets_the_door_and_no_editor(self):
         self._viewer()
         # on the wall, and on a node's own card at depth 0
         for url in ("/status", "/status/hemulen?depth=0"):
             with self.subTest(url=url):
                 raw = self._body(url)
+                self.assertIn('data-control="door"', raw)
                 self.assertNotIn('data-control="pin"', raw)
                 self.assertNotIn("pin-editor", raw)
                 self.assertNotIn("maintenance-editor-form", raw)
@@ -427,91 +419,105 @@ class CardSetterTests(_WallCase):
         for url in ("/status", "/status/hemulen?depth=0"):
             with self.subTest(url=url):
                 raw = self._body(url)
+                self.assertNotIn('data-control="door"', raw)
                 self.assertNotIn('data-control="pin"', raw)
                 self.assertNotIn("pin-editor", raw)
                 self.assertNotIn("maintenance-editor-form", raw)
 
-    def test_a_box_inside_a_card_carries_the_mark_too(self):
-        # every open head of a node with no pin of its own, a box's as well as a
-        # card's (ADR-0127 decision 3): the editor is cloned into the box, where the
-        # pin's block will stand, as a card's into its panel
+    def test_a_box_inside_a_card_carries_its_door_too(self):
+        # every open head, a box's as well as a card's (ADR-0127 decision 3)
         page = self._page()
-        box = self._mark(self._row(page, "/nexus/qnap"))
+        box = self._door(self._row(page, "/nexus/qnap"))
         assert box is not None
-        self.assertEqual(box.attrs.get("href"), "/status/nexus/qnap")
-        self.assertIn("data-beneath", box.attrs)
-        leaf = self._mark(self._row(page, "/nexus/load"))
-        assert leaf is not None
-        self.assertNotIn("data-beneath", leaf.attrs)
-        # a pinned box has none
+        self.assertEqual((box.attrs.get("href"), box.attrs.get("title")),
+                         ("/notes/nexus/qnap", "Handle it"))
         self._pin("/nexus/qnap", note="disk swap")
-        self.assertIsNone(self._mark(self._row(self._page(), "/nexus/qnap")))
+        box = self._door(self._row(self._page(), "/nexus/qnap"))
+        assert box is not None
+        self.assertEqual(box.attrs.get("title"),
+                         "Handle it — 1 handled: 1 node in maintenance")
 
     def test_every_editor_has_ids_of_its_own(self):
-        # a wall carries an editor for each card, and a label finds its field by id
+        # a node's page carries an editor for each block it states whole, and a label
+        # finds its field by id; the wall, every block on it a link, carries none, and
+        # its ids are its own as well
         self._pin("/gaffsie")
         self._pin("/nexus/qnap", note="disk swap")
-        page = self._page()
-        ids = [element.attrs["id"] for element in page.walk()
-               if "id" in element.attrs]
-        self.assertEqual(sorted(ids), sorted(set(ids)))
-        labels = [label.attrs["for"] for label in page.all(tag="label")
-                  if "for" in label.attrs]
-        self.assertGreater(len(labels), 6)
-        self.assertLessEqual(set(labels), set(ids))
+        self._details()
+        for url, editors in (("/status", 0), ("/status/nexus/qnap", 1),
+                             ("/status/gaffsie?depth=0", 1)):
+            with self.subTest(url=url):
+                page = self._page(url)
+                ids = [element.attrs["id"] for element in page.walk()
+                       if "id" in element.attrs]
+                self.assertEqual(sorted(ids), sorted(set(ids)))
+                labels = [label.attrs["for"] for label in page.all(tag="label")
+                          if "for" in label.attrs]
+                self.assertLessEqual(set(labels), set(ids))
+                self.assertEqual(len(page.all("maintenance-editor-form")), editors)
 
-    def test_the_way_back_keeps_the_wall_s_filters(self):
-        self._pin("/gaffsie")
-        # the second names a switch twice, as the filters' own form submits one
-        for url in ("/status?hide_idle=1&depth=3",
-                    "/status?view=1&hide_idle=0&hide_idle=1&depth=3"):
+    def test_the_way_back_keeps_the_page_s_filters(self):
+        # a node's page states its pin whole, and its editor and Clear come back to the
+        # page as it was asked, filters and all; the second names a switch twice, as
+        # the filters' own form submits one
+        self._pin("/nexus")
+        for url in ("/status/nexus?hide_idle=1&depth=3",
+                    "/status/nexus?view=1&hide_idle=0&hide_idle=1&depth=3"):
             with self.subTest(url=url):
                 page = self._page(url)
                 ways = {self._hidden(form).get("next")
                         for form in page.all(tag="form")
                         if form.attrs.get("action") == "/pins/maintenance"}
                 self.assertEqual(ways, {url})
+        # the wall has none to come back from: its block opens the drawer
+        self._details()
+        wall = self._page("/status?hide_idle=1")
+        self.assertEqual([form for form in wall.all(tag="form")
+                          if form.attrs.get("action") == "/pins/maintenance"], [])
 
-    def test_the_refresh_s_fragment_carries_the_blocks_and_marks_but_no_editor(self):
-        # the blocks and their editors stand in what the refresh swaps: the fragment
-        # has to bring them as the page did, with the page's address and not its
-        # own; the editor of a pin still to be set is the page's, outside the swap
+    def test_the_refresh_s_fragment_carries_the_blocks_and_the_doors(self):
+        # what the switch draws stands in what the refresh swaps: the fragment brings
+        # the blocks as the page did, links with no form in them, or none — and the
+        # doors, as every head's icons, either way
         self._pin("/gaffsie")
         fragment = self._page("/status?depth=3&fragment=1")
-        self.assertEqual(len(self._stated(self._card(fragment, "/gaffsie"))), 1)
-        self.assertIsNotNone(self._mark(self._card(fragment, "/hemulen")
+        self.assertEqual(self._stated(fragment), [])
+        self.assertIsNotNone(self._door(self._card(fragment, "/hemulen")
+                                        .one("status-card__head")))
+        self._details()
+        fragment = self._page("/status?depth=3&fragment=1")
+        block, = self._stated(self._card(fragment, "/gaffsie"))
+        self.assertEqual(block.attrs.get("href"), "/notes/gaffsie?at=maintenance#at")
+        self.assertIsNotNone(self._door(self._card(fragment, "/hemulen")
                                         .one("status-card__head")))
         self.assertEqual(fragment.all("rule-block--new"), [])
-        self.assertEqual([t for t in fragment.all(tag="template")
-                          if t.attrs.get("id") == "pin-editor"], [])
-        ways = {self._hidden(form).get("next")
-                for form in fragment.all(tag="form")
-                if form.attrs.get("action") == "/pins/maintenance"}
-        self.assertEqual(ways, {"/status?depth=3"})
-        # the page's editor prints the deployment's default and its timezone, as
-        # every editor of a pin does
-        setter = self._editor(self._page("/status?depth=3"))
-        expiry, = [box for box in setter.all(tag="input")
-                   if box.attrs.get("name") == "duration"]
-        self.assertIn("default 7d", expiry.attrs.get("placeholder", ""))
-        self.assertIn("Timezone: Europe/Berlin", setter.text())
+        self.assertEqual([form for form in fragment.all(tag="form")
+                          if form.attrs.get("action", "").startswith("/pins/")], [])
 
-    def test_a_set_from_a_card_comes_back_to_the_wall(self):
-        # the page's editor, its path the one the script fills in from the card
-        form = self._editor(self._page("/status?depth=3")).one(tag="form")
+    def test_a_set_from_a_card_s_door_comes_back_to_its_tab(self):
+        # the door's tab, whose form a pin is set from, and to which the write
+        # comes back
+        tab = self._page("/notes/hemulen")
+        (form,) = [form for form in tab.all("ls-kind-form")
+                   if form.attrs.get("data-kind") == "maintenance"]
+        hidden = self._hidden(form)
+        self.assertEqual(
+            hidden, {"path": "/hemulen", "action": "set", "set_at": "",
+                     "next": "/notes/hemulen", "from": "notes"})
         response = self.client.post("/pins/maintenance", data={
-            **self._hidden(form), "path": "/hemulen", "note": "new fans",
-            "duration": "2h"})
+            **hidden, "note": "new fans", "duration": "2h"})
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.headers["Location"], "/status?depth=3")
+        self.assertEqual(response.headers["Location"], "/notes/hemulen")
         entry = self.tree.maintenance_entry("/hemulen")
         assert entry is not None
         self.assertEqual((entry.note, entry.set_by), ("new fans", "pan"))
 
     def test_an_edit_in_a_card_keeps_the_expiry_it_showed(self):
-        # decision 5 holds for every editor of a pin: a node's, a line's, a card's
+        # decision 5 holds for every editor of a pin: a node's, a line's, and that of
+        # the card a node's page draws at depth 0
         entry = self._pin("/gaffsie")
-        form = self._stated(self._card(self._page(), "/gaffsie"))[0].one(
+        form = self._stated(self._card(self._page("/status/gaffsie?depth=0"),
+                                       "/gaffsie"))[0].one(
             "rule-block__edit").one(tag="form")
         shown, = [box.attrs["value"] for box in form.all(tag="input")
                   if box.attrs.get("name") == "duration"]
@@ -527,8 +533,9 @@ class CardSetterTests(_WallCase):
 
 
 class BranchHeadTests(_WallCase):
-    """Decisions 2 and 3: a branch's page states its node's pin in its head,
-    above the children it covers, and sets one from there."""
+    """Decisions 2 and 3: a branch's page states its node's pin in its head, above
+    the children it covers, and changes it there; a new one is set on the node's Notes
+    tab, which the head's door opens (ADR-0147 decision 1)."""
 
     def test_the_head_states_the_pin_as_the_block(self):
         entry = self._pin("/gaffsie")
@@ -554,7 +561,8 @@ class BranchHeadTests(_WallCase):
             self._hidden(edit.one(tag="form")),
             {"path": "gaffsie", "action": "set", "set_at": entry.token,
              "next": "/status/gaffsie",
-             "expiry_was": app_module._expiry_input(entry.expires_at)})
+             "expiry_was": app_module._expiry_input(entry.expires_at),
+             "open_once": "1"})
         self.assertEqual(
             self._hidden(block.one("rule-block__clear")),
             {"path": "gaffsie", "action": "clear", "set_at": entry.token,
@@ -566,81 +574,73 @@ class BranchHeadTests(_WallCase):
         block, = self._stated(self._page("/status/gaffsie").one("viewed-head"))
         self.assertEqual(block.all(tag="form") + block.all(tag="details"), [])
 
-    def test_an_admin_sets_a_pin_from_the_head(self):
+    def test_the_head_sets_nothing_its_door_opens_the_tab(self):
         page = self._page("/status/hemulen")
         head = page.one("viewed-head")
-        setter = self._setter(head)
-        self.assertTrue(setter.has("rule-setter"))
-        self.assertEqual(setter.first().tag, "summary")
-        self.assertEqual(setter.first().text(), "Set maintenance")
-        editor = setter.one("rule-block--new")
-        said = editor.one("rule-block__scope").text()
-        self.assertTrue(said.startswith("Maintenance for this node. "), said)
-        self.assertIn("everything beneath it", said)
-        self.assertIn("nothing under here will alarm", said)
-        self.assertEqual(
-            self._hidden(editor.one(tag="form")),
-            {"path": "hemulen", "action": "set", "set_at": "",
-             "next": "/status/hemulen"})
-        # one way to set it among the nodes, and it stands above the children it
-        # will cover; the page's one editor for the cards' marks stands outside
-        # the grid, after them — beside the ringed check's (ADR-0142)
-        new = [block for block in page.all("rule-block--new")
-               if block.attrs.get("data-rule") == "maintenance"]
-        self.assertEqual(len(new), 2)
-        self.assertLess(setter.order, page.one("status-grid").order)
-        self.assertGreater(self._editor(page).order, page.one("status-grid").order)
+        self.assertEqual(head.all("rule-setter") + head.all("rule-block--new"), [])
+        door = self._door(head)
+        assert door is not None
+        self.assertEqual(door.attrs.get("href"), "/notes/hemulen")
+        self.assertEqual(page.all("rule-block--new"), [])
 
-    def test_a_head_that_everybody_reads_carries_the_control_for_an_admin_only(self):
-        # a node with something of its own to say heads its page for every reader
+    def test_a_head_that_everybody_reads_carries_its_door_for_every_reader(self):
+        # a node with something of its own to say heads its page for every reader,
+        # and its door with it — none on the kiosk, which has nothing to click
         self.tree.upsert("/hemulen", StatusCode.WARN, "the fan is loud")
-        self.assertEqual(
-            len(self._page("/status/hemulen").one("viewed-head").all("rule-setter")),
-            1)
+        door = self._door(self._page("/status/hemulen").one("viewed-head"))
+        assert door is not None
+        self.assertEqual(door.attrs.get("title"), "Handle it")
         self._kiosk()
         head = self._page("/status/hemulen").one("viewed-head")
         self.assertEqual(head.all(tag="details") + head.all(tag="form"), [])
+        self.assertIsNone(self._door(head))
         self.client.delete_cookie("ls_prefs")
         self._viewer()
         head = self._page("/status/hemulen").one("viewed-head")
         self.assertEqual(head.all(tag="details") + head.all(tag="form"), [])
+        door = self._door(head)
+        assert door is not None
+        self.assertEqual(door.attrs.get("title"), "Notes")
 
     def test_a_plain_containers_head_is_there_for_every_reader(self):
-        # a container with nothing of its own to say opened with its children, its
-        # head drawn for the admin alone, whose control it carried; a page frames
-        # its node now (backlog #91 §3.5), and the head is the frame's top for every
-        # reader, the kiosk's too — the control still the admin's alone
+        # a page frames its node (ADR-0127 decision 8), and the head is the frame's top
+        # for every reader, the kiosk's too; its door for every reader but the kiosk
         head = self._page("/status/hemulen").one("viewed-head")
-        self.assertEqual(len(head.all("rule-setter")), 1)
+        self.assertIsNotNone(self._door(head))
+        self.assertEqual(head.all("rule-setter"), [])
         self._kiosk()
         head = self._page("/status/hemulen").one("viewed-head")
-        self.assertEqual(head.all("rule-setter"), [])
+        self.assertIsNone(self._door(head))
         self.client.delete_cookie("ls_prefs")
         self._viewer()
         head = self._page("/status/hemulen").one("viewed-head")
+        self.assertIsNotNone(self._door(head))
         self.assertEqual(head.all("rule-setter"), [])
 
     def test_the_way_back_survives_a_name_a_url_has_to_quote(self):
         # A node's name is its check's to choose, and `#` unquoted would cut the
         # way back short: the write would land on another page.
         self.tree.upsert("/rack #2/psu", StatusCode.OK)
-        form = self._setter(
-            self._page("/status/rack%20%232").one("viewed-head")).one(tag="form")
+        door = self._door(self._page("/status/rack%20%232").one("viewed-head"))
+        assert door is not None
+        self.assertEqual(door.attrs.get("href"), "/notes/rack%20%232")
+        (form,) = [form for form in self._page("/notes/rack%20%232").all("ls-kind-form")
+                   if form.attrs.get("data-kind") == "maintenance"]
         self.assertEqual(
             self._hidden(form),
-            {"path": "rack #2", "action": "set", "set_at": "",
-             "next": "/status/rack%20%232"})
+            {"path": "/rack #2", "action": "set", "set_at": "",
+             "next": "/notes/rack%20%232", "from": "notes"})
         response = self.client.post("/pins/maintenance", data={
             **self._hidden(form), "note": "a supply is swapped",
             "duration": "2h"})
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.headers["Location"], "/status/rack%20%232")
+        self.assertEqual(response.headers["Location"], "/notes/rack%20%232")
         self.assertIsNotNone(self.tree.maintenance_entry("/rack #2"))
 
     def test_what_the_head_shows_the_cards_beneath_it_leave_out(self):
         # The head of a node with nothing to say is still the topmost node in view
         # (ADR-0044): its time is said once, there — for every reader, since every
-        # page frames its node (backlog #91 §3.5).
+        # page frames its node (ADR-0127 decision 8).
         self.tree.upsert("/moomin", StatusCode.UNDEFINED)
         self.tree.upsert("/moomin/valley", StatusCode.OK)
         self.tree.upsert("/moomin/house", StatusCode.OK)
@@ -667,8 +667,8 @@ class BranchHeadTests(_WallCase):
 
     def test_the_overview_offers_no_pin_on_everything(self):
         # silencing the whole tree from a form is a foot-gun; the root stays
-        # the API's: no head, no mark on the overview's own card at depth 0, and
-        # no editor in the grid whose path is the root's
+        # the API's: no head, no door on the overview's own card at depth 0 — the
+        # root has no Notes tab — and no editor in the grid whose path is the root's
         for url in ("/status", "/status?depth=0"):
             page = self._page(url)
             self.assertEqual(page.all("viewed-head"), [], url)
@@ -677,11 +677,11 @@ class BranchHeadTests(_WallCase):
                      if form.attrs.get("action") == "/pins/maintenance"}
             self.assertNotIn("", paths, url)
             self.assertNotIn("/", paths, url)
-            marks = {mark.attrs.get("aria-label") for mark in page.all("node-icon")
-                     if mark.attrs.get("data-control") == "pin"}
-            self.assertNotIn("set maintenance for ", marks, url)
-            self.assertNotIn("set maintenance for /", marks, url)
-        self.assertIsNone(self._mark(self._page("/status?depth=0")
+            doors = {door.attrs.get("href") for door in page.all("node-icon")
+                     if door.attrs.get("data-control") == "door"}
+            self.assertNotIn("/notes/", doors, url)
+            self.assertNotIn("/notes", doors, url)
+        self.assertIsNone(self._door(self._page("/status?depth=0")
                                      .one("status-card__head")))
 
     def test_the_head_is_in_what_the_refresh_swaps(self):
@@ -691,20 +691,12 @@ class BranchHeadTests(_WallCase):
         self.assertEqual(self._hidden(block.one("rule-block__clear"))["next"],
                          "/status/gaffsie")
 
-    def test_at_depth_zero_a_branch_s_card_sets_it(self):
+    def test_at_depth_zero_a_branch_s_card_carries_its_door(self):
         page = self._page("/status/hemulen?depth=0")
-        mark = self._mark(self._card(page, "/hemulen").one("status-card__head"))
-        assert mark is not None
-        self.assertIn("data-beneath", mark.attrs)
-        # the page's editor comes back to the page as it was asked for
-        self.assertEqual(
-            self._hidden(self._editor(page).one(tag="form")),
-            {"path": "", "action": "set", "set_at": "",
-             "next": "/status/hemulen?depth=0"})
-        # the card's panel is there for the editor to be cloned into, though the
-        # node has nothing of its own to say
-        self.assertTrue(self._card(page, "/hemulen").all("status-panel"))
-
+        door = self._door(self._card(page, "/hemulen").one("status-card__head"))
+        assert door is not None
+        self.assertEqual(door.attrs.get("href"), "/notes/hemulen")
+        self.assertEqual(page.all("rule-block--new"), [])
 
 class PinAboveHeadTests(_WallCase):
     """ADR-0104 decision 2 on a branch's page: a pin set on a node above it
@@ -734,7 +726,7 @@ class PinAboveHeadTests(_WallCase):
         self.assertLess(block.order, page.one("status-grid").order)
 
     def test_a_viewer_reads_it_in_the_head(self):
-        # every page's head is drawn now (backlog #91 §3.5); a pin above silencing
+        # every page's head is drawn now (ADR-0127 decision 8); a pin above silencing
         # the node is a row at its head, without buttons for a viewer
         self._viewer()
         head = self._page("/status/nexus/qnap").one("viewed-head")
@@ -749,14 +741,18 @@ class PinAboveHeadTests(_WallCase):
         frag = parse(self._body("/status/nexus/qnap?fragment=1"))
         self.assertEqual(len(self._above(frag.one("viewed-head"))), 1)
 
-    def test_the_head_s_editor_says_its_pin_outlasts_the_one_above(self):
+    def test_a_pin_above_is_no_part_of_the_node_s_door(self):
+        # it is counted on the door of the node it stands on, and stands in this
+        # node's tab so that a reader sees why the node is blue (ADR-0147 decision 2)
         self._pin("/nexus")
-        said = self._setter(self._page("/status/nexus/qnap").one("viewed-head")).one(
-            "rule-block__scope").text()
-        self.assertTrue(said.startswith(
-            "Maintenance for this node. It keeps everything beneath it in maintenance "
-            "when the pin above it ends: nothing under here will alarm before this pin "
-            "expires."), said)
+        door = self._door(self._page("/status/nexus/qnap").one("viewed-head"))
+        assert door is not None
+        self.assertEqual(door.attrs.get("title"), "Handle it")
+        above = self._door(self._card(self._page(), "/nexus").one("status-card__head"))
+        assert above is not None
+        self.assertEqual(above.attrs.get("title"),
+                         "Handle it — 1 handled: 1 node in maintenance")
+        self.assertIn("in maintenance from", self._body("/notes/nexus/qnap"))
 
     def test_the_node_s_own_pin_under_one_is_also_in_maintenance_on_its_own(self):
         self._pin("/nexus", by="anna")
@@ -817,21 +813,27 @@ class RefreshWaitsTests(_WallCase):
     def _css(self) -> str:
         return self.client.get("/static/css/overview.css").get_data(as_text=True)
 
-    #: The editor's own open disclosure around its form — named by its class, a
-    #: node's or a line's, so that no other disclosure the grid may hold matches it
-    #: (ADR-0127's stage 2 narrowed it from any `details[open]`): a line's pause
-    #: mark's, and its ringed check's (ADR-0142).
-    EDITOR = ("details.maintenance-editor-disclosure[open] form.maintenance-editor-form"
-              ", details.reason-pin[open] form.maintenance-editor-form"
-              ", details.reason-ack[open] form.maintenance-editor-form")
+    #: The editor's own open disclosure around its form — named by its class, so
+    #: that no other disclosure the grid may hold matches it (ADR-0127's stage 2
+    #: narrowed it from any `details[open]`): a block's, the one editor the wall and a
+    #: node's page carry since a line's pause mark and its ringed check went with the
+    #: door (ADR-0147).
+    EDITOR = "details.maintenance-editor-disclosure[open] form.maintenance-editor-form"
 
     def test_every_editor_on_these_pages_is_what_the_refresh_looks_for(self):
         # the editor's own open disclosure around a `form.maintenance-editor-form`
         self.assertIn(f"var EDITOR = '{self.EDITOR}';", self._script("poll.js"))
         self._pin("/gaffsie")
         self._pin("/nexus/qnap", note="disk swap")
-        for url in ("/status", "/status?depth=3&fragment=1", "/status/gaffsie",
-                    "/status/hemulen", "/status/hemulen?depth=0"):
+        self._pin("/hemulen", note="new fans")
+        self._details()
+        # the wall's blocks are links that open the drawer, which the refresh waits
+        # for in a test of its own (ADR-0147 decisions 4 and 7): none is an editor
+        for url in ("/status", "/status?depth=3&fragment=1"):
+            self.assertEqual([form for form in self._page(url).all(tag="form")
+                              if form.all(tag="textarea")], [], url)
+        for url in ("/status/gaffsie", "/status/hemulen", "/status/hemulen?depth=0",
+                    "/status/nexus/qnap"):
             editors = [form for form in self._page(url).all(tag="form")
                        if form.all(tag="textarea")]
             self.assertGreater(len(editors), 0, url)
@@ -842,15 +844,28 @@ class RefreshWaitsTests(_WallCase):
                     around = around.parent
                 self.assertIsNotNone(around, url)
                 assert around is not None
-                self.assertTrue(around.has("maintenance-editor-disclosure")
-                                or around.has("reason-pin")
-                                or around.has("reason-ack"), (url, around.attrs))
+                self.assertTrue(around.has("maintenance-editor-disclosure"),
+                                (url, around.attrs))
 
-    def test_the_stamp_says_it_and_the_page_dims_after_a_minute(self):
+    def test_the_editor_says_it_and_the_page_dims_after_a_minute(self):
+        # the pause is said where its cause is, the stamp keeping its width, on Lex's
+        # word of 2026-10-30 (ADR-0147 decision 4): an open editor's form says
+        # *updates paused* at its top, and the stamp says nothing more than at rest
         script = self._script("poll.js")
-        self.assertIn("sayUpdated(' — paused while editing');", script)
+        self.assertNotIn("paused while", script)
+        # the stylesheet shows the line in an editor open in what the poll marks
+        self.assertIn("container.setAttribute('data-ls-poll-target', '');", script)
+        self.assertIn("[data-ls-poll-target] .maintenance-editor-disclosure[open]"
+                      " .ls-paused", self._css())
         self.assertIn("var WAIT_DIMS_AFTER_MS = 60000;", script)
         self.assertIn("setTimeout(dim, WAIT_DIMS_AFTER_MS)", script)
+        self._pin("/gaffsie")
+        page = self._page("/status/gaffsie")
+        (editor,) = page.one("viewed-head").all("rule-block__editor", tag="form")
+        first = editor.all(tag="p")[0]
+        self.assertEqual((first.attrs.get("class"), first.text()),
+                         ("ls-paused", "updates paused"))
+        self.assertNotIn("paused", page.with_id("status-updated").text())
 
     def test_the_sheet_dims_all_but_what_holds_the_open_editor(self):
         css = self._css()
@@ -861,8 +876,6 @@ class RefreshWaitsTests(_WallCase):
         sheet = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
         # the editor's own disclosure, as the scripts name it
         holds = (r":not\(:has\(details\.maintenance-editor-disclosure\[open\] "
-                 r"\.maintenance-editor-form, details\.reason-pin\[open\] "
-                 r"\.maintenance-editor-form, details\.reason-ack\[open\] "
                  r"\.maintenance-editor-form\)\)")
         # on the wall the grid's cards and what stands beside the grid; on a node's
         # page the same inside its frame: its head, its cards, its facts
@@ -878,22 +891,24 @@ class RefreshWaitsTests(_WallCase):
             sheet, r"\.poll-waiting \.node-frame__box > :not\(\.status-grid\)"
                    + holds + r",")
 
-    def test_the_cloned_editor_takes_the_blocks_place_and_measure(self):
-        # the editor ‖ clones into a card's panel or a box stands where the pin's
-        # block will, with the block's padding and size there, and none of the
-        # head's row holds a seat for a mark any more
+    def test_no_editor_is_cloned_and_one_door_stands_on_each_head(self):
+        # ‖ cloned the page's one editor into a card's panel or a box; with the door
+        # nothing is set on the wall (ADR-0147 decision 1), so the stylesheet keeps
+        # nothing of the clone, the blocks keep their padding and size, and none of
+        # the head's row holds a seat for a mark
         css = self._css()
+        for gone in (".pin-setter", ".ack-setter", ".rule-setter", ".reason-pin",
+                     ".reason-ack", ".maintenance-pip", ".status-card__state--seat",
+                     ".pin-control"):
+            with self.subTest(gone=gone):
+                self.assertNotIn(gone, css)
         for where in (".status-panel", ".tree-box"):
             with self.subTest(where=where):
-                rule = css_rule(css, f"{where} > .pin-setter > .rule-block")
+                rule = css_rule(css, f"{where} > .rule-block")
                 self.assertIn("padding: 0.35rem 0.55rem;", rule)
                 self.assertIn("font-size: 0.8rem;", rule)
-                self.assertIn("display: block;",
-                              css_rule(css, f"{where} > .pin-setter"))
-        self.assertNotIn(".status-card__state--seat", css)
-        self.assertNotIn(".pin-control", css)
-        # and the marks stand in the heads' icons alone: on the wall's cards and
-        # boxes, pinned or not, and on a node's own card at depth 0
+        # and the doors stand one a head: on the wall's cards and boxes, pinned or
+        # not, and on a node's own card at depth 0
         self._pin("/gaffsie")
         heads = [head for url in ("/status", "/status/hemulen?depth=0",
                                   "/status/gaffsie?depth=0")
@@ -901,16 +916,14 @@ class RefreshWaitsTests(_WallCase):
                  + self._page(url).all("status-node__self")]
         self.assertGreater(len(heads), 5)
         for head in heads:
-            self.assertEqual(head.all("pin-setter"), [], head)
-            marks = [icon for icon in head.all("node-icon")
-                     if icon.attrs.get("data-control") == "pin"]
-            self.assertLessEqual(len(marks), 1, head)
-            for mark in marks:
-                self.assertTrue(mark.parent.has("node-icons"))
-        self.assertEqual(
-            sorted({len([icon for icon in head.all("node-icon")
-                         if icon.attrs.get("data-control") == "pin"])
-                    for head in heads}), [0, 1])
+            doors = [link for link in head.all(tag="a")
+                     if link.attrs.get("data-control") == "door"]
+            self.assertEqual(len(doors), 1, head)
+            # plain among the icons; lit in the state cluster, under the library's
+            # look, whose toolbar shows only under the pointer
+            lit = doors[0].has("is-lit")
+            self.assertEqual(doors[0].parent.has("node-icons"), not lit, head)
+            self.assertEqual(doors[0].has("state-door"), lit, head)
 
     def test_a_note_keeps_its_links_and_a_head_its_measure(self):
         css = self._css()
@@ -956,7 +969,7 @@ class RefreshWaitsTests(_WallCase):
             controls = [control for row in rows
                         for control in row.all(tag="form") + row.all(tag="summary")
                         + [icon for icon in row.all("node-icon")
-                           if icon.attrs.get("data-control") == "pin"]]
+                           if icon.attrs.get("data-control") == "door"]]
             self.assertGreater(len(controls), 0, url)
             for control in controls:
                 node = control
@@ -965,7 +978,7 @@ class RefreshWaitsTests(_WallCase):
                     node = node.parent
 
     def test_the_inspection_card_stays_away_from_a_row_whose_editor_is_open(self):
-        # #89's B12: the mark that opened an editor has given way to it, so the
+        # The mark that opened an editor has given way to it, so the
         # pointer that clicked is left on the node's own row, and the row's card
         # came up over the one above. That it stays away is the browser's to show;
         # what the script goes by is the refresh's shape of an open editor, asked
@@ -979,27 +992,28 @@ class RefreshWaitsTests(_WallCase):
                       self._script("inspect.js"))
         self.assertIn('var node = row.closest(".tree-node") || row;',
                       self._script("inspect.js"))
-        # the editor a head's button opens stands in the node that answers to the
-        # card — its box, after the row — which is where the script looks for it;
-        # a page's head keeps its editor beneath its row, in the frame, which is
-        # the node the script asks of the head's row
+        # a page's head keeps its pin's block, and the block's editor, beneath its
+        # row, in the frame, which is the node the script asks of the head's row
+        self._pin("/hemulen")
         page = self._page("/status/hemulen")
-        setter = self._setter(page.one("viewed-head"))
+        edit = page.one("viewed-head").one("rule-block__edit")
         frame = page.one("node-frame")
         self.assertTrue(frame.has("tree-node"))
-        self.assertTrue(setter.within(frame))
+        self.assertTrue(edit.within(frame))
         self.assertTrue(page.one("viewed-head").one("status-node__self").within(frame))
-        self.assertGreater(setter.order,
+        self.assertGreater(edit.order,
                            page.one("viewed-head").one("status-node__self").order)
-        self.assertEqual(len(setter.all("maintenance-editor-form")), 1)
-        # a stated pin's editor stands in the box, outside the row and inside the node
+        self.assertEqual(len(edit.all("maintenance-editor-form")), 1)
+        # on the wall a stated pin is a link in the box, outside the row and inside the
+        # node, with no editor in it to stay away from (ADR-0147 decision 7)
         self._pin("/nexus/qnap", note="disk swap")
+        self._details()
         page = self._page()
         box = self._box(page, "/nexus/qnap")
-        edit = next(block for block in box.all("rule-block")
-                    if block.parent is box).one("rule-block__edit")
-        self.assertEqual(self._row(page, "/nexus/qnap").all("rule-block__edit"), [])
-        around = edit.parent
+        block = next(block for block in box.all("rule-block") if block.parent is box)
+        self.assertEqual(block.all("rule-block__edit"), [])
+        self.assertEqual(self._row(page, "/nexus/qnap").all("rule-block"), [])
+        around = block.parent
         while around is not None and "data-node" not in around.attrs:
             around = around.parent
         assert around is not None

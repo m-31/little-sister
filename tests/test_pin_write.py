@@ -1,6 +1,6 @@
 """Where a pin's write comes back to, and what a save that changes nothing writes.
 
-Three things a walk of the pin block on a running deployment found (backlog #89):
+Three things a walk of the pin block on a running deployment found:
 
 * A line's set, edit and clear from its node's own page came back to the top of
   that page — on a node with 150 lines, a long way from the line. They come back

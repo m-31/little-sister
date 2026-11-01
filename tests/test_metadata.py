@@ -13,6 +13,8 @@ from unittest import TestCase
 
 from little_sister.checks.base import CheckError
 from little_sister.checks.metadata import (
+    CHILDREN_KEYS,
+    STATED_SUBNODE_KEYS,
     SUBNODE_KEYS,
     Stated,
     expand_tokens,
@@ -232,18 +234,22 @@ class ParseSubnodeLooksTests(TestCase):
 
 
 class UnknownCheckKeysTests(TestCase):
-    """What a check's file says that the library does not read, of the blocks the
-    library owns; the rest of the top level is the type's."""
+    """What a check's file writes that nothing takes in the blocks the library reads
+    beneath its top level (ADR-0151 decision 3): each place, the keys it does not take
+    and what it takes. The top level is the check's to judge, which knows what its type
+    states."""
 
-    def test_names_the_keys_of_subnode_entries_and_children_blocks(self):
+    def test_names_each_place_with_its_keys_and_what_it_takes(self):
         self.assertEqual(unknown_check_keys({
             "url": "the type's",
-            "chip": "the type's too, for all the library can tell",
+            "chip": "the check's to judge, not this reader's",
             "children": {"chips": True, "flod_ok": True},
-            "subnodes": {"disk": {"title": "Disk", "chip": True,
+            "subnodes": {"disk": {"title": "Disk", "titel": "Disk", "chip": True,
                                   "children": {"show_when_quiet": True,
                                                "order": 1}}}}),
-            ["children.flod_ok", "subnodes.disk.chip", "subnodes.disk.children.order"])
+            [("children", ["flod_ok"], CHILDREN_KEYS),
+             ("subnodes.disk", ["chip", "titel"], STATED_SUBNODE_KEYS),
+             ("subnodes.disk.children", ["order"], CHILDREN_KEYS)])
 
     def test_a_file_with_none_says_nothing(self):
         self.assertEqual(unknown_check_keys({"subnodes": {"disk": {

@@ -24,14 +24,14 @@
             page draws them and as `_page_end.html` draws the cues': the frame's head
             refers to them. -#}
         {{ icon_sprite() }}
-        {#- **A leaf's page is framed as a branch's is** (backlog #91 §3.5): the page
+        {#- **A leaf's page is framed as a branch's is** (ADR-0127 decision 8): the page
             is the same tree, rooted at the leaf, and the leaf is always open. The
             frame's head is the one a branch's page draws (`frame_head`, the same
             macro, so the two cannot drift): the leaf's row as its box draws it, its
             fill the leaf's own — vivid where it fails, a leaf's status being its own
             — with the funnel where it has healthy lines, since ✓ ok is a leaf page's
-            fold (§3.3) and `tree.js` keeps its entry in the tab's map, the same entry
-            the leaf's box carries on the wall; then the rules acting
+            fold (ADR-0127 decision 4) and `tree.js` keeps its entry in the tab's map,
+            the same entry the leaf's box carries on the wall; then the rules acting
             on the leaf as the rows heading the frame, which is the border running
             round every line a pin covers (ADR-0104 decision 8), the lines in the
             check's order and the damping counter in words. Its status was a line of
@@ -70,9 +70,16 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='js/rail.js') }}"></script>
-    {# The frame's head (backlog #91 §3.5): its funnel's fold kept in the tab's map,
+    {# The frame's head (ADR-0127 decision 8): its funnel's fold kept in the tab's map,
        its row measured and its toolbar walked as every head's is. #}
     <script src="{{ url_for('static', filename='js/tree.js') }}"></script>
     <script src="{{ url_for('static', filename='js/maintenance-edit.js') }}"></script>
+    {#- The drawer (ADR-0147 decision 3): ◇ opens it here as on the wall. The page is
+        not refreshed, so it has nothing to hold, and a write that goes through in the
+        drawer brings the page up to date by loading it again (`drawer.js`). -#}
+    {%- if layout != 'kiosk' %}
+    {% include '_drawer.html' %}
+    <script src="{{ url_for('static', filename='js/drawer.js') }}"></script>
+    {%- endif %}
 </body>
 </html>

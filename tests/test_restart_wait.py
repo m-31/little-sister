@@ -3,7 +3,7 @@
 
 A node may wait before it escalates (ADR-0083), and its counter is memory. A node's
 first reading in a new process met no counter and was published at once, so every
-failure a restart found skipped its wait (backlog #89's B17). And the log is bounded:
+failure a restart found skipped its wait. And the log is bounded:
 a node whose last change had left it had nothing for its first reading to be compared
 with, so a restart wrote it *undefined → …*, the transition ADR-0094 meant a restart
 not to be.

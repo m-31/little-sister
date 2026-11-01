@@ -5,8 +5,7 @@ A node that waits before it escalates (ADR-0083) shows a worse status at once an
 publishes it to the level above after ``escalate_after`` consecutive readings of it.
 The row of that change is written when the node shows it, marked ``damping``. The
 reading that completed the count wrote nothing, so the log said of no failure that it
-had reached, and the Events page listed one that turned the wall red as held back
-(backlog #89's B18).
+had reached, and the Events page listed one that turned the wall red as held back.
 
 * The reading that completes a count writes a row: the status the node shows,
   unmarked, by the cause ``reached``. It begins no period and counts as no change.

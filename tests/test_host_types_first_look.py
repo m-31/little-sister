@@ -1,7 +1,6 @@
 """How the library's host types propose their levels first look (ADR-0128): a host's
 leaves start as chips, and so do a disk's filesystems, a NAS's drives and sensors and
-a Mac's memory signals and watched processes — backlog #91's fourth stage, its third
-slice (the note's §2).
+a Mac's memory signals and watched processes.
 
 Each type is built from the mapping a deployment's file holds, through the reader
 every type's construction runs, so what is tested is what a deployment gets: what the

@@ -426,15 +426,16 @@ class HostMetricsCheckTests(TestCase):
             "% used — The backups land here."))
         self.assertEqual(kids["disk"].reason_entries[0].grading, "max_disk")
 
-    def test_the_retired_thresholds_stop_the_start_naming_what_replaces_them(self):
+    def test_the_retired_thresholds_stop_the_start_as_a_key_it_does_not_take(self):
         with tempfile.TemporaryDirectory() as directory, \
                 self.assertRaises(CheckError) as caught:
             self._check(directory, thresholds={
                 "cpu": {"warn": 101, "error": 101}, "disk": {"warn": 90,
                                                              "error": 95}})
-        self.assertIn("'thresholds' is retired", str(caught.exception))
-        self.assertIn("write max_cpu_error: 101%, max_disk_warn: 90%, "
-                      "max_disk_error: 95% (ADR-0131)", str(caught.exception))
+        said = str(caught.exception)
+        self.assertIn("unknown key(s) at the top level: thresholds (host-metrics "
+                      "takes: ", said)
+        self.assertIn("max_disk_warn", said)
 
     def test_disk_all_builds_a_branch_per_volume(self):
         stdout = (

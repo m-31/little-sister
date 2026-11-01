@@ -25,24 +25,43 @@
  * The poll waits while a pin's editor is open (ADR-0104 decision 7). On the wall
  * and on a branch's page the editors stand inside what the poll swaps — in a
  * card, in the node's head — and a swap would take the form from under the hands
- * typing in it. So while one is open nothing is fetched and nothing is swapped.
- * The stamp says so at once, "updated … — paused while editing", and after a
- * minute everything but the card being edited dims (.poll-waiting), as a page
- * that lost its server does: a wall left with an editor open must never read as
- * live. When the editor closes the stamp drops the words and the ticks go on,
- * the next one seconds away; a page that had dimmed is brought up to date at
- * once. Not every close is: a swap takes the keyboard's focus with it, and
- * Cancel has just put that back on what opened the editor. An editor is the
- * editor's own open disclosure, `details.maintenance-editor-disclosure` or a
- * line's `details.reason-pin` or `details.reason-ack`, around a
- * `form.maintenance-editor-form`, which is
- * how `_rule_block.html` and `_own_lines.html` write every one of them; named by
- * its class so that no other disclosure the grid may hold matches it.
+ * typing in it. So while one is open nothing is fetched and nothing is swapped,
+ * and after a minute everything but the card being edited dims (.poll-waiting), as
+ * a page that lost its server does: a wall left with an editor open must never read
+ * as live. When the editor closes the ticks go on, the next one seconds away; a
+ * page that had dimmed is brought up to date at once. Not every close is: a swap
+ * takes the keyboard's focus with it, and Cancel has just put that back on what
+ * opened the editor. An editor is a block's own open disclosure,
+ * `details.maintenance-editor-disclosure`, around a `form.maintenance-editor-form`,
+ * which is how `_rule_block.html` writes every one of them — a pin's *Edit*, an
+ * acknowledgment's, and a series' *Extend*, *End now* and the question its *Clear*
+ * asks (ADR-0150, landing 4); named by its class so that no other disclosure the grid
+ * may hold matches it. Nothing new is set on the wall: ◇ opens the node's *Notes* tab
+ * (ADR-0147).
  *
- * Each swap ends in an `ls:swapped` event on the container, which bubbles: a card
- * that stands outside the container and points at an element in it — a rule's note
- * opened on the wall (ADR-0135 decision 3) — finds that element again there, so that
- * no further script has to watch the grid.
+ * The poll waits as well while the drawer is open over the page (ADR-0147 decision
+ * 4) — one more test in the same predicate, the dimming as it is. The drawer says when
+ * it opens and closes (`ls:drawer`, `drawer.js`): the page waits at once and goes on
+ * at once, and where a write from the drawer went through it is brought up to date
+ * there and then, by this script, which says so by cancelling the event — a page
+ * with no poll, a leaf's, is loaded again instead.
+ *
+ * **The pause is said where its cause is, and the stamp keeps its width** (ADR-0147
+ * decision 4). The stamp says when the page was last read, as it does at rest: words
+ * added to it wrapped the band at a laptop's width and moved the page, the editor just
+ * opened with it. What holds the page says so in its own head instead, *updates
+ * paused* — the drawer under the node's name, an editor at the top of its form — a
+ * line each draws, `.ls-paused`, which the stylesheet shows while its holder stands
+ * open on a page this script refreshes and hides everywhere else: this script marks
+ * the page and what it swaps as it starts (`data-ls-polled`, `data-ls-poll-target`),
+ * and nothing more. So the line comes in the frame its holder opens in — an editor's
+ * `toggle` comes a frame later, and a line shown from it pushed the form down once it
+ * had opened — and a page with no poll, which nothing pauses, never shows one.
+ *
+ * Each swap ends in an `ls:swapped` event on the container, which bubbles: what puts
+ * the keyboard's focus back on an element in it — the door the drawer was opened
+ * from, once the drawer closes (`drawer.js`) — finds that element again there, so
+ * that no further script has to watch the grid.
  *
  * What a viewer opened stands through the swap (ADR-0127 decision 10): where the
  * page carries the tab's map, `tree.js`, the swap is bracketed by its `before`,
@@ -80,7 +99,14 @@
     var INTERVAL_MS = 10000;
     // How long the page may wait for an open editor before it dims.
     var WAIT_DIMS_AFTER_MS = 60000;
-    var EDITOR = 'details.maintenance-editor-disclosure[open] form.maintenance-editor-form, details.reason-pin[open] form.maintenance-editor-form, details.reason-ack[open] form.maintenance-editor-form';
+    var EDITOR = 'details.maintenance-editor-disclosure[open] form.maintenance-editor-form';
+    // The drawer, open over the page (ADR-0147 decision 4), outside the container.
+    var DRAWER = 'dialog.ls-drawer[open]';
+    // This page is refreshed, and this is what is swapped: the stylesheet shows the
+    // line that says the pause, *updates paused*, in the head of the drawer open over
+    // the page and of an editor open in the container, here and nowhere else.
+    document.documentElement.setAttribute('data-ls-polled', '');
+    container.setAttribute('data-ls-poll-target', '');
     var lastOk = stamp.getAttribute('data-rendered-at') || null;
     // Wall clock of the last good response (seeded by the page's own render):
     // ages computed from it stay sane under background-tab timer throttling,
@@ -92,7 +118,7 @@
     var banner = null;
     // And a curve's frame, which a phone scrolls the drawing in.
     var SCROLLERS = '.table-responsive, .ls-curve__frame';
-    // Since when the poll has been waiting for an open editor, or null.
+    // Since when the poll has been waiting for an open editor or the drawer, or null.
     var waitingSince = null;
     var dimTimer = null;
 
@@ -147,8 +173,8 @@
             container.querySelectorAll(SCROLLERS),
             function (box, i) { box.scrollLeft = left[i] || 0; });
     }
-    function sayUpdated(why) {
-        stamp.textContent = 'updated' + (lastOk ? ' ' + lastOk : '') + (why || '');
+    function sayUpdated() {
+        stamp.textContent = 'updated' + (lastOk ? ' ' + lastOk : '');
         // Swap, don't stack: .text-muted sits after .text-danger in
         // Bootstrap's stylesheet and both are !important, so an element
         // carrying both renders muted — the red only shows once muted
@@ -183,23 +209,26 @@
         window.location.reload();
         return true;
     }
+    // Whether anything holds the page: the drawer open over it, or an editor open
+    // in what the poll swaps.
     function editing() {
-        return container.querySelector(EDITOR) !== null;
+        return document.querySelector(DRAWER) !== null ||
+            container.querySelector(EDITOR) !== null;
     }
     function dim() {
         container.classList.add('poll-waiting');
     }
-    // The page stays as it was last read, and says so: the stamp keeps the time
-    // of what is shown and adds why it has stopped moving.
+    // The page stays as it was last read, and what holds it says so in its own head
+    // (the stylesheet's); the stamp keeps the time of what is shown, as it does at
+    // rest. A page already waiting has its minute run on.
     function wait() {
         if (waitingSince !== null) { return; }
         waitingSince = Date.now();
-        sayUpdated(' — paused while editing');
         dimTimer = setTimeout(dim, WAIT_DIMS_AFTER_MS);
     }
-    // The editor closed: the stamp says again what the last poll left it to say,
-    // and the ticks go on. A page that had dimmed is not left to the next of
-    // them.
+    // The last holder let go: the stamp says what the last poll left it to say — a
+    // miss that came while the page waited among it — and the ticks go on. A page
+    // that had dimmed is not left to the next of them.
     function resume() {
         if (waitingSince === null) { return; }
         waitingSince = null;
@@ -247,8 +276,8 @@
                 container.innerHTML = got.html;
                 if (tree) { tree.apply(container); }
                 restore(left);
-                // Said once the swap is whole, for what keeps a card of its own on
-                // its element through it without watching the grid (`note-card.js`).
+                // Said once the swap is whole, for what puts the focus back on an
+                // element through it without watching the grid (`drawer.js`).
                 container.dispatchEvent(new CustomEvent('ls:swapped', {bubbles: true}));
                 misses = 0;
                 expired = false;
@@ -257,8 +286,8 @@
             })
             .catch(function () {
                 misses += 1;
-                // An editor opened while this was on its way: the stamp says
-                // the page waits, and says the miss when the editor closes.
+                // An editor opened while this was on its way: the page waits, and
+                // the stamp says the miss once nothing holds it.
                 if (waitingSince !== null) { return; }
                 sayMissed();
             });
@@ -275,4 +304,14 @@
     container.addEventListener('toggle', function () {
         if (editing()) { wait(); } else { resume(); }
     }, true);
+    // So does the drawer's opening and its close (`drawer.js`); a write that went
+    // through in it brings the page up to date at once, which this page does itself.
+    document.addEventListener('ls:drawer', function (e) {
+        e.preventDefault();
+        if (editing()) { wait(); return; }
+        // a page that had dimmed is brought up to date by resume() itself
+        var dimmed = container.classList.contains('poll-waiting');
+        resume();
+        if (e.detail && e.detail.wrote && !dimmed) { refresh(); }
+    });
 })();

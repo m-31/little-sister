@@ -1049,7 +1049,7 @@ def _unbreakable_tokens() -> StatusSnapshot:
 
 
 def _anonymized_tree() -> StatusSnapshot:
-    """The deployment's tree backlog #91 measured its design on, its names replaced
+    """The deployment's tree the interactive wall was measured on, its names replaced
     (``anonymized_tree.py``): 265 nodes under two teams, the wall as it stands today
     with the deployment's ``reason_cap``. The page the wall's cost is read on, by eye
     here and in numbers in ``test_wall_cost.py`` and ``test_wall_cost_browser.py``.
@@ -1193,7 +1193,7 @@ FIXTURES: tuple[Fixture, ...] = (
             "code() line (width overflow)", _unbreakable_tokens),
     Fixture("anonymized_tree",
             "a deployment's own tree of 265 nodes under two teams, its names "
-            "replaced — the wall backlog #91 measures its cost on, reason_cap 30",
+            "replaced — where the wall's cost is measured, reason_cap 30",
             _anonymized_tree, reason_cap=anonymized_tree.REASON_CAP),
 )
 

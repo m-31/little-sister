@@ -18,6 +18,7 @@ from little_sister.grading import (
     Verdict,
     Words,
     declare,
+    held_against,
     judge,
     worst,
 )
@@ -88,6 +89,24 @@ def test_default_levels_in_which_the_warning_could_never_be_said_are_refused(
         name: str, warn: str, error: str) -> None:
     with pytest.raises(GradingError, match=r"or the warning could never be said$"):
         _pair(name, warn=warn, error=error)
+
+
+#: Each unit whose values are never below 0, a zero as it is written in it, and that
+#: zero as a refusal writes it back.
+NEVER_BELOW_ZERO = [("count", 0, "0", "a count"), ("size", 0, "0 B", "a size"),
+                    ("share", "0%", "0%", "a share")]
+
+
+@pytest.mark.parametrize(("unit", "zero", "written", "noun"), NEVER_BELOW_ZERO)
+def test_a_default_minimum_that_could_never_fire_is_refused(
+        unit: str, zero: object, written: str, noun: str) -> None:
+    with pytest.raises(GradingError, match=(
+            rf"^gradings\.min_level\.warn \({written}\) could never be said: {noun} "
+            rf"is never below {written} — declare no level, and 'min_level: null' "
+            rf"switches the judgment off$")):
+        _pair("min_level", unit=unit, warn=zero)
+    with pytest.raises(GradingError, match=r"^gradings\.min_level\.error "):
+        _pair("min_level", unit=unit, warn="5%" if unit == "share" else 5, error=zero)
 
 
 def test_a_declaration_takes_what_its_kind_takes() -> None:
@@ -176,6 +195,48 @@ def test_levels_in_which_the_warning_could_never_be_said_are_refused() -> None:
         _block(_pair()).read({"max_disk_warn": "90%", "max_disk_error": "90%"})
 
 
+@pytest.mark.parametrize(("unit", "zero", "written", "noun"), NEVER_BELOW_ZERO)
+def test_a_minimum_that_could_never_fire_is_refused_naming_the_key(
+        unit: str, zero: object, written: str, noun: str) -> None:
+    block = _block(_pair("min_level", unit=unit))
+    with pytest.raises(GradingError, match=(
+            rf"^'min_level_warn' \({written}\) could never be said: {noun} is never "
+            rf"below {written} — write 'min_level: null' to switch the judgment off$")):
+        block.read({"min_level_warn": zero})
+    with pytest.raises(GradingError, match=r"^ec2 'min_level_error' "):
+        block.read({"min_level_warn": "5%" if unit == "share" else 5,
+                    "min_level_error": zero}, "ec2")
+
+
+@pytest.mark.parametrize(("name", "unit", "zero"), [
+    ("min_level", "amount", 0), ("min_level", "number", 0),
+    ("max_level", "count", 0), ("max_level", "size", 0),
+    ("max_level", "share", "0%")])
+def test_a_zero_that_can_fire_is_a_level(name: str, unit: str, zero: object) -> None:
+    grading = _pair(name, unit=unit, warn=zero)
+    assert grading.warn == 0.0
+    graded = _block(grading).read({f"{name}_warn": zero})
+    assert graded.settings[name] == Levels(0.0, None)
+
+
+def test_a_cost_below_zero_is_below_a_minimum_of_zero() -> None:
+    """An amount may go below zero — a month whose credits exceed its charges — so a
+    minimum of 0 over one can fire, and is kept."""
+    grading = _pair("min_cost", unit="amount")
+    setting = _block(grading).read({"min_cost_warn": 0}).settings["min_cost"]
+    assert [judge(grading, setting, cost) for cost in (12.5, 0, -3.2)] == [
+        OK, OK, WARN]
+
+
+def test_a_minimum_of_one_holds_a_count_and_null_lets_it_go() -> None:
+    grading = _pair("min_level", unit="count", warn=1)
+    held = _block(grading).read({"min_level_warn": 1}).settings["min_level"]
+    assert held == Levels(1.0, None)
+    assert [judge(grading, held, count) for count in (0, 1)] == [WARN, OK]
+    assert _block(grading).read({"min_level": None}).settings["min_level"] == Levels(
+        off=True)
+
+
 @pytest.mark.parametrize(("unit", "written", "read"), [
     ("count", 0, 0.0), ("count", 8, 8.0),
     ("number", 0.8, 0.8), ("number", -5, -5.0),
@@ -187,6 +248,36 @@ def test_each_unit_reads_a_level_as_written(unit: str, written: object,
                                             read: float) -> None:
     graded = _block(_pair("max_level", unit=unit)).read({"max_level_warn": written})
     assert graded.settings["max_level"] == Levels(read, None)
+
+
+@pytest.mark.parametrize(("unit", "written", "back"), [
+    # A size in the unit that writes it shortest, the larger unit where two tie, and
+    # bytes where no unit writes it in three decimals or fewer.
+    ("size", "500 GB", "500 GB"), ("size", "1.5 GB", "1.5 GB"),
+    ("size", "2 TiB", "2 TiB"), ("size", "1000 KiB", "1000 KiB"),
+    ("size", "1.5 kB", "1.5 kB"), ("size", "10 TB", "10 TB"),
+    ("size", 1126, "1126 B"), ("size", "2.25 MiB", "2.25 MiB"),
+    # A count and a number whole where they are, and never in an exponent.
+    ("count", 1000000, "1000000"), ("count", 3, "3"),
+    ("number", 1234567.5, "1234567.5"), ("number", 0.75, "0.75"),
+    ("number", -4, "-4"), ("number", 2.0, "2"), ("number", 1e-7, "0.0000001"),
+    ("share", "99.5%", "99.5%"), ("share", "80%", "80%"),
+    ("share", "12.125%", "12.125%"), ("share", "12.3456789%", "12.3456789%")])
+def test_a_level_is_written_back_as_somebody_would_have_typed_it(
+        unit: str, written: object, back: str) -> None:
+    grading = _pair("max_level", unit=unit)
+    graded = _block(grading).read({"max_level_warn": written})
+    assert graded.summary("max_level", grading) == f"warn above {back}"
+
+
+def test_a_refusal_and_a_verdict_write_a_size_back_as_it_was_written() -> None:
+    grading = _pair("max_size", unit="size")
+    with pytest.raises(GradingError, match=(
+            r"^'max_size_error' \(500 GB\) must be above 'max_size_warn' "
+            r"\(1 TB\), or the warning could never be said$")):
+        _block(grading).read({"max_size_warn": "1 TB", "max_size_error": "500 GB"})
+    graded = _block(grading).read({"max_size_warn": "500 GB"})
+    assert held_against(grading, graded.settings["max_size"], WARN) == "500 GB"
 
 
 @pytest.mark.parametrize(("unit", "written", "says"), [
@@ -278,6 +369,17 @@ def test_a_rule_writes_only_what_it_names_and_only_what_a_rule_may_write() -> No
     with pytest.raises(GradingError, match=r"a rule does not write "
                                            r"'max_per_name_warn'"):
         block.read_rule({"max_per_name_warn": 2}, "ec2 rules[1] ('load tests')")
+
+
+def test_a_rules_minimum_that_could_never_fire_is_refused_naming_the_rule() -> None:
+    block = _block(_pair("ec2.min_running", unit="count", rules=True), name="ec2")
+    with pytest.raises(GradingError, match=(
+            r"^ec2 rules\[1\] \('load tests'\) 'min_running_warn' \(0\) could never "
+            r"be said: a count is never below 0 — write 'min_running: null' to switch "
+            r"the judgment off$")):
+        block.read_rule({"min_running_warn": 0}, "ec2 rules[1] ('load tests')")
+    assert block.read_rule({"min_running": None}, "ec2 rules[1] ('load tests')"
+                           ).settings == {"ec2.min_running": Levels(off=True)}
 
 
 # --- what a grading says of a value -------------------------------------------------

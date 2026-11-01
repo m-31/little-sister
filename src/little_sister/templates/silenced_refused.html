@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html>
+<head>
+    {% from '_maintenance_fields.html' import silence_fields with context %}
+    {% from '_rule_block.html' import ack_new, ack_parts with context %}
+    {% set page_title = 'Not silenced' %}
+    {% include '_header.html' %}
+
+    {#- A refused write of a silence (ADR-0144), as a *seen*'s refusal is (ADR-0142):
+        **nothing was written**, and the person's own words are still theirs — the
+        note, the level, the deadline and what changed.
+
+        Three refusals land here. **A problem**: a deadline not to be read, or out of
+        bounds; a level not chosen; an extension that says nothing of what changed; a
+        part held in maintenance, or by another acknowledgment — said as the tree said
+        it — with the words back in a form, where silencing is still the point. A
+        head's set refused so carries the digest its editor sent in that form, and
+        lists its parts where they still fail as listed, so that what is sent again
+        silences what was shown. **A head's parts that changed** since its editor
+        listed them: what fails at and beneath the node now, listed, with the ringed
+        check's forms for those, its digest refreshed, so that nothing is silenced
+        that was not shown. And **a compare-and-set** that found somebody else's
+        write first: the stored one, named and dated, beside the person's words, the
+        re-submit carrying the refreshed token.
+
+        In the panel the drawer frames (ADR-0147 decision 3) its forms and its ways
+        back stay in the frame, each form sending `panel` with it, and the way back
+        leads to the tab the write was sent from. -#}
+    <div class="container-fluid mt-3 px-4" style="max-width: 820px">
+        <h1 class="h4 mb-3">Silence — {{ node_path }}{% if slug %} <span class="text-muted">· one line</span>{% endif %}</h1>
+
+        {% if parts %}
+            <div class="alert alert-warning">
+                <p class="mb-0">Nothing was saved. {{ problem }}</p>
+            </div>
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h2 class="h6 text-muted text-uppercase">What fails here now</h2>
+                    {{ ack_new('node', path, '', 'refused', what=('the %d failures here, each its own' % (parts | length)) if (parts | length) > 1 else 'the one failure here', digest=digest, parts=parts, next=back) }}
+                </div>
+            </div>
+            <a class="btn btn-link" href="{{ back }}"{{ in_frame() }}>Silence nothing</a>
+        {% elif problem %}
+            <div class="alert alert-warning">
+                <p class="mb-0">Nothing was saved. {{ problem }}</p>
+            </div>
+            <div class="card mb-3">
+                <div class="card-body">
+                    {%- if listed %}
+                    <h2 class="h6 text-muted text-uppercase">What it silences, each its own</h2>
+                    {{ ack_parts(listed) }}
+                    {%- endif %}
+                    <h2 class="h6 text-muted text-uppercase">Your note</h2>
+                    <form method="post" action="{{ url_for('silenced') }}"{{ in_frame() }}>
+                        {{- panel_field() }}
+                        <input type="hidden" name="path" value="{{ path }}">
+                        {%- if slug %}<input type="hidden" name="slug" value="{{ slug }}">{% endif %}
+                        {%- if carried %}<input type="hidden" name="parts" value="{{ carried }}">{% endif %}
+                        <input type="hidden" name="action" value="set">
+                        <input type="hidden" name="set_at" value="{{ token }}">
+                        <input type="hidden" name="next" value="{{ back }}">
+                        {{ silence_fields(mine, deadline, level, 'refused', silence_default,
+                                          maintenance_timezone, false, deadline_was,
+                                          changing=deadline_was != '', changed=changed) }}
+                        <button class="btn btn-primary" type="submit">Silence</button>
+                    </form>
+                </div>
+            </div>
+            <a class="btn btn-link" href="{{ back }}"{{ in_frame() }}>Change nothing</a>
+        {% elif stored %}
+            {#- the stored one by its noun: *this silence*, *this seen* -#}
+            {%- set noun = 'silence' if stored.kind == 'silenced' else stored.kind %}
+            <div class="alert alert-warning">
+                <p class="mb-1">Nothing was saved. <strong>{{ stored.set_by or 'Someone else' }}</strong>
+                    changed this {{ noun }} {{ stored.set_at | localtime }}, after the form
+                    you submitted was drawn.</p>
+                <p class="mb-0 small">{% if stored.kind == 'silenced' %}Silenced{% else %}Marked {{ stored.kind }}{% endif %} by
+                    <strong>{{ stored.created_by or 'unknown' }}</strong> {{ stored.created_at | localtime }}{% if stored.expires_at %};
+                    it ends {{ stored.expires_at | localtime }} at the latest{% endif %}.</p>
+            </div>
+
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h2 class="h6 text-muted text-uppercase">The stored note</h2>
+                    {% if stored.note %}
+                        <div class="maintenance-explanation md-body">{{ stored.note | markdown(node=node_path) }}</div>
+                    {% else %}
+                        <p class="mb-0 text-muted">No note was written.</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if clearing %}
+                <p>You asked to clear a {{ noun }} that is no longer the one above.
+                    Clear it anyway, or leave it as it stands.</p>
+                <form method="post" action="{{ url_for(stored.kind) }}" class="d-inline"{{ in_frame() }}>
+                    {{- panel_field() }}
+                    <input type="hidden" name="path" value="{{ path }}">
+                    {%- if slug %}<input type="hidden" name="slug" value="{{ slug }}">{% endif %}
+                    <input type="hidden" name="action" value="clear">
+                    <input type="hidden" name="set_at" value="{{ stored.token }}">
+                    <input type="hidden" name="next" value="{{ back }}">
+                    <button class="btn btn-outline-secondary" type="submit">Clear it</button>
+                </form>
+                <a class="btn btn-link" href="{{ back }}"{{ in_frame() }}>Leave it</a>
+            {% else %}
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <h2 class="h6 text-muted text-uppercase">Your note</h2>
+                        <form method="post" action="{{ url_for('silenced') }}"{{ in_frame() }}>
+                            {{- panel_field() }}
+                            <input type="hidden" name="path" value="{{ path }}">
+                            {%- if slug %}<input type="hidden" name="slug" value="{{ slug }}">{% endif %}
+                            <input type="hidden" name="action" value="set">
+                            <input type="hidden" name="set_at" value="{{ stored.token }}">
+                            <input type="hidden" name="next" value="{{ back }}">
+                            {{ silence_fields(mine, deadline, level, 'refused', silence_default,
+                                              maintenance_timezone, false, deadline_was,
+                                              changing=stored.kind == 'silenced',
+                                              changed=changed) }}
+                            <button class="btn btn-primary" type="submit">Save mine, replacing the stored {{ noun }}</button>
+                        </form>
+                    </div>
+                </div>
+                <a class="btn btn-link" href="{{ back }}"{{ in_frame() }}>Change nothing</a>
+            {% endif %}
+        {% else %}
+            <div class="alert alert-warning">
+                <p class="mb-0">Nothing was saved. What you were working on is gone —
+                    someone cleared it, or it reached its deadline.</p>
+            </div>
+            <a class="btn btn-primary" href="{{ back }}"{{ in_frame() }}>Back</a>
+        {% endif %}
+    </div>
+
+{% include '_page_end.html' %}
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/rail.js') }}"></script>
+</body>
+</html>

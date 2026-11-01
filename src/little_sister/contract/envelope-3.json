@@ -38,10 +38,12 @@
                     "subject": "",
                     "text": "the tunnel is down"
                   }
-                ]
+                ],
+                "not_reported": []
               },
               "handled": [],
               "name": "vpn",
+              "nodes_not_reported": [],
               "order": 0,
               "own": "ERROR",
               "own_period": {
@@ -49,6 +51,7 @@
                 "since": "<volatile>"
               },
               "path": "/network/vpn",
+              "planned": [],
               "record": null,
               "report": "",
               "reported": "ERROR",
@@ -70,10 +73,12 @@
           "description": "",
           "entries": {
             "addressable": false,
-            "items": []
+            "items": [],
+            "not_reported": []
           },
           "handled": [],
           "name": "network",
+          "nodes_not_reported": [],
           "order": 0,
           "own": "UNDEFINED",
           "path": "/network",
@@ -81,6 +86,7 @@
             "before": true,
             "since": "<volatile>"
           },
+          "planned": [],
           "record": null,
           "report": "",
           "reported": "UNDEFINED",
@@ -126,11 +132,13 @@
               ],
               "entries": {
                 "addressable": false,
-                "items": []
+                "items": [],
+                "not_reported": []
               },
               "handbook": "http://localhost/handbook/services/api",
               "handled": [],
               "name": "api",
+              "nodes_not_reported": [],
               "order": 0,
               "own": "OK",
               "own_period": {
@@ -138,6 +146,7 @@
                 "since": "<volatile>"
               },
               "path": "/services/api",
+              "planned": [],
               "record": null,
               "report": "",
               "reported": "OK",
@@ -172,13 +181,16 @@
               "description": "",
               "entries": {
                 "addressable": false,
-                "items": []
+                "items": [],
+                "not_reported": []
               },
               "handled": [],
               "name": "backup",
+              "nodes_not_reported": [],
               "order": 0,
               "own": "UNDEFINED",
               "path": "/services/backup",
+              "planned": [],
               "record": null,
               "report": "",
               "reported": "UNDEFINED",
@@ -224,10 +236,12 @@
                     "subject": "",
                     "text": "connect: no route to host"
                   }
-                ]
+                ],
+                "not_reported": []
               },
               "handled": [],
               "name": "cache",
+              "nodes_not_reported": [],
               "order": 0,
               "own": "ERROR",
               "own_period": {
@@ -235,6 +249,7 @@
                 "since": "<volatile>"
               },
               "path": "/services/cache",
+              "planned": [],
               "record": null,
               "report": "",
               "reported": "ERROR",
@@ -280,7 +295,8 @@
                     "subject": "",
                     "text": "connection refused"
                   }
-                ]
+                ],
+                "not_reported": []
               },
               "handled": [
                 {
@@ -291,12 +307,16 @@
                   "id": "5c1d0a7e3f4b2c18",
                   "kind": "maintenance",
                   "note": "waiting on the vendor",
+                  "sentence": "Once, from 2026-11-07 23:30:00 until 2027-01-01 01:00:00",
                   "set_at": "<volatile>",
                   "set_by": "lex",
-                  "source": "person"
+                  "source": "person",
+                  "starts_at": "2026-11-07T22:30:00Z",
+                  "until": "2027-01-01T00:00:00Z"
                 }
               ],
               "name": "db",
+              "nodes_not_reported": [],
               "order": 0,
               "own": "MAINTENANCE",
               "own_period": {
@@ -305,9 +325,72 @@
                 "was": "ERROR"
               },
               "path": "/services/db",
+              "planned": [],
               "record": null,
               "report": "",
               "reported": "ERROR",
+              "run": {
+                "next_at": null,
+                "observed_at": "<volatile>",
+                "wall_seconds": null
+              },
+              "shielded_by": null,
+              "show_when_quiet": null,
+              "stale": false,
+              "subject": "",
+              "tags": [
+                "production"
+              ],
+              "title": ""
+            },
+            {
+              "about": "",
+              "changes": 0,
+              "children": [],
+              "code": "MAINTENANCE",
+              "config": "",
+              "contribution": {
+                "by": "maintenance",
+                "code": null,
+                "rule": "6b8d0f2a4c6e8a0c"
+              },
+              "description": "",
+              "entries": {
+                "addressable": false,
+                "items": [],
+                "not_reported": []
+              },
+              "handled": [
+                {
+                  "counts_as": "nothing",
+                  "created_at": "<volatile>",
+                  "created_by": "lex",
+                  "expires_at": "2026-11-08T05:00:00Z",
+                  "id": "6b8d0f2a4c6e8a0c",
+                  "kind": "maintenance",
+                  "note": "the relay is patched every Saturday",
+                  "sentence": "Every Saturday from 22:00 for 8 hours, until 2027-10-31 05:00:00",
+                  "set_at": "<volatile>",
+                  "set_by": "lex",
+                  "source": "person",
+                  "starts_at": "2026-11-07T21:00:00Z",
+                  "until": "2027-10-31T04:00:00Z"
+                }
+              ],
+              "name": "mail",
+              "nodes_not_reported": [],
+              "order": 0,
+              "own": "MAINTENANCE",
+              "own_period": {
+                "cause": "pin-set",
+                "since": "<volatile>",
+                "was": "OK"
+              },
+              "path": "/services/mail",
+              "planned": [],
+              "record": null,
+              "report": "",
+              "reported": "OK",
               "run": {
                 "next_at": null,
                 "observed_at": "<volatile>",
@@ -350,10 +433,12 @@
                     "subject": "",
                     "text": "the consumer is behind"
                   }
-                ]
+                ],
+                "not_reported": []
               },
               "handled": [],
               "name": "queue",
+              "nodes_not_reported": [],
               "order": 0,
               "own": "ERROR",
               "own_period": {
@@ -362,6 +447,7 @@
                 "was": "OK"
               },
               "path": "/services/queue",
+              "planned": [],
               "record": null,
               "report": "",
               "reported": "ERROR",
@@ -389,10 +475,12 @@
               "description": "",
               "entries": {
                 "addressable": false,
-                "items": []
+                "items": [],
+                "not_reported": []
               },
               "handled": [],
               "name": "web",
+              "nodes_not_reported": [],
               "order": 0,
               "own": "OK",
               "own_period": {
@@ -400,6 +488,7 @@
                 "since": "<volatile>"
               },
               "path": "/services/web",
+              "planned": [],
               "record": {
                 "response_ms": 412,
                 "status": 200
@@ -439,10 +528,12 @@
           ],
           "entries": {
             "addressable": false,
-            "items": []
+            "items": [],
+            "not_reported": []
           },
           "handled": [],
           "name": "services",
+          "nodes_not_reported": [],
           "order": 0,
           "own": "UNDEFINED",
           "path": "/services",
@@ -452,6 +543,7 @@
             "since": "<volatile>",
             "was": "ERROR"
           },
+          "planned": [],
           "record": null,
           "report": "",
           "reported": "UNDEFINED",
@@ -492,10 +584,12 @@
                     "subject": "",
                     "text": "slow responses"
                   }
-                ]
+                ],
+                "not_reported": []
               },
               "handled": [],
               "name": "api",
+              "nodes_not_reported": [],
               "order": 0,
               "own": "WARN",
               "own_period": {
@@ -503,6 +597,7 @@
                 "since": "<volatile>"
               },
               "path": "/staging/api",
+              "planned": [],
               "record": null,
               "report": "",
               "reported": "WARN",
@@ -545,7 +640,8 @@
                     "subject": "",
                     "text": "disk 97 % full"
                   }
-                ]
+                ],
+                "not_reported": []
               },
               "handled": [
                 {
@@ -567,6 +663,7 @@
                 }
               ],
               "name": "disk",
+              "nodes_not_reported": [],
               "order": 0,
               "own": "ERROR",
               "own_period": {
@@ -574,6 +671,7 @@
                 "since": "<volatile>"
               },
               "path": "/staging/disk",
+              "planned": [],
               "record": null,
               "report": "",
               "reported": "ERROR",
@@ -592,7 +690,7 @@
               "about": "",
               "changes": 0,
               "children": [],
-              "code": "OK",
+              "code": "WARN",
               "config": "",
               "contribution": null,
               "description": "",
@@ -646,19 +744,89 @@
                     "slug": "job-8",
                     "subject": "",
                     "text": "job 8 passed"
+                  },
+                  {
+                    "code": "ERROR",
+                    "contribution": {
+                      "by": "silenced",
+                      "code": "WARN",
+                      "rule": "e5f7a9b1c3d5e7f9"
+                    },
+                    "data": null,
+                    "form": null,
+                    "grading": null,
+                    "handled": [
+                      {
+                        "counts_as": {
+                          "ERROR": "WARN"
+                        },
+                        "created_at": "<volatile>",
+                        "created_by": "ada",
+                        "expires_at": "2027-01-01T00:00:00Z",
+                        "id": "e5f7a9b1c3d5e7f9",
+                        "kind": "silenced",
+                        "note": "It flaps since the runner moved.",
+                        "set_at": "<volatile>",
+                        "set_by": "ada",
+                        "source": "person"
+                      }
+                    ],
+                    "refused": null,
+                    "running": false,
+                    "slug": "job-9",
+                    "subject": "",
+                    "text": "job 9 failed"
+                  },
+                  {
+                    "code": "ERROR",
+                    "contribution": {
+                      "by": "done",
+                      "code": "OK",
+                      "rule": "f6a8b0c2d4e6f8a1"
+                    },
+                    "data": null,
+                    "form": null,
+                    "grading": null,
+                    "handled": [
+                      {
+                        "counts_as": {
+                          "ERROR": "OK",
+                          "WARN": "OK"
+                        },
+                        "created_at": "<volatile>",
+                        "created_by": "ada",
+                        "expires_at": null,
+                        "id": "f6a8b0c2d4e6f8a1",
+                        "kind": "done",
+                        "note": "The runner ran out of disk; it is cleaned up.",
+                        "occurrence": "10/1",
+                        "set_at": "<volatile>",
+                        "set_by": "ada",
+                        "source": "person",
+                        "status": "ERROR"
+                      }
+                    ],
+                    "refused": null,
+                    "running": false,
+                    "slug": "job-10",
+                    "subject": "",
+                    "text": "job 10 failed"
                   }
-                ]
+                ],
+                "not_reported": []
               },
               "handled": [],
               "name": "jobs",
+              "nodes_not_reported": [],
               "order": 0,
-              "own": "OK",
+              "own": "WARN",
               "own_period": {
-                "cause": "line-seen-set",
+                "cause": "line-silenced-set",
                 "since": "<volatile>",
                 "was": "ERROR"
               },
               "path": "/staging/jobs",
+              "planned": [],
               "record": null,
               "report": "",
               "reported": "ERROR",
@@ -730,7 +898,8 @@
                     "subject": "",
                     "text": "runner 2 is idle"
                   }
-                ]
+                ],
+                "not_reported": []
               },
               "handled": [
                 {
@@ -750,6 +919,7 @@
                 }
               ],
               "name": "runners",
+              "nodes_not_reported": [],
               "order": 0,
               "own": "OK",
               "own_period": {
@@ -757,6 +927,24 @@
                 "since": "<volatile>"
               },
               "path": "/staging/runners",
+              "planned": [
+                {
+                  "created_at": "<volatile>",
+                  "created_by": "ada",
+                  "expires_at": "2026-11-08T04:00:00Z",
+                  "id": "4f6a8c0e2b4d6f8b",
+                  "kind": "maintenance",
+                  "note": "runner 2 is reimaged on Sunday nights",
+                  "sentence": "Every Sunday from 03:00 for 2 hours, until 2027-04-25 05:00:00",
+                  "set_at": "<volatile>",
+                  "set_by": "ada",
+                  "slug": "runner-2",
+                  "source": "person",
+                  "starts_at": "2026-11-08T02:00:00Z",
+                  "until": "2027-04-25T03:00:00Z",
+                  "why": null
+                }
+              ],
               "record": null,
               "report": "",
               "reported": "WARN",
@@ -782,7 +970,8 @@
           "description": "",
           "entries": {
             "addressable": false,
-            "items": []
+            "items": [],
+            "not_reported": []
           },
           "handled": [
             {
@@ -799,15 +988,17 @@
             }
           ],
           "name": "staging",
+          "nodes_not_reported": [],
           "order": 0,
           "own": "UNDEFINED",
           "path": "/staging",
           "period": {
             "by": "/staging/jobs",
-            "cause": "line-seen-set",
+            "cause": "line-silenced-set",
             "since": "<volatile>",
             "was": "ERROR"
           },
+          "planned": [],
           "record": null,
           "report": "",
           "reported": "UNDEFINED",
@@ -835,10 +1026,12 @@
                   "description": "",
                   "entries": {
                     "addressable": false,
-                    "items": []
+                    "items": [],
+                    "not_reported": []
                   },
                   "handled": [],
                   "name": "acme-api",
+                  "nodes_not_reported": [],
                   "order": 0,
                   "own": "OK",
                   "own_period": {
@@ -846,6 +1039,7 @@
                     "since": "<volatile>"
                   },
                   "path": "/platform/actions/acme-api",
+                  "planned": [],
                   "record": null,
                   "report": "",
                   "reported": "OK",
@@ -913,9 +1107,12 @@
                         "id": "9e2f4a6b8c0d1e3f",
                         "kind": "maintenance",
                         "note": "off until the migration lands",
+                        "sentence": "Once, from 2026-11-07 23:30:00 until 2026-12-19 13:30:00",
                         "set_at": "<volatile>",
                         "set_by": "ada",
-                        "source": "person"
+                        "source": "person",
+                        "starts_at": "2026-11-07T22:30:00Z",
+                        "until": "2026-12-19T12:30:00Z"
                       }
                     ],
                     "refused": null,
@@ -937,10 +1134,100 @@
                     "subject": "1001",
                     "text": "acme/api (main) / Deploy: passed (#12)"
                   }
+                ],
+                "not_reported": [
+                  {
+                    "handled": [
+                      {
+                        "counts_as": "nothing",
+                        "created_at": "<volatile>",
+                        "created_by": "ada",
+                        "expires_at": "2026-12-19T12:30:00Z",
+                        "id": "7d9f1b3c5e7a9c2e",
+                        "kind": "maintenance",
+                        "note": "the old deploy, switched off for the migration",
+                        "sentence": "Once, from 2026-11-07 23:30:00 until 2026-12-19 13:30:00",
+                        "set_at": "<volatile>",
+                        "set_by": "ada",
+                        "source": "person",
+                        "starts_at": "2026-11-07T22:30:00Z",
+                        "until": "2026-12-19T12:30:00Z"
+                      }
+                    ],
+                    "planned": [],
+                    "slug": "1001-workflow-5"
+                  },
+                  {
+                    "handled": [],
+                    "planned": [
+                      {
+                        "created_at": "<volatile>",
+                        "created_by": "ada",
+                        "expires_at": null,
+                        "id": "a0c2e4a6c8e0b2d4",
+                        "kind": "maintenance",
+                        "note": "the nightly deploy, paused over the holidays",
+                        "sentence": "Every day from 01:00 for 1 hour, until 2026-12-31 02:00:00, not on DE-BY",
+                        "set_at": "<volatile>",
+                        "set_by": "ada",
+                        "source": "person",
+                        "starts_at": null,
+                        "until": "2026-12-31T01:00:00Z",
+                        "why": "applies not at all: no configuration root has a holidays.yaml"
+                      }
+                    ],
+                    "slug": "1001-workflow-6"
+                  }
                 ]
               },
               "handled": [],
               "name": "actions",
+              "nodes_not_reported": [
+                {
+                  "handled": [
+                    {
+                      "counts_as": "nothing",
+                      "created_at": "<volatile>",
+                      "created_by": "ada",
+                      "expires_at": "2026-12-19T12:30:00Z",
+                      "id": "2b4d6f8a0c2e4a6c",
+                      "kind": "maintenance",
+                      "note": "decommissioned; its jobs moved to the new pool",
+                      "sentence": "Once, from 2026-11-07 23:30:00 until 2026-12-19 13:30:00",
+                      "set_at": "<volatile>",
+                      "set_by": "ada",
+                      "source": "person",
+                      "starts_at": "2026-11-07T22:30:00Z",
+                      "until": "2026-12-19T12:30:00Z"
+                    }
+                  ],
+                  "not_reported": [
+                    {
+                      "handled": [
+                        {
+                          "counts_as": "nothing",
+                          "created_at": "<volatile>",
+                          "created_by": "ada",
+                          "expires_at": "2026-12-19T12:30:00Z",
+                          "id": "8f0b2d4f6a8c0e2a",
+                          "kind": "maintenance",
+                          "note": "the disk alarm waits for the wipe",
+                          "sentence": "Once, from 2026-11-07 23:30:00 until 2026-12-19 13:30:00",
+                          "set_at": "<volatile>",
+                          "set_by": "ada",
+                          "source": "person",
+                          "starts_at": "2026-11-07T22:30:00Z",
+                          "until": "2026-12-19T12:30:00Z"
+                        }
+                      ],
+                      "planned": [],
+                      "slug": "disk"
+                    }
+                  ],
+                  "path": "/platform/actions/retired-runner",
+                  "planned": []
+                }
+              ],
               "order": 0,
               "own": "ERROR",
               "own_period": {
@@ -952,6 +1239,7 @@
                 "before": true,
                 "since": "<volatile>"
               },
+              "planned": [],
               "record": null,
               "report": "",
               "reported": "ERROR",
@@ -987,10 +1275,12 @@
                 "subject": "",
                 "text": "one repository is short"
               }
-            ]
+            ],
+            "not_reported": []
           },
           "handled": [],
           "name": "platform",
+          "nodes_not_reported": [],
           "order": 3,
           "own": "WARN",
           "own_period": {
@@ -1004,6 +1294,23 @@
             "since": "<volatile>",
             "was": "WARN"
           },
+          "planned": [
+            {
+              "created_at": "<volatile>",
+              "created_by": "ada",
+              "expires_at": "2026-11-15T03:00:00Z",
+              "id": "1e3a5c7e9b1d3f5a",
+              "kind": "maintenance",
+              "note": "the certificates are rotated",
+              "sentence": "Once, from 2026-11-14 22:00:00 until 2026-11-15 04:00:00",
+              "set_at": "<volatile>",
+              "set_by": "ada",
+              "source": "person",
+              "starts_at": "2026-11-14T21:00:00Z",
+              "until": "2026-11-15T03:00:00Z",
+              "why": null
+            }
+          ],
           "record": null,
           "report": "- [api](https://example.test/api)",
           "reported": "WARN",
@@ -1025,10 +1332,12 @@
       "description": "",
       "entries": {
         "addressable": false,
-        "items": []
+        "items": [],
+        "not_reported": []
       },
       "handled": [],
       "name": "overall",
+      "nodes_not_reported": [],
       "order": 0,
       "own": "UNDEFINED",
       "path": "/",
@@ -1038,6 +1347,7 @@
         "since": "<volatile>",
         "was": "OK"
       },
+      "planned": [],
       "record": null,
       "report": "",
       "reported": "UNDEFINED",

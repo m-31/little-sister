@@ -1006,7 +1006,7 @@ class MissingDoorTests(_DeploymentCase):
         self.assertIn("local_login.use_local()", message)
         self.assertIn("identity.use(", message)
         # And on the node, at ERROR: an instance nobody can sign in to has lost
-        # its readers (backlog #70).
+        # its readers.
         (line,) = self_report.startup.lines()
         self.assertEqual(line.slug, "doors")
         self.assertIs(line.code, StatusCode.ERROR)

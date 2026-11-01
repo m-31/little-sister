@@ -1,7 +1,7 @@
 {#- The node's own facts — time, what the run read, what it found, what it ran
-    with — as the **one** block both pages render (ADR-0044 decision 8, questions
-    §4.8 answered: the container gets the detail page it never had, built by reuse
-    rather than as a second surface).
+    with — as the **one** block both pages render (ADR-0044 decision 8:
+    the container gets the detail page it never had, built by reuse rather than as a
+    second surface).
 
     The leaf detail page owned all of this and the container owned none of it:
     `/status/<branch>` is a dashboard *of the children*, so a container's `config`
@@ -44,6 +44,7 @@
 {%- from '_series.html' import curve %}
 {%- from '_status_cue.html' import status_cue %}
 {%- from '_rule_block.html' import rule_mark, handled_mark with context %}
+{%- from '_why.html' import why_list, handled_beneath with context %}
 {%- set facts_shown = facts_shown if facts_shown is defined else true %}
 {%- set with_about = about_card(node) %}
 {%- set columns = with_about and facts_shown %}
@@ -170,8 +171,8 @@
             ancestors above it. This is where **wall time** surfaces: stored since
             the run-object slice, rendered nowhere until this header.
 
-            The next update stays **absolute** here, as on the grid. §10.5 of the
-            working note reserved the relative "in 4m" for this header, on the
+            The next update stays **absolute** here, as on the grid (ADR-0044). A
+            relative "in 4m" was once reserved for this header, on the
             grounds that the reader is looking deliberately and the stale banner is
             directly above — but that argument needs a *live* page, and this partial
             is on one page that polls and one that does not. A relative form on the
@@ -257,44 +258,15 @@
 {%- if part.observed %}, stale, last observed {{ part.observed | localtime }}
 {%- elif part.since %} since {% if part.since.before %}before {% endif %}{{ part.since.at | localtime }}{% endif %}</li>
 {%- endmacro %}
-{%- macro why_rule(row) -%}
-<li>{% if row.slug %}<a href="{{ url_for('status', branch=row.path | url_branch, reason=row.slug) }}#pinned-reason">a line</a> of <a href="{{ url_for('status', branch=row.path | url_branch) }}">{{ row.name }}</a> — {{ row.line | markdown_inline(node=row.path) }}{% else %}<a href="{{ url_for('status', branch=row.path | url_branch) }}">{{ row.name }}</a>{% endif %}
-{%- if row.reads %}, reads {{ row.reads.name.lower() }}{% endif %}
-{%- if row.rule %}, counts {{ row.rule.counts.name.lower() if row.rule.counts else 'nothing' }} · by the rule <strong>{{ row.rule.rule.name }}</strong> since {{ row.rule.rule.since.isoformat() }}
-{%- else %} · by <strong>{{ row.entry.set_by or 'an admin' }}</strong> until {{ row.entry.expires_at | localtime }} · {{ row.entry.expires_at | time_left }}{% endif %}</li>
-{%- endmacro %}
-{#- A list of the card's, its first `why.open` rows open and the rest folded beneath
-    *N more*, the browser's own disclosure, as History folds its earlier periods. -#}
-{%- macro why_list(rows, row_macro) -%}
-<ul class="why-list">
-{%- for row in rows[:why.open] %}
-    {{ row_macro(row) }}
-{%- endfor %}
-</ul>
-{%- if rows | length > why.open %}
-<details class="why-more">
-    <summary class="small text-muted">{{ rows | length - why.open }} more</summary>
-    <ul class="why-list">
-    {%- for row in rows[why.open:] %}
-        {{ row_macro(row) }}
-    {%- endfor %}
-    </ul>
-</details>
-{%- endif %}
-{%- endmacro %}
 <div class="card mb-3 why-card" id="why">
     <div class="card-body">
         <h3 class="h6 text-muted text-uppercase">{{ why.title }}</h3>
         {%- if why.counting %}
         <p class="mb-1">What counts{% if why.counting | length > 1 %}, {{ why.counting | length }} parts{% endif %}:</p>
-        {{ why_list(why.counting, why_part) }}
+        {{ why_list(why.counting, why_part, why.open) }}
         {%- endif %}
         {%- if why.handled %}
-        <p class="mb-1 why-card__handled">{{ handled_mark() }}{{ why.handled | length }} handled beneath it</p>
-        {%- for job, rows in why.by_job %}
-        <p class="mb-1 why-card__job">{{ rule_mark(job) }}{{ 'In maintenance' if job == 'maintenance' else 'By a rule' }}</p>
-        {{ why_list(rows, why_rule) }}
-        {%- endfor %}
+        {{ handled_beneath(why) }}
         {%- endif %}
     </div>
 </div>

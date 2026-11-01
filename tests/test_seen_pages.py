@@ -1,10 +1,10 @@
-"""The page's half of *seen* (ADR-0142): the ringed check on what fails now, its
-editors, the block of what a person accepted, `POST /pins/seen` and its refusals, the
-rows' chips, *Handled*'s *Accepted*, the Copy document and the envelope's items.
+"""The page's half of *seen* (ADR-0142): where what fails now is marked — the node's
+*Notes* tab, which its door opens, since the ringed check on a head went with the door
+(ADR-0147) — the block of what a person accepted, `POST /pins/seen` and its refusals,
+the rows' chips, *Handled*'s *Accepted*, the Copy document and the envelope's items.
 
-The tree's half is `tests/test_seen.py`'s. What a browser does with the ringed check —
-the clone of the page's one editor, the head's own — is
-`tests/test_seen_browser.py`'s.
+The tree's half is `tests/test_seen.py`'s. What a browser does with the block's editor
+is `tests/test_seen_browser.py`'s.
 """
 from __future__ import annotations
 
@@ -72,38 +72,38 @@ class _Pages(TestCase):
 
 
 class ControlTests(_Pages):
-    """The ringed check stands where something fails now, and nowhere else."""
+    """What fails now is marked on the node's *Notes* tab, which every head's door
+    opens: no head and no line carries the ringed check any more (ADR-0147 decision
+    1)."""
 
-    def test_a_failing_head_carries_it_with_what_it_marks(self):
-        page = self.page("/status")
-        found = re.search(r'aria-label="mark seen what fails at /site/ci/build" '
-                          r'data-ack-parts="([0-9a-f]+)" data-ack-count="(\d+)"', page)
-        assert found is not None
+    def test_a_failing_head_s_door_opens_the_tab_that_marks_what_fails(self):
+        doors = [link.attrs.get("href") for link in self.tree_of("/status").walk()
+                 if link.attrs.get("data-control") == "door"]
+        self.assertIn("/notes/site/ci/build", doors)
+        tab = self.tree_of("/notes/site/ci/build")
+        listed = tab.one("ls-tab__fails").text()
+        self.assertIn("test fails", listed)
+        self.assertIn("lint warns", listed)
+        self.assertNotIn("docs build", listed)
         node = self.tree.snapshot("/site/ci/build")
         assert node is not None
-        self.assertEqual(found.groups(), (parts_digest(acknowledgeable_parts(node)),
-                                          "2"))
+        (form,) = [form for form in tab.all("ls-kind-form")
+                   if form.attrs.get("data-kind") == SEEN]
+        parts = [field.attrs.get("value") for field in form.all(tag="input")
+                 if field.attrs.get("name") == "parts"]
+        self.assertEqual(parts, [parts_digest(acknowledgeable_parts(node))])
 
-    def test_a_green_head_and_one_in_maintenance_carry_none(self):
-        self.tree.set_maintenance("/site/web", "rewiring",
-                                  expires_at=datetime.now(UTC) + LATER)
-        page = self.page("/status")
-        self.assertNotIn("mark seen what fails at /site/web/cpu", page)
-        self.assertNotIn("mark seen what fails at /site/web\"", page)
-        self.assertNotIn("mark seen what fails at /site/web/disk", page)
+    def test_no_head_and_no_line_carries_the_ringed_check(self):
+        for url in ("/status", "/status/site/ci/build", "/status/site/web/disk"):
+            with self.subTest(url=url):
+                page = self.page(url)
+                self.assertNotIn('data-control="ack"', page)
+                self.assertNotIn("mark seen or silence what fails", page)
+                self.assertNotIn("reason-ack", page)
+                self.assertNotIn('id="head-ack-setter"', page)
 
-    def test_a_node_s_page_keeps_an_editor_of_its_own_listing_each(self):
-        page = self.tree_of("/status/site/ci/build")
-        setter = page.with_id("head-ack-setter")
-        self.assertIn("test fails", setter.text())
-        self.assertIn("lint warns", setter.text())
-        self.assertNotIn("docs build", setter.text())
-        self.assertEqual(len(page.all("reason-ack")), 2)
-
-    def test_the_wall_carries_the_one_editor_to_clone(self):
-        page = self.page("/status")
-        self.assertEqual(page.count('id="ack-editor"'), 1)
-        self.assertIn('class="ack-editor__what"', page)
+    def test_the_wall_carries_no_editor_to_clone(self):
+        self.assertNotIn('id="ack-editor"', self.page("/status"))
 
 
 class WriteTests(_Pages):
@@ -141,6 +141,27 @@ class WriteTests(_Pages):
         self.assertIn("What fails here changed", answer)
         self.assertIn("/site/web/cpu", answer)
         self.assertEqual(self.tree.acknowledgments(), ({}, {}))
+
+    def test_a_head_s_set_refused_for_its_words_keeps_its_parts(self):
+        # the head fails itself too, so a form that forgot the digest would mark its
+        # own failure alone: what is sent again marks each part listed
+        self.tree.upsert("/site/web", ERROR, "the web tier is slow")
+        node = self.tree.snapshot("/site/web")
+        assert node is not None
+        digest = parts_digest(acknowledgeable_parts(node))
+        answer = parse(self.post(path="/site/web", parts=digest, action="set",
+                                 set_at="", note="ordered", duration="2y"))
+        self.assertIn("Nothing was saved", answer.text())
+        self.assertIn("/site/web/disk", answer.one("ack-parts").text())
+        (form,) = [form for form in answer.all(tag="form")
+                   if form.attrs.get("action") == "/pins/seen"]
+        sent = {field.attrs["name"]: field.attrs.get("value", "")
+                for field in form.walk() if field.tag == "input"
+                and field.attrs.get("type") == "hidden"}
+        self.assertEqual(sent["parts"], digest)
+        self.post(**sent, note="ordered", duration="2h")
+        nodes, lines = self.tree.acknowledgments()
+        self.assertEqual((sorted(nodes), lines), (["/site/web", "/site/web/disk"], {}))
 
     def test_nothing_failing_is_refused_with_why(self):
         answer = self.post(path="/site/web/cpu", action="set", set_at="", note="x",
@@ -220,7 +241,10 @@ class BlockTests(_Pages):
         self.assertIn("This node is marked seen by ada", blocks[0].text())
 
     def test_the_wall_states_a_node_s_seen_in_its_box(self):
+        # while *◇ details* is on, as the link that opens the drawer at it (ADR-0147
+        # decisions 6 and 7)
         self.seen("/site/web/disk", note="on order")
+        self.client.set_cookie("handled_details", "1")
         page = self.tree_of("/status")
         blocks = [block for block in page.all("rule-block")
                   if block.attrs.get("data-rule") == SEEN
@@ -228,14 +252,17 @@ class BlockTests(_Pages):
         self.assertEqual(len(blocks), 1)
         self.assertIn("Seen by ada at", blocks[0].text())
         self.assertIn("until it changes", blocks[0].text())
+        self.assertEqual(blocks[0].attrs.get("href"),
+                         "/notes/site/web/disk?at=seen#at")
 
     def test_the_wall_marks_a_line_seen(self):
         self.seen("/site/ci/build", "test")
         page = self.tree_of("/status")
         marks = page.all("line-ack")
         self.assertEqual(len(marks), 1)
+        # who, until when and what the line counts as instead (ADR-0143)
         self.assertEqual(marks[0].attrs.get("title"),
-                         "Seen by ada, until it changes")
+                         "Seen by ada, until it changes · counts as ok")
 
     def test_the_band_s_pill_counts_each_seen(self):
         self.seen("/site/web/disk")

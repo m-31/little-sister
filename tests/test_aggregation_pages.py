@@ -77,8 +77,13 @@ class _RulesCase(TestCase):
 
 
 class WallTests(_RulesCase):
-    """On the wall a rule's block stands while it changes a count, without buttons,
-    its note behind its mark."""
+    """On the wall a rule's block stands while it changes a count and *◇ details* is on,
+    without buttons: the link that opens the drawer at it, where its note is read
+    (ADR-0147 decisions 6 and 7)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.client.set_cookie("handled_details", "1")
 
     def test_the_cap_s_block_stands_on_the_part_it_changes(self):
         page = self.page("/status")
@@ -90,12 +95,24 @@ class WallTests(_RulesCase):
         # no buttons: a configured rule is changed in the configuration
         self.assertEqual(block.all("rule-block__edit"), [])
         self.assertEqual(block.all(tag="form"), [])
-        mark = block.one("rule-note-mark")
-        self.assertEqual(mark.attrs.get("data-note-key"), "rule:develop advises|node")
-        self.assertIn("develop advises's note",
-                      block.one(tag="template").text())
-        self.assertIn("Configured in config/aggregation.yaml since 2026-10-01.",
-                      block.one(tag="template").text())
+        # one link, to its node's Notes tab at its block under what stands, by its key
+        self.assertEqual(block.tag, "a")
+        self.assertIn("data-door", block.attrs)
+        href = block.attrs["href"]
+        self.assertEqual(href, "/notes/aws/develop?at=rule&rule=develop+advises#at")
+        at = self.page(href.split("#")[0]).with_id("at")
+        self.assertEqual(at.attrs.get("data-rule-name"), "develop advises")
+        self.assertIn("develop advises's note", at.one("rule-block__note").text())
+        self.assertEqual(at.one("rule-block__record").text(),
+                         "Configured in config/aggregation.yaml since 2026-10-01.")
+
+    def test_without_details_no_rule_s_block_stands_on_the_wall(self):
+        # the part says it by its color and its mark, and the counts are the same
+        self.client.delete_cookie("handled_details")
+        page = self.page("/status")
+        self.assertEqual(self.blocks(page), [])
+        self.assertEqual(page.one("maintenance-pill").attrs.get("aria-label"),
+                         "3 handled: 3 by a rule")
 
     def test_a_rule_that_changes_nothing_now_has_no_block_on_the_wall(self):
         self.tree.upsert("/aws/develop/lambda/billing", WARN, "slow")

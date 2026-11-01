@@ -2,7 +2,7 @@
 
 A node may wait before it escalates (ADR-0083), and its counter counted the code the
 check reported. With a line pinned that is not what the node shows, so the counter
-counted readings the node did not show (backlog #89's B16):
+counted readings the node did not show:
 
 * A pinned line that failed spent the wait beneath its pin — the node green, its card
   saying *1 of 3 to escalate* — and the first failure of an unpinned line then reached

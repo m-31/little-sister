@@ -1,6 +1,6 @@
 """A page says what width it is laid out at, and is no wider (ADR-0105).
 
-Two things the live review found (backlog #89's B6 and B8), which are one thing:
+Two things the live review found, which are one thing:
 
 * No document declared its viewport, so a phone laid every page out at its
   980-pixel fallback and scaled it to the screen. None of the narrow layouts was

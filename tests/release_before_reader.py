@@ -1,22 +1,30 @@
 """Read kept files as the release before reads them at its start, with that release's
 own code — its tag's ``src`` (ADR-0132, the consequence on the kept file's entries).
 
-    python -I -S release_before_reader.py <extract> <instant> <file>...
+    python -I -S release_before_reader.py <extract> <libraries> <instant> <file>...
 
-``-I -S``: neither this checkout's environment nor any site-packages is importable, so
+``-I -S``: neither this checkout's environment nor a ``.pth`` file is read, so
 ``little_sister`` is the extract's, which the script puts first on ``sys.path`` and
-checks. Each file is read as ``app.py``'s start reads it — its events, its table of
-nodes and the stop's stamp, then ``restore_events`` — with the clock fixed at
-``<instant>``, an ISO instant with an offset. Prints, as JSON by file name, what that
-release then holds — the payload it writes back and every node's history — or why it
-refused the file. Run by ``test_branch_period_kept``; it is no test itself."""
+checks. ``<libraries>`` is where the suite's interpreter keeps its dependencies, joined
+with ``os.pathsep``, and the script puts each after the standard library as a plain
+directory: the release before imports what it depends on — PyYAML, which its ``tree``
+imports through ``aggregation`` — and nothing a ``.pth`` file there names, this
+checkout's ``src`` among them, which is how an editable install puts it on the path.
+Their versions stand in for the ones that release was installed with; the kept file is
+read by its own code alone. Each file is read as ``app.py``'s start reads it — its
+events, its table of nodes and the stop's stamp, then ``restore_events`` — with the
+clock fixed at ``<instant>``, an ISO instant with an offset. Prints, as JSON by file
+name, what that release then holds — the payload it writes back and every node's
+history — or why it refused the file. Run by ``test_branch_period_kept``; it is no test
+itself."""
 import json
 import os
 import sys
 from datetime import datetime
 
-extract, at, *files = sys.argv[1:]
+extract, libraries, at, *files = sys.argv[1:]
 sys.path.insert(0, extract)
+sys.path.extend(libraries.split(os.pathsep))
 from little_sister import instants  # noqa: E402
 from little_sister import tree as tree_module  # noqa: E402
 

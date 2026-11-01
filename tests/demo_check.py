@@ -8,8 +8,10 @@ a monotonic start captured at construction — so a check replays its scenario o
 loop with no I/O and no stored state, fast enough that the transitions land on the
 dashboard's ~10s poll. ``LITTLE_SISTER_DEMO_OFFSET`` moves that start back, so a
 server's start finds every scenario part-way into its cycle
-(:data:`OFFSET_VARIABLE`). The scenarios drive the dynamics the static render harness
-can't show: poll/swap, a growing reason list, an eruption's layout shift,
+(:data:`OFFSET_VARIABLE`), and ``LITTLE_SISTER_DEMO_HOLD`` keeps every scenario
+there, so that every page shows the same wall however long after the start it is
+drawn (:data:`HOLD_VARIABLE`). The scenarios drive the dynamics the static render
+harness can't show: poll/swap, a growing reason list, an eruption's layout shift,
 server-side staleness, and multi-node roll-up.
 
 They also carry the demo's **member** producers, and they have to: membership is
@@ -95,6 +97,30 @@ _DEFAULT_PERIOD = 60.0
 #: (ADR-0110), because no start of it ever found a failure.
 OFFSET_VARIABLE = "LITTLE_SISTER_DEMO_OFFSET"
 
+#: The environment variable that keeps every scenario where the offset starts it.
+#: Set to anything but empty, `0`, `false` or `no`, the clock each scenario reads
+#: stands still there, so that every page shows the same wall however long after the
+#: start, and however fast the machine got there, it is drawn — the wall
+#: `tests/test_a11y_browser.py` scans: read wherever the scenarios stood as each page
+#: loaded, the review queue counted as ok in one run and waited on a sixth review in
+#: the next. The `runs` scenario, which reads the wall clock rather than the time
+#: since its check was built, stands at :data:`_HELD_WALL_CLOCK` moved on by the
+#: offset. The engine still reads each check on its schedule, and what each reading
+#: says the time is, and the times `pipelines` and `workflows` give their lines, stay
+#: the clock's; a scenario held where it hangs a run hangs every run.
+HOLD_VARIABLE = "LITTLE_SISTER_DEMO_HOLD"
+#: The wall clock a held `runs` scenario reads before the offset moves it on: one
+#: instant, the same at every start, so that a held scan finds the same runs of each
+#: job name on any day.
+_HELD_WALL_CLOCK = datetime(2026, 11, 1, tzinfo=UTC).timestamp()
+
+
+def _held() -> bool:
+    """Whether the environment says to hold the scenarios (:data:`HOLD_VARIABLE`)."""
+    said = os.environ.get(HOLD_VARIABLE, "").strip().lower()
+    return said not in ("", "0", "false", "no")
+
+
 #: The one scenario whose reading is not the clock but a site's answer (ADR-0092):
 #: what `http` records — a status and a response time, both null where the request
 #: failed — so its node stands for the site its config names, and the series the
@@ -175,12 +201,15 @@ def _run_record(name: str, number: int, interval: float,
 
 def _run_line(reading: Measurement) -> Entry:
     """What the grading says of one run, carrying its reading: on the job name's
-    node for its newest run, and for the record alone for an older one."""
+    node for its newest run, and for the record alone for an older one. The run is
+    the line's event, as ``Check.line`` would make it the reading's identity
+    (ADR-0142): a failed run can be marked done, and the next run ends it,
+    alarming as new if it fails (ADR-0146)."""
     record = reading.record
     took = f" in {record['seconds']}s" if "seconds" in record else ""
     return Entry("newest", f"run {record['run']} {record['outcome']}{took}",
                  _RUN_CODES[str(record["outcome"])], subject=reading.subject,
-                 data=dict(record))
+                 data=dict(record), occurrence=reading.identity)
 
 
 def _runs_graded(measurements: Sequence[Measurement]) -> CheckResult:
@@ -545,7 +574,7 @@ _BAND_LABELS: dict[str, dict[str, object]] = {
 #: How each scenario's own node starts (ADR-0128, `node_defaults`): what a type
 #: would declare of the levels it knows to be big or of lines read only when they
 #: fail, so that the demo starts as the canvas's panel *Where the first look comes
-#: from* drew it (backlog #91 §7.5). The job names and a host's, a backup's and the
+#: from* drew it. The job names and a host's, a backup's and the
 #: scanner's children start as chips — the job names taken back by their check's
 #: file, `ci_jobs.yaml` — and the two CI scenarios fold their passing lines,
 #: `ci_workflows.yaml` showing them again. `informational` keeps its claim and so
@@ -676,7 +705,7 @@ class DemoCheck(Check):
 
     def __init__(self, *, scenario: str = "escalate",
                  period: float = _DEFAULT_PERIOD, entries: bool = False,
-                 offset: float = 0.0, **kwargs: Any) -> None:
+                 offset: float = 0.0, held: bool = False, **kwargs: Any) -> None:
         # The band labels this type ships, declared for the library to resolve
         # (ADR-0025). Every scenario declares them, and only the `severity` one
         # emits children by those names — a declaration for a name a run never
@@ -684,7 +713,9 @@ class DemoCheck(Check):
         # Its own node's first look is the scenario's (`_FIRST_LOOK`), as a type's
         # is its kind's (ADR-0128).
         super().__init__(subnode_defaults=_BAND_LABELS,
-                         node_defaults=_FIRST_LOOK.get(scenario), **kwargs)
+                         node_defaults=_FIRST_LOOK.get(scenario),
+                         config_keys=("scenario", "period", "entries", "subject"),
+                         **kwargs)
         self.scenario = scenario
         # `entries: true` reads a prose scenario's reason list as **members**
         # instead (ADR-0036) — a harness knob, not a model change: it exists so one
@@ -694,8 +725,22 @@ class DemoCheck(Check):
         self.entries = entries
         self._period = period
         # `offset` seconds into the cycle already, as the environment said when
-        # this check was built (OFFSET_VARIABLE).
+        # this check was built (OFFSET_VARIABLE) — and, `held`, kept there
+        # (HOLD_VARIABLE).
         self._start = time.monotonic() - offset
+        self._offset = offset
+        self._held = held
+
+    def _elapsed(self) -> float:
+        """How far into its cycle the scenario is: the time since this check was
+        built, moved on by the offset — or, held, the offset alone."""
+        since = self._offset if self._held else time.monotonic() - self._start
+        return since % self._period
+
+    def _wall_clock(self) -> float:
+        """The wall clock the `runs` scenario reads: the machine's, or, held, one
+        instant moved on by the offset (:data:`_HELD_WALL_CLOCK`)."""
+        return _HELD_WALL_CLOCK + self._offset if self._held else time.time()
 
     @classmethod
     def _extra_from_config(cls, config: dict[str, Any],
@@ -715,7 +760,7 @@ class DemoCheck(Check):
         # `subject` is this type's to read, as a URL is `http`'s: the object a
         # scenario that reads one names, so its readings have a series (ADR-0087).
         return {"scenario": scenario, "period": float(period),
-                "offset": float(offset),
+                "offset": float(offset), "held": _held(),
                 "entries": values.flag(config, "entries"),
                 "subject": str(config.get("subject", ""))}
 
@@ -741,8 +786,7 @@ class DemoCheck(Check):
         if self.scenario == RUNS:
             return self._runs()
         return Measurement(record={
-            "elapsed_seconds": round(
-                (time.monotonic() - self._start) % self._period, 3),
+            "elapsed_seconds": round(self._elapsed(), 3),
             "period_seconds": self._period,
             "at": datetime.now(UTC).isoformat()})
 
@@ -750,7 +794,7 @@ class DemoCheck(Check):
         """The `latency` scenario's reading: a site's status and response time at
         this point of its cycle — or none of either where every request fails, and,
         once a cycle, after a hang no reading is taken through."""
-        elapsed = (time.monotonic() - self._start) % self._period
+        elapsed = self._elapsed()
         phase = elapsed / self._period
         if _LATENCY_HANG[0] <= phase < _LATENCY_HANG[1]:
             time.sleep(_LATENCY_HANG_SECONDS)
@@ -765,7 +809,7 @@ class DemoCheck(Check):
         """The `workflows` scenario's readings: one per repository, its latest CI
         run and when it completed, as a provider answers — including, at two
         stretches of the cycle, the two ways that answer breaks the seam."""
-        elapsed = (time.monotonic() - self._start) % self._period
+        elapsed = self._elapsed()
         phase = elapsed / self._period
         now = datetime.now(UTC).replace(microsecond=0)
         readings: list[Measurement] = []
@@ -796,7 +840,7 @@ class DemoCheck(Check):
         A job name that is not running now is not listed, and has no reading. When
         it is listed again, its newest runs are: the ones of its last stretch among
         them, read again as the records they were."""
-        now = time.time()
+        now = self._wall_clock()
         readings: list[Measurement] = []
         for name, every, timed, _said in _JOBS:
             interval = every * self._period

@@ -1,33 +1,33 @@
 """What the wall costs a browser on the anonymized tree — today's numbers the baseline.
 
-Backlog #91 grows the wall into a tree, and before it grows the note's §7.1 step 4
-takes today's cost on the deployment's own tree of §3.9, its names replaced
+The wall grows into a tree (ADR-0127), and before it grows today's cost is taken on
+the deployment's own tree, its names replaced
 (``tests/anonymized_tree.py``): how many screens the wall and a node's pages are, as
 the round measured them on the prototype, and how long the browser takes to swap the
 ten-second refresh in. The numbers here are the baseline each stage states its growth
 against, and no stage leaves a wall taller than the one before it.
 
-**Screens** are the prototype's unit (§3.9): a page's height over 900 pixels on a desk
+**Screens** are the prototype's unit: a page's height over 900 pixels on a desk
 and 780 on a phone, the window as tall, so a page shorter than the window counts one
 screen. The wall is measured at 1,280 and 1,920 pixels and on a phone, a node's page
 at 1,024 as the prototype's boards were, and a card and a nested box on the wall at
 the width the planner gives them, where the prototype drew a team's card alone at 700
-pixels; so a card's reading is near the note's, not the same. The prototype copied
+pixels; so a card's reading is near the prototype's, not the same. The prototype copied
 today's look by hand, and its heads carried no observation time and no next update;
 its readings stand beside each measurement as what the round worked from.
 
-**The deployed wall** is read too (backlog #91's note, §2, 2026-10-17): the recorded
+**The deployed wall** is read too: the recorded
 tree as the deployment that runs mounts it, one team's five checks at the root, each a
 card — the wall it is mostly looked at on, and on a desk 2,560 pixels wide, a screen
 there 1,300 pixels tall; and at 1,920, at 1,280 and on a phone beside it. So is **the
-hosts wall** (``tests/hosts_tree.py``; the note's §7.5, 2026-10-21), a second
+hosts wall** (``tests/hosts_tree.py``), a second
 deployment's, nine hosts the library's own types write: the wall the host types are
 measured on when they declare how their levels start.
 
 **The swap** is what the refresh costs the browser today: from the fragment's last
 byte to the second frame after ``poll.js`` has put it in the page — the parse, the
 observers of ``dashboard-layout.js``, ``inspect.js`` and ``maintenance.js`` that a
-swap wakes (§7.10), and the layout — with the CPU throttled four times, a mid-range
+swap wakes, and the layout — with the CPU throttled four times, a mid-range
 phone's. Stage 2 applies the tab's map in that same span.
 
 Each page is read in the library's theme, as a browser that never chose draws it —
@@ -52,6 +52,7 @@ from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 from little_sister import app as app_module
 from little_sister.tree import StatusTree
 from tests import anonymized_tree, hosts_tree
+from tests.browser_binary import chromium
 from tests.browser_server import PageServer
 
 try:  # pragma: no cover - environment probe
@@ -59,19 +60,15 @@ try:  # pragma: no cover - environment probe
 except ImportError:  # pragma: no cover
     sync_playwright = None  # type: ignore[assignment]
 
-#: A sandbox pins one browser build; a Playwright from the lock may expect another,
-#: so the one that is there is what runs (as ``tests/sweep_contrast.py`` does).
-_SANDBOX_CHROMIUM = Path("/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
-
 #: Bootstrap as ``tests/sweep_contrast.py`` vendors it (``docs/testing-the-gui.md``,
 #: Mode 4), where there is a copy; the CDN otherwise.
 _BOOTSTRAP = (Path(__file__).resolve().parent.parent / "var" / "bootstrap"
               / "node_modules" / "bootstrap" / "dist")
 
-#: One screen: the prototype's 900 pixels on a desk and 780 on a phone (§3.9).
+#: One screen: the prototype's 900 pixels on a desk and 780 on a phone.
 _DESK_SCREEN = 900
 _PHONE_SCREEN = 780
-#: The desk the deployment's own wall is mostly looked at on (backlog #91's note, §2): a
+#: The desk the deployment's own wall is mostly looked at on: a
 #: screen 2,560 pixels wide and 1,440 tall, about 1,300 of them the page's beneath the
 #: browser's bars — a screen of its own.
 _WIDE_DESK = 2560
@@ -117,13 +114,13 @@ _SWAP_CEILING_S = 1.2
 
 @dataclass(frozen=True)
 class Case:
-    """One reading of §3.9's screens tables as the real wall gives it."""
+    """One reading of the prototype's screens tables as the real wall gives it."""
 
     what: str
     variant: str
     url: str
     width: int
-    #: Today's reading, in screens: the baseline (one decimal, as the note has it).
+    #: Today's reading, in screens: the baseline, to one decimal.
     baseline: float
     #: What the prototype's hand copy of today's look read, where the round took one.
     prototype: float | None = None
@@ -133,9 +130,9 @@ class Case:
     viewer: bool = False
 
 
-#: §3.9's Today column measured again on the real wall — the whole wall, a team's
-#: card and its github box, a node's pages, each tree made worse as the prototype
-#: made it — and the wall at 1,920 pixels, which the round did not draw.
+#: The prototype's Today column measured again on the real wall — the whole wall, a
+#: team's card and its github box, a node's pages, each tree made worse as the
+#: prototype made it — and the wall at 1,920 pixels, which the round did not draw.
 #:
 #: **The phone's two readings were re-stated with the head's row** (ADR-0127
 #: decision 3): before stage 3 the recorded wall read 8.7 screens on a phone and the
@@ -151,7 +148,7 @@ class Case:
 #: head without a pin; that one more square is most of what is left over the first
 #: slice. A desk is wide enough for the row, and its readings stand.
 #:
-#: **A viewer's walls are read too**, from stage 4 (backlog #91's note, §7.5): the
+#: **A viewer's walls are read too**, from stage 4: the
 #: same sign-in, its session saying it is no admin, ‖ on no head — what a team sees,
 #: and the measure of which of a head's costs is an admin's alone. Beside the
 #: admin's on 183b37e, in pixels: the recorded wall at a desk 4,200 to 4,241, on a
@@ -159,8 +156,8 @@ class Case:
 #: all fail 10,658 to 10,702, 22,695 to 23,336 and 8,591 to 8,632.
 #:
 #: **The chip runs line up in columns** (ADR-0127 decision 12), the look `chip_runs:
-#: aligned`, the library's own, taken knowing it costs room (backlog #91's
-#: note, §2, 2026-10-15): each chip stretched to its level's column, one to a row
+#: aligned`, the library's own, taken knowing it costs room: each chip
+#: stretched to its level's column, one to a row
 #: where a box had room for one, until such a run came to wrap as it comes (below).
 #: The readings it raised, in pixels before and after:
 #: the recorded wall at a desk 3,915 and 4,241, the same with a hundred repositories
@@ -172,8 +169,8 @@ class Case:
 #: reads 1,929; every wall whose leaves all fail, their boxes open, and the findings
 #: pages read as they did.
 #:
-#: **A run with room for one column only wraps as it comes** (ADR-0127 decision 12;
-#: backlog #91's note, §2, 2026-10-17), each chip at its own width, sharing lines, the
+#: **A run with room for one column only wraps as it comes** (ADR-0127 decision 12),
+#: each chip at its own width, sharing lines, the
 #: column deciding as the browser draws it. The readings it took down, in pixels
 #: before and after: the recorded wall at a desk 4,241 and 3,810, the same with a
 #: hundred repositories as much, on a phone 8,027 and 7,480, at 1,920 pixels 2,757
@@ -186,7 +183,7 @@ class Case:
 #: phone 7,772, at 1,920 pixels 2,432 — and a page whose wide levels hold many
 #: columns is not: a hundred repositories' 6,859 wrapped.
 #:
-#: **The deployed wall** (backlog #91's note, §2, 2026-10-17): alpha's five checks at
+#: **The deployed wall**: alpha's five checks at
 #: the root, each a card, as the deployment that runs mounts them, read where it is
 #: mostly looked at — 2,560 pixels, a screen there 1,300 tall — and at 1,920, at
 #: 1,280 and on a phone. Its first readings, an admin's, in pixels: 1,640 at 2,560
@@ -208,8 +205,8 @@ class Case:
 #: **The hosts wall** (2026-10-21), read in the library's theme as it was drawn: one
 #: screen at 2,560 pixels, its hosts' card 646 tall beside the family's 889; at 1,920
 #: pixels 1,081, at 1,280 992 and on a phone 2,476, a viewer's 2,434. The same day the
-#: library's host types came to propose how their levels first look (the note's §7.5,
-#: the third slice), drawn here as they propose it, and the wall reads as it did but
+#: library's host types came to propose how their levels first look,
+#: drawn here as they propose it, and the wall reads as it did but
 #: at 1,280 pixels, 1,059: priced as the chips they are drawn as, a host's leaves no
 #: longer make its card the taller in the planner's rows, which gives each card one of
 #: two tracks where it gave the hosts two of three — 67 pixels more, until the flip.
@@ -239,7 +236,7 @@ class Case:
 #: workflow runs' page 1,766 and 1,903, with a hundred repositories 7,960 and 8,203,
 #: and in an outage 3,950 and 4,217, where its list unfolded read 5,723. Every wall
 #: reads as it did, and so does every page with no branch at its head.
-#: **The interactive wall's flip** (backlog #91's note, §7.5, 2026-10-25): a level
+#: **The interactive wall's flip** (2026-10-25): a level
 #: nobody speaks for starts open, its healthy shown, and one that would draw more than
 #: thirty boxes as chips; *+N more* went with today's density. Since then each tree is
 #: drawn with what the family's packages that come out with the flip propose for their
@@ -401,7 +398,7 @@ class _Quiet(WSGIRequestHandler):
 
 
 class WallCostTests(unittest.TestCase):
-    """The screens of §3.9 on the real wall, and the swap's time."""
+    """The prototype's screens on the real wall, and the swap's time."""
 
     playwright: Any = None
     browser: Any = None
@@ -416,8 +413,7 @@ class WallCostTests(unittest.TestCase):
         try:
             cls.playwright = sync_playwright().start()
             cls.browser = cls.playwright.chromium.launch(
-                executable_path=(str(_SANDBOX_CHROMIUM) if _SANDBOX_CHROMIUM.is_file()
-                                 else None))
+                executable_path=chromium())
         except Exception as error:  # pragma: no cover - no browser here
             if cls.playwright is not None:
                 cls.playwright.stop()
@@ -432,7 +428,7 @@ class WallCostTests(unittest.TestCase):
         app_module.status_tree = cls.trees["recorded"]
         # a deployment's pages carry no banner about an engine never started
         app_module.engine_error = None
-        # the deployment's line budget (§3.9); depth at its default
+        # the deployment's line budget; depth at its default
         app_module.config = replace(app_module.config,
                                     reason_cap=anonymized_tree.REASON_CAP)
         cls.server = make_server("127.0.0.1", 0, app_module.app,
@@ -535,10 +531,11 @@ class WallCostTests(unittest.TestCase):
                     page = pages[case.width, case.viewer] = self._signed_in(
                         case.width, viewer=case.viewer)
                 self._open(page, case)
-                # a viewer's heads carry no ‖, and an admin's every open one does
-                pins = page.locator('.node-icons > [data-control="pin"]').count()
-                self.assertEqual(pins == 0, case.viewer,
-                                 f"{case.what}: {pins} pin mark(s) on the page")
+                # every open head carries ◇, a viewer's as an admin's, and none ‖
+                # (ADR-0147 decision 1)
+                doors = page.locator('[data-control="door"]').count()
+                self.assertGreater(doors, 0, f"{case.what}: no door on the page")
+                self.assertEqual(page.locator('[data-control="pin"]').count(), 0)
                 screens, pixels = self._screens(page, case)
                 readings.append(f"{case.what} at {case.width}: {screens:.1f} "
                                 f"screens ({pixels}); baseline {case.baseline}"

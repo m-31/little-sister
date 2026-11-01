@@ -18,25 +18,18 @@
 
         {#- Everything the refresh swaps, and with it every pin the page states
             and every editor of one that stands (ADR-0104 decisions 2 and 3): a
-            node's block with *Edit* and *Clear*, and on a node's page the head's
-            *Set maintenance*. The refresh waits while one of those editors is open
+            node's block with *Edit* and *Clear*. Nothing new is set here: ◇ on a
+            head opens the node's *Notes* tab, where every kind is set (ADR-0147
+            decision 1). The refresh waits while one of those editors is open
             (decision 7, `poll.js`). -#}
         {#- The shapes of the heads' icons, drawn once for the page (ADR-0127
             decisions 2 and 3), as the status cues' are by `_page_end.html`: every cue
             and mark in the grid refers to them, so the refresh carries none of the
             paths. -#}
-        {% from '_rule_block.html' import icon_sprite, pin_editor, ack_editor with context %}{{ icon_sprite() }}
+        {% from '_rule_block.html' import icon_sprite with context %}{{ icon_sprite() }}
         <div id="status-grid">
             {% include '_status_grid.html' %}
         </div>
-        {#- The one editor of a pin still to be set, for an admin: ‖ in a head's
-            icons clones it into the node's box (ADR-0127 decision 3) — and the ringed
-            check's, which marks what fails there seen (ADR-0142). Outside the grid,
-            so the refresh carries no editor and never takes these away. -#}
-        {%- if is_admin and layout != 'kiosk' %}
-        {{ pin_editor(here) }}
-        {{ ack_editor(here) }}
-        {%- endif %}
     </div>
 {% include '_page_end.html' %}
 
@@ -47,7 +40,8 @@
     <script src="{{ url_for('static', filename='js/rail.js') }}"></script>
     {# The ~10s fragment poll, shared with /system (poll.js swaps data-target
        and keeps the #status-updated stamp truthful, ADR-0005) — and waits while
-       an editor of a pin is open in what it would swap (ADR-0104 decision 7). #}
+       an editor of a pin is open in what it would swap (ADR-0104 decision 7) or
+       the drawer is open over it (ADR-0147 decision 4). #}
     <script src="{{ url_for('static', filename='js/poll.js') }}"
             data-target="status-grid" data-assets="{{ assets_digest() }}"></script>
 
@@ -74,15 +68,19 @@
     <script src="https://cdn.jsdelivr.net/npm/@floating-ui/core@1.6.8/dist/floating-ui.core.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@floating-ui/dom@1.6.12/dist/floating-ui.dom.umd.min.js"></script>
     <script src="{{ url_for('static', filename='js/inspect.js') }}"></script>
-    {#- A block's note on the wall (ADR-0135 decision 3): the mark's card, outside the
-        grid the refresh swaps, in the inspection card's look. -#}
-    <div id="note-card" class="inspect-card note-card" role="dialog" aria-label="Note" tabindex="-1" hidden></div>
-    <script src="{{ url_for('static', filename='js/note-card.js') }}"></script>
 
     {# Maintenance click-popover (ADR-0019 machinery, ADR-0014 data): clicking
-       a card's "contains maintenance" pip opens this card listing that subtree's pins as
-       links. Event-delegated on #status-grid so it survives the ~10s poll swap. #}
-    <div id="maintenance-card" class="maintenance-pop" role="dialog" aria-label="maintenance in this card" hidden></div>
+       the band's pill opens this card listing what is handled, the pins as links.
+       Event-delegated on #status-grid so it survives the ~10s poll swap. #}
+    <div id="maintenance-card" class="maintenance-pop" role="dialog" aria-label="what is handled" hidden></div>
     <script src="{{ url_for('static', filename='js/maintenance.js') }}"></script>
+
+    {#- The drawer (ADR-0147 decisions 3 to 5): what a door opens over the wall, the
+        node's *Notes* tab framed, outside the grid the refresh swaps, which waits
+        while it is open (`poll.js`); none on the kiosk, which has no door to click. -#}
+    {%- if layout != 'kiosk' %}
+    {% include '_drawer.html' %}
+    <script src="{{ url_for('static', filename='js/drawer.js') }}"></script>
+    {%- endif %}
 </body>
 </html>

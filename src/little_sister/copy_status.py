@@ -42,33 +42,56 @@ from typing import TYPE_CHECKING, Protocol
 
 from little_sister.config import DEFAULT_TIME_FORMAT
 from little_sister.details import Row
-from little_sister.pins import MAINTENANCE, NO_NOTE, Pin
+from little_sister.notes_tab import ended_word
+from little_sister.pins import DONE, MAINTENANCE, NO_NOTE, SEEN, SILENCED, Pin
+from little_sister.reasons import plain
 from little_sister.render import write_out
+from little_sister.rule_words import rule_said
+from little_sister.schedule import Window
 from little_sister.spans import format_duration, format_span, format_tolerance
 from little_sister.status import StatusCode
 from little_sister.titles import label_parts
 from little_sister.tree import (
     AGGREGATION_RULE,
+    CAUSE_LINE_DONE_EDITED,
+    CAUSE_LINE_DONE_ENDED,
+    CAUSE_LINE_DONE_SET,
+    CAUSE_LINE_PIN_CLOSED,
+    CAUSE_LINE_PIN_EDITED,
     CAUSE_LINE_PIN_ENDED,
+    CAUSE_LINE_PIN_OPENED,
     CAUSE_LINE_PIN_SET,
     CAUSE_LINE_SEEN_EDITED,
     CAUSE_LINE_SEEN_ENDED,
     CAUSE_LINE_SEEN_SET,
+    CAUSE_LINE_SILENCED_EDITED,
+    CAUSE_LINE_SILENCED_ENDED,
+    CAUSE_LINE_SILENCED_SET,
+    CAUSE_PIN_CLOSED,
     CAUSE_PIN_EDITED,
     CAUSE_PIN_ENDED,
+    CAUSE_PIN_OPENED,
     CAUSE_PIN_SET,
     CAUSE_REMOVED,
     CAUSE_RULE,
     CAUSE_SEEN_EDITED,
     CAUSE_SEEN_ENDED,
     CAUSE_SEEN_SET,
+    CAUSE_SILENCED_EDITED,
+    CAUSE_SILENCED_ENDED,
+    CAUSE_SILENCED_SET,
     CAUSE_STALE,
     MAINTENANCE_RULE,
     SEEN_RULE,
+    SILENCED_RULE,
+    EntryWords,
     HandledRule,
+    OpenWindow,
     Period,
+    Planned,
     ReasonLine,
     StatusSnapshot,
+    lines_rules,
     rules_beneath,
 )
 
@@ -99,8 +122,13 @@ _BEGUN_BY = {
     CAUSE_PIN_SET: "a pin set on {}",
     CAUSE_PIN_EDITED: "a pin edited on {}",
     CAUSE_PIN_ENDED: "a pin ended on {}",
+    CAUSE_PIN_OPENED: "a window opened on {}",
+    CAUSE_PIN_CLOSED: "a window closed on {}",
     CAUSE_LINE_PIN_SET: "a line's pin set on {}",
+    CAUSE_LINE_PIN_EDITED: "a line's pin edited on {}",
     CAUSE_LINE_PIN_ENDED: "a line's pin ended on {}",
+    CAUSE_LINE_PIN_OPENED: "a line's window opened on {}",
+    CAUSE_LINE_PIN_CLOSED: "a line's window closed on {}",
     CAUSE_REMOVED: "the removal of {}",
     CAUSE_STALE: "{} going stale",
     CAUSE_RULE: "a rule beginning to count {}",
@@ -110,6 +138,15 @@ _BEGUN_BY = {
     CAUSE_LINE_SEEN_SET: "a line of {} marked seen",
     CAUSE_LINE_SEEN_EDITED: "the seen on a line of {} changed",
     CAUSE_LINE_SEEN_ENDED: "a line of {} no longer seen",
+    CAUSE_SILENCED_SET: "{} silenced",
+    CAUSE_SILENCED_EDITED: "the silence on {} changed",
+    CAUSE_SILENCED_ENDED: "the silence on {} ended",
+    CAUSE_LINE_SILENCED_SET: "a line of {} silenced",
+    CAUSE_LINE_SILENCED_EDITED: "the silence on a line of {} changed",
+    CAUSE_LINE_SILENCED_ENDED: "the silence on a line of {} ended",
+    CAUSE_LINE_DONE_SET: "a line of {} marked done",
+    CAUSE_LINE_DONE_EDITED: "the done on a line of {} changed",
+    CAUSE_LINE_DONE_ENDED: "the done on a line of {} ended",
 }
 _A_READING = "a reading of {}"
 # The same where the node's own change began it: *of its own*, *on it*.
@@ -117,8 +154,13 @@ _BEGUN_BY_ITS_OWN = {
     CAUSE_PIN_SET: "a pin set on it",
     CAUSE_PIN_EDITED: "a pin edited on it",
     CAUSE_PIN_ENDED: "a pin ended on it",
+    CAUSE_PIN_OPENED: "a window opened on it",
+    CAUSE_PIN_CLOSED: "a window closed on it",
     CAUSE_LINE_PIN_SET: "a line's pin set on it",
+    CAUSE_LINE_PIN_EDITED: "a line's pin edited on it",
     CAUSE_LINE_PIN_ENDED: "a line's pin ended on it",
+    CAUSE_LINE_PIN_OPENED: "a line's window opened on it",
+    CAUSE_LINE_PIN_CLOSED: "a line's window closed on it",
     CAUSE_REMOVED: "its own removal",
     CAUSE_STALE: "its own reading going stale",
     CAUSE_RULE: "a rule beginning to count it",
@@ -128,6 +170,15 @@ _BEGUN_BY_ITS_OWN = {
     CAUSE_LINE_SEEN_SET: "a line of its own marked seen",
     CAUSE_LINE_SEEN_EDITED: "the seen on a line of its own changed",
     CAUSE_LINE_SEEN_ENDED: "a line of its own no longer seen",
+    CAUSE_SILENCED_SET: "its own failure silenced",
+    CAUSE_SILENCED_EDITED: "the silence on it changed",
+    CAUSE_SILENCED_ENDED: "the silence on it ended",
+    CAUSE_LINE_SILENCED_SET: "a line of its own silenced",
+    CAUSE_LINE_SILENCED_EDITED: "the silence on a line of its own changed",
+    CAUSE_LINE_SILENCED_ENDED: "the silence on a line of its own ended",
+    CAUSE_LINE_DONE_SET: "a line of its own marked done",
+    CAUSE_LINE_DONE_EDITED: "the done on a line of its own changed",
+    CAUSE_LINE_DONE_ENDED: "the done on a line of its own ended",
 }
 _A_READING_OF_ITS_OWN = "a reading of its own"
 
@@ -174,6 +225,22 @@ class TimeStyle:
 
     zone: tzinfo
     time_format: str = DEFAULT_TIME_FORMAT
+    #: The name a holiday list's key reads as after *not on* (ADR-0149 decision 2),
+    #: the key itself where the instance cannot have the list: what a maintenance
+    #: entry's sentence names, in the page's words.
+    list_name: Callable[[str], str] = str
+    #: The window of a series open now and what follows it, as its block's two rows
+    #: say them (ADR-0150, landing 4): what the document says beside a series' window,
+    #: its schedule's next start — nothing where the instance says none.
+    opened: Callable[[Pin], OpenWindow | None] = lambda _pin: None
+
+    @property
+    def words(self) -> EntryWords:
+        """How the document says a maintenance entry (ADR-0150): the page's one
+        sentence, its instants written as this document writes every instant, with
+        their offset, and the entry's zone named where it is not the document's."""
+        return EntryWords(self.at, getattr(self.zone, "key", str(self.zone)),
+                          self.list_name)
 
     def at(self, moment: datetime | None) -> str:
         """One instant, in the configured zone, naming its offset — and an em
@@ -249,14 +316,42 @@ Periods = Callable[[StatusSnapshot], Standing | None]
 
 
 @dataclass(frozen=True)
+class PinSaid:
+    """The pin a note a node's document hands over was written for, as its Notes
+    tab's entry says it (ADR-0145 decisions 6 and 8): its kind — empty for a pin's
+    note written before a note kept it — a seen's status and a silence's level where
+    the node holds one part of it, each part of an act holding its own; how many
+    parts the act that set it had (``parts``) and how many of them the node holds
+    (``here``), and the node it was made on where that is another; and its end —
+    when, why in the log's words, and who, where a person ended it — or that it
+    stands. A maintenance entry planned as a window or a schedule says what it was
+    planned as (``planned``) and what of it ran (``ran``), as its note counts it
+    (ADR-0150)."""
+    kind: str
+    status: StatusCode | None = None
+    level: StatusCode | None = None
+    parts: int = 1
+    here: int = 1
+    made_at: str = ""
+    standing: bool = False
+    ended_at: datetime | None = None
+    ended: str = ""
+    ended_by: str = ""
+    planned: str = ""
+    ran: str = ""
+
+
+@dataclass(frozen=True)
 class NotesSaid:
-    """What a node's document says of its notes (ADR-0140): the newest, whole, and
-    how many more its Notes view lists — at ``view``, that view's absolute address,
-    where the caller can say it. Handed in, as the origin is: this module reads no
-    notes."""
+    """What a node's document says of its notes (ADR-0140, ADR-0145 decision 8): the
+    newest note with words, whole, the pin it was written for where it was (``pin``),
+    and how many entries more its Notes tab lists — at ``view``, that tab's absolute
+    address, where the caller can say it. Handed in, as the origin is: this module
+    reads no notes."""
     newest: Note
     more: int = 0
     view: str = ""
+    pin: PinSaid | None = None
 
 
 def format_copy_markdown(root: StatusSnapshot | None, style: TimeStyle, *,
@@ -301,9 +396,11 @@ def format_tree_markdown(root: StatusSnapshot | None, style: TimeStyle,
     document = [f"## little-sister status {status_icon(code)}", "",
                 *_origin_lines(origin, style, root)]
     if pin is not None and root is not None:
-        document.extend(_maintenance_lines(0, pin.note, pin.set_by,
-                                           pin.expires_at, style,
-                                           _handbook_of(origin, root.path)))
+        document.extend(_window_lines(0, pin, root.maintenance_window, style,
+                                      _handbook_of(origin, root.path)))
+    if root is not None and root.planned_entry is not None:
+        document.extend(_planned_lines(0, root.planned_entry, style,
+                                       _handbook_of(origin, root.path)))
     document.append("")
     counted = _counted(root) if root is not None else []
     wrong = [node for node in counted if _shown(node) is not StatusCode.OK]
@@ -358,8 +455,8 @@ def format_node_markdown(node: StatusSnapshot, style: TimeStyle,
     needs, and a document pasted elsewhere is read where nobody opens the card. Its
     **tags** follow them (:func:`_tags_block`, ADR-0139 decision 4): ``tags`` are
     every tag it carries, each with what its ``tags.yaml`` says it means. Its
-    **notes** follow its reasons (:func:`_notes_block`, ADR-0140): the newest whole,
-    and how many more its Notes view lists.
+    **notes** follow its reasons (:func:`_notes_block`, ADR-0140): the newest with
+    words whole, and how many entries more its Notes tab lists (ADR-0145 decision 8).
 
     Headings and blocks rather than the tree's nested list: a document about one
     thing is read as one, and a fenced traceback or a bulleted configuration
@@ -391,10 +488,14 @@ def format_node_markdown(node: StatusSnapshot, style: TimeStyle,
 
 def _notes_block(notes: NotesSaid | None, style: TimeStyle,
                  handbook: str = "") -> list[str]:
-    """The node's **Notes**, after its reasons (ADR-0140): the newest note whole — who
-    wrote it and when, who changed it last where somebody did, whether it is a pin's,
-    the line it is on as it read then, and its words — and how many more its Notes
-    view lists. Nothing where no note is written on the node.
+    """The node's **Notes**, after its reasons (ADR-0140): the newest note with words
+    whole (ADR-0145 decision 8) — a pin's said as its Notes tab's entry says it, its
+    kind's sign and word, who set it, a seen's status and a silence's level, from when
+    until when and why it ended, or that it stands (:func:`_pin_said`); a note of its
+    own, who wrote it and when and who changed it last — what it is on, a line as it
+    read then or an act's parts (:func:`_on_said`), and its words; and how many entries
+    more its Notes tab lists, the records of pins set without words among them.
+    Nothing where no note with words is written on the node.
 
     A note is not a reading, so it is a block of its own and says whose words it is:
     what somebody knew, handed over beside what the check measured. Its words are
@@ -404,24 +505,96 @@ def _notes_block(notes: NotesSaid | None, style: TimeStyle,
     if notes is None:
         return []
     note = notes.newest
-    said = f"By {note.created_by or 'an admin'}, {style.at(note.created_at)}"
-    if note.set_at != note.created_at:
-        said += (f"; last changed by {note.set_by or 'an admin'}, "
-                 f"{style.at(note.set_at)}")
-    if note.pin:
-        said += " — the note of a pin"
-    said = said.translate(_MD_INLINE_ESCAPE)
-    if note.slug:
-        line = next((" ".join(seen.text.split()) for seen in note.context.lines
-                     if seen.slug == note.slug), "")
-        said += (f" — on its line: {written_out(line, inline=True, handbook=handbook)}"
-                 if line else " — on one of its lines")
+    pin = notes.pin if notes.pin is not None and notes.pin.kind in _PIN_KINDS else None
+    if pin is not None:
+        said = _pin_said(note, pin, style)
+    else:
+        said = f"By {note.created_by or 'an admin'}, {style.at(note.created_at)}"
+        if note.set_at != note.created_at:
+            said += (f"; last changed by {note.set_by or 'an admin'}, "
+                     f"{style.at(note.set_at)}")
+        if note.pin:
+            said += " — the note of a pin"
+    said = said.translate(_MD_INLINE_ESCAPE) + _on_said(note, pin, handbook)
     block = ["", "**Notes**", "", _item(0, said),
              *_markdown_item(1, written_out(note.text, handbook=handbook))]
     if notes.more:
-        block.append(_item(0, f"{notes.more} more on its Notes view"
+        block.append(_item(0, f"{notes.more} more on its Notes tab"
                               + (f": {notes.view}" if notes.view else "")))
     return block
+
+
+#: The kinds of pin the *Notes* block says a note was written for, each by the sign
+#: an outline gives it and its word (:func:`_pin_said`).
+_PIN_KINDS = frozenset({MAINTENANCE, SEEN, SILENCED, DONE})
+
+
+def _pin_said(note: Note, pin: PinSaid, style: TimeStyle) -> str:
+    """The pin ``note`` was written for, as the node's Notes tab's entry says it
+    (ADR-0145 decision 6): *☑️ Seen — by ada at error ⛔, from … until … (2h 28m),
+    ended: recovered* — a silence's level, *counting as ok ✅*; its end's who, *by
+    hand, by ben*; or *and it stands*; a done's failure, *closing error ⛔*
+    (ADR-0146). A maintenance entry planned as a window or a schedule says what of it
+    ran, set when, in place of maintenance from its set (ADR-0150): *🛠️ Maintenance,
+    planned as a schedule — by pan, set …: no window has opened yet, and it stands*,
+    *…: 3 windows ran, 2h 10m in all, until …, ended: with its last window*. What it
+    was on is :func:`_on_said`'s."""
+    sign, word = {MAINTENANCE: ("🛠️", "Maintenance"),
+                  SEEN: (_ACCEPTED_SIGN, "Seen"),
+                  SILENCED: (_SILENCED_SIGN, "Silenced"),
+                  DONE: (_ACCEPTED_SIGN, "Done")}[pin.kind]
+    planned = f", planned as a {pin.planned}" if pin.planned else ""
+    said = f"{sign} {word}{planned} — by {note.created_by or 'an admin'}"
+    if pin.kind == SEEN and pin.status is not None:
+        said += f" at {_code_word(pin.status)}"
+    elif pin.kind == DONE and pin.status is not None:
+        said += f", closing {_code_word(pin.status)}"
+    elif pin.kind == SILENCED and pin.level is not None:
+        said += f", counting as {_code_word(pin.level)}"
+        if pin.level is StatusCode.WARN:
+            said += " at most"
+    if pin.planned:
+        said += f", set {style.at(note.created_at)}: {pin.ran}"
+    else:
+        said += f", from {style.at(note.created_at)}"
+    if pin.standing:
+        said += ", and it stands"
+    elif pin.ended_at is not None:
+        if pin.planned:
+            said += f", until {style.at(pin.ended_at)}"
+        else:
+            lasted = format_span(max(0.0, (pin.ended_at
+                                           - note.created_at).total_seconds()))
+            said += f" until {style.at(pin.ended_at)} ({lasted})"
+        why = ended_word(pin.ended, pin.planned)
+        if why:
+            said += f", ended: {why}" + (f", by {pin.ended_by}" if pin.ended_by else "")
+    else:
+        said += ", and it has ended"
+    return said
+
+
+def _on_said(note: Note, pin: PinSaid | None, handbook: str) -> str:
+    """What the note handed over is on, as the node's Notes tab's entry says it
+    (ADR-0145 decision 6): *— on its line: …*, the line as it read then; *— on the
+    node* where a pin of an act stands for it, and nothing for a note or a lone pin of
+    the node itself; the act, *, one of 7 parts of one act*, where the node holds one
+    of its parts, and *— 3 parts of 7 in one act* where it holds more, which no one
+    line stands for; and *, made on /ci* where the act was made on another node."""
+    made = f", made on {pin.made_at}" if pin is not None and pin.made_at else ""
+    parts = pin.parts if pin is not None else 1
+    if pin is not None and pin.here > 1:
+        of = f" of {parts}" if parts > pin.here else ""
+        return f" — {pin.here} parts{of} in one act{made}".translate(_MD_INLINE_ESCAPE)
+    act = f", one of {parts} parts of one act" if parts > 1 else ""
+    if note.slug:
+        line = next((" ".join(seen.text.split()) for seen in note.context.lines
+                     if seen.slug == note.slug), "")
+        on = (f" — on its line: {written_out(line, inline=True, handbook=handbook)}"
+              if line else " — on one of its lines")
+    else:
+        on = " — on the node" if act or made else ""
+    return on + (act + made).translate(_MD_INLINE_ESCAPE)
 
 
 def _run_blocks(node: StatusSnapshot, handbook: str = "") -> list[str]:
@@ -488,12 +661,8 @@ def _format_branch(node: StatusSnapshot, style: TimeStyle,
             f"on it and on {under} beneath it. "
             + ("The reported reading above is what its check measured." if declares
                else "It reports nothing of its own.")))
-        document.extend(_maintenance_lines(0,
-            node.maintenance_entry.note,
-            node.maintenance_entry.set_by,
-            node.maintenance_entry.expires_at,
-            style, handbook,
-        ))
+        document.extend(_window_lines(0, node.maintenance_entry,
+                                      node.maintenance_window, style, handbook))
     elif node.acknowledgment is not None:
         document.append(_item(0,
             f"**Shown as:** {_code_word(node.code)} — its own failure is seen, "
@@ -512,6 +681,8 @@ def _format_branch(node: StatusSnapshot, style: TimeStyle,
         document.append(_item(0,
             f"**Shown as:** {_code_word(node.code)} — rolled up from its own "
             f"reading and {under} beneath it."))
+    if node.planned_entry is not None:
+        document.extend(_planned_lines(0, node.planned_entry, style, handbook))
     document.extend(_time_facts(node, style, since, before, began))
     document.extend(_details_block(details, origin))
     document.extend(_tags_block(tags))
@@ -542,8 +713,9 @@ def _format_branch(node: StatusSnapshot, style: TimeStyle,
 def _handled_block(node: StatusSnapshot, style: TimeStyle,
                    origin: Origin | None) -> list[str]:
     """What is handled beneath a branch, as its page's *why* card says it (ADR-0135
-    decision 7): under its total, by job — in maintenance, accepted (ADR-0142) and by
-    a rule (ADR-0137) — each rule with the node it stands on, beneath the branch, a
+    decision 7): under its total, by job — in maintenance, accepted (ADR-0142),
+    silenced (ADR-0144) and by a rule (ADR-0137) — each rule with the node it stands
+    on, beneath the branch, a
     line's with that line, and what its part reads under it where that is a failure,
     who set it and until when. Written where the card stands, a branch that shows an
     error, a warning or ok; a branch in maintenance says why in its own pin, and
@@ -557,6 +729,7 @@ def _handled_block(node: StatusSnapshot, style: TimeStyle,
     for jobs, title in (((MAINTENANCE_RULE,),
                          f"{status_icon(StatusCode.MAINTENANCE)} In maintenance"),
                         ((SEEN_RULE,), f"{_ACCEPTED_SIGN} Accepted"),
+                        ((SILENCED_RULE,), f"{_SILENCED_SIGN} Silenced"),
                         ((AGGREGATION_RULE,), "§ By a rule")):
         rows = [rule for rule in rules if rule.job in jobs]
         if not rows:
@@ -572,9 +745,19 @@ def _handled_rule(rule: HandledRule, depth: int, style: TimeStyle,
                   handbook: str = "") -> list[str]:
     """One rule a branch's *why* lists: *db/pool, reads error ⛔ — by ada, until …*,
     or *a line of db/pool* with the line's text nested beneath it, its own Markdown
-    as an outline writes a line's."""
+    as an outline writes a line's — *a line of db/pool, not reported now*, with
+    nothing beneath it, where its node does not report the line now: the comma keeps
+    it the line's, where *db/pool not reported now* reads as a node that is not —
+    which is what it says where no node stands at its path now
+    (``HandledRule.gone``), and *a line of db/pool not reported now* of a line of
+    such a node, whose lines go with it."""
     name = rule.name.translate(_MD_INLINE_ESCAPE)
-    said = f"a line of {name}" if rule.slug else name
+    if rule.gone:
+        said = (f"a line of {name} not reported now" if rule.slug
+                else f"{name} not reported now")
+    else:
+        said = (name if not rule.slug else f"a line of {name}" if rule.line
+                else f"a line of {name}, not reported now")
     if rule.reads is not None:
         said += f", reads {_code_word(rule.reads)}"
     if rule.rule is not None:
@@ -585,6 +768,19 @@ def _handled_rule(rule: HandledRule, depth: int, style: TimeStyle,
         lines = [_item(depth, f"{said}, counts {counts} — by the rule "
                               f"{at.rule.name.translate(_MD_INLINE_ESCAPE)}, since "
                               f"{at.rule.since.isoformat()}")]
+    elif rule.entry is not None and rule.entry.kind == SILENCED:
+        # A person's silence (ADR-0144): who, what it counts as, and its deadline.
+        entry = rule.entry
+        assert entry.expires_at is not None
+        actor = (entry.set_by or "an admin").translate(_MD_INLINE_ESCAPE)
+        lines = [_item(depth, f"{said} — silenced by {actor}, counting as "
+                              f"{_held_at(entry)}, until {style.at(entry.expires_at)}")]
+    elif rule.entry is not None and rule.entry.kind == DONE:
+        # A person's done (ADR-0146): who, and what ends it — its line reading
+        # anything other than the failure it closed, which `reads` says.
+        actor = (rule.entry.set_by or "an admin").translate(_MD_INLINE_ESCAPE)
+        lines = [_item(depth, f"{said} — done by {actor}, until it reads anything "
+                              f"else")]
     elif rule.entry is not None and rule.entry.kind != MAINTENANCE:
         # A person's acknowledgment (ADR-0142): its kind, who, and what ends it.
         entry = rule.entry
@@ -594,11 +790,10 @@ def _handled_rule(rule: HandledRule, depth: int, style: TimeStyle,
         lines = [_item(depth, f"{said} — {entry.kind} by {actor}, until it "
                               f"changes{until}")]
     else:
-        assert rule.entry is not None and rule.entry.expires_at is not None
+        assert rule.entry is not None and rule.ends is not None
         actor = (rule.entry.set_by or "an admin").translate(_MD_INLINE_ESCAPE)
-        lines = [_item(depth, f"{said} — by {actor}, until "
-                              f"{style.at(rule.entry.expires_at)}")]
-    if rule.slug:
+        lines = [_item(depth, f"{said} — by {actor}, until {style.at(rule.ends)}")]
+    if rule.slug and rule.line:
         lines.extend(_markdown_item(depth + 1,
                                     written_out(rule.line, handbook=handbook)))
     return lines
@@ -643,38 +838,88 @@ def _node_facts(node: StatusSnapshot, style: TimeStyle,
 
     Two statuses can appear, and the difference between them is the point.
     **Reported** is what the check measured.  **Shown as** appears only when the
-    node presents something else — which is a pin, the one transform that makes
-    them differ (`_own_code`) — and names it rather than letting the reader
-    believe the tree measured `maintenance`.
+    node presents something else, and says by what (`_own_code`, ADR-0135) rather
+    than letting the reader believe the tree measured it: a pin on the node, or its
+    lines — their pins, a person's seen or silence on one, a configured rule on
+    them (:func:`_shown_by`) — the pin or the rule stated directly beneath it.
     """
+    handbook = _handbook_of(origin, node.path)
     facts = [
         _item(0, f"**Path:** {node.path.translate(_MD_INLINE_ESCAPE)}"),
         *_origin_lines(origin, style, node),
         _item(0, f"**Reported:** {_code_word(node.reported_code)}"),
     ]
-    if node.own_code != node.reported_code:
+    shown = node.own_code != node.reported_code
+    if shown:
         # a node no check has written has no reading for the pin to stand over
         # (ADR-0115 decision 6), and saying it was measured would invent one
         measured = ("no check has written this node." if node.timestamp is None
                     else "the reported reading above is what the check measured.")
         facts.append(_item(0,
-            f"**Shown as:** {_code_word(node.own_code)} — a maintenance pin is "
-            f"in force; {measured}"))
+            f"**Shown as:** {_code_word(node.own_code)} — {_shown_by(node)}; "
+            f"{measured}"))
     # The pin itself directly under the line that says one is in force, rather
     # than at the foot of the list: the two are one statement, and five time
-    # facts between them is where a reader stops connecting them.
+    # facts between them is where a reader stops connecting them. A configured
+    # rule on its lines stands there for the same reason.
     if node.maintenance_entry is not None:
-        facts.extend(_maintenance_lines(0,
-            node.maintenance_entry.note,
-            node.maintenance_entry.set_by,
-            node.maintenance_entry.expires_at,
-            style, _handbook_of(origin, node.path),
-        ))
+        facts.extend(_window_lines(0, node.maintenance_entry,
+                                   node.maintenance_window, style, handbook))
+    elif shown and not node.maintenance:
+        facts.extend(_line_rules(node, handbook))
     if node.acknowledgment is not None:
         facts.extend(_acknowledgment_lines(0, node.acknowledgment, style,
-                                           _handbook_of(origin, node.path)))
+                                           handbook))
+    if node.planned_entry is not None:
+        facts.extend(_planned_lines(0, node.planned_entry, style, handbook))
     facts.extend(_time_facts(node, style, since, before, began))
     return facts
+
+
+def _shown_by(node: StatusSnapshot) -> str:
+    """By what a node shows other than its check reported, as a clause after
+    *Shown as* (ADR-0135: every surface says by what): *a maintenance pin is in
+    force* on the node, which wins outright; *every line of its own is in
+    maintenance* where its lines' pins left it nothing to count (ADR-0124's words);
+    else *rolled up from its lines*, which count for it as children would (ADR-0042),
+    and how many of them a pin, a person's seen or a silence counts otherwise
+    (ADR-0041, ADR-0142, ADR-0144), or a done shows as the ok it counts as
+    (ADR-0146). A configured rule that makes one of them count otherwise is stated
+    beneath (:func:`_line_rules`)."""
+    if node.maintenance or node.maintenance_entry is not None:
+        return "a maintenance pin is in force"
+    lines = node.reasons
+    if lines and all(line.quiet for line in lines):
+        return "every line of its own is in maintenance"
+    marked = [line.acknowledgment.kind for line in lines
+              if line.accepted and line.acknowledgment is not None]
+    counted = [(sum(1 for line in lines if line.quiet), "in maintenance"),
+               (marked.count(DONE), "done"), (marked.count(SEEN), "seen"),
+               (marked.count(SILENCED), "silenced")]
+    said = [f"{count} {'is' if count == 1 else 'are'} {word}"
+            for count, word in counted if count]
+    if not said:
+        return "rolled up from its lines"
+    listed = said[0] if len(said) == 1 else f"{', '.join(said[:-1])} and {said[-1]}"
+    return f"rolled up from its lines, of which {listed}"
+
+
+def _line_rules(node: StatusSnapshot, handbook: str = "") -> list[str]:
+    """Each configured rule that changes how one of a node's lines counts in it now
+    (ADR-0137), as its block on the node's page says it — *§ On its lines, warn ⚠️
+    counts as ok ✅ while fewer than 6 fail — 5 do, by the rule **a short review
+    queue**, since 2026-10-24* — and its note beneath, as a pin's is beneath it."""
+    lines: list[str] = []
+    for at in lines_rules(node):
+        if not at.changes:
+            continue
+        said = written_out(rule_said(at.rule, "lines", failing=at.failing),
+                           inline=True, handbook=handbook)
+        lines.append(_item(0, f"§ {said}, since {at.rule.since.isoformat()}"))
+        if at.rule.note:
+            lines.extend(_markdown_item(1, written_out(at.rule.note,
+                                                       handbook=handbook)))
+    return lines
 
 
 def _origin_lines(origin: Origin | None, style: TimeStyle,
@@ -933,15 +1178,13 @@ def _finding(node: StatusSnapshot, code: StatusCode, depth: int, style: TimeStyl
     lines = [_item(depth, f"{_label(node, handbook)} {state}"
                           f"{_stood(node, style, periods)}")]
     if node.maintenance_entry is not None:
-        lines.extend(_maintenance_lines(depth + 1,
-            node.maintenance_entry.note,
-            node.maintenance_entry.set_by,
-            node.maintenance_entry.expires_at,
-            style, handbook,
-        ))
+        lines.extend(_window_lines(depth + 1, node.maintenance_entry,
+                                   node.maintenance_window, style, handbook))
     if node.acknowledgment is not None:
         lines.extend(_acknowledgment_lines(depth + 1, node.acknowledgment, style,
                                            handbook))
+    if node.planned_entry is not None:
+        lines.extend(_planned_lines(depth + 1, node.planned_entry, style, handbook))
     for reason in node.reasons:
         lines.extend(_format_reason(reason, depth + 1, style, handbook))
     return lines
@@ -1028,21 +1271,42 @@ def _label(node: StatusSnapshot, handbook: str = "") -> str:
 
 def _format_reason(reason: ReasonLine, depth: int, style: TimeStyle,
                    handbook: str = "") -> list[str]:
-    """A line, and its pin where it has one, as an outline lists it: its text written
-    out (:func:`written_out`), ``handbook`` the address of its node's handbook."""
+    """A line, and what handles it where something does — its pin, a person's seen
+    or silence, or a configured rule while it changes how the line counts — as an
+    outline lists it: its text written out (:func:`written_out`), ``handbook`` the
+    address of its node's handbook."""
     lines = _markdown_item(depth, written_out(reason.text, handbook=handbook),
                            _reason_cues(reason))
     if reason.maintenance is not None:
-        lines.extend(_maintenance_lines(depth + 1,
-            reason.maintenance.note,
-            reason.maintenance.set_by,
-            reason.maintenance.expires_at,
-            style, handbook,
-        ))
+        lines.extend(_window_lines(depth + 1, reason.maintenance, reason.window,
+                                   style, handbook))
     if reason.acknowledgment is not None:
         lines.extend(_acknowledgment_lines(depth + 1, reason.acknowledgment, style,
                                            handbook))
+    if reason.planned is not None:
+        lines.extend(_planned_lines(depth + 1, reason.planned, style, handbook))
+    if _ruled(reason):
+        lines.append(_item(depth + 1, _rule_mark_said(reason)))
     return lines
+
+
+def _ruled(reason: ReasonLine) -> bool:
+    """Whether a configured rule's mark stands on a line, as the page draws it
+    (ADR-0143): while the rule changes how the line counts, and no pin or person's
+    acknowledgment does, which are the louder facts."""
+    return (reason.rule is not None and reason.rule.changes and not reason.quiet
+            and not reason.accepted)
+
+
+def _rule_mark_said(reason: ReasonLine) -> str:
+    """A ruled line's mark in words, as its title on the page says it (ADR-0137,
+    ADR-0143): *§ Counts as ok ✅ by the rule **a short review queue***, or *as
+    nothing* where the rule leaves the line out — so that a rule on some of a node's
+    lines says which."""
+    at = reason.rule
+    assert at is not None
+    counts = "nothing" if at.counts is None else _code_word(at.counts)
+    return f"§ Counts as {counts} by the rule **{plain(at.rule.name)}**"
 
 
 def _reason_cues(reason: ReasonLine) -> str:
@@ -1062,16 +1326,46 @@ def _reason_cues(reason: ReasonLine) -> str:
     clipped.
     """
     cues = []
-    if reason.code is not None:
+    if reason.accepted and reason.acknowledgment is not None and (
+            reason.acknowledgment.kind == DONE):
+        # a done line shows ok, the failure it closed said beneath it (ADR-0146)
+        cues.append(status_icon(StatusCode.OK))
+    elif reason.code is not None:
         cues.append(status_icon(reason.code))
     if reason.running:
         cues.append("(running)")
     return " ".join(cues)
 
 
+def _window_lines(depth: int, pin: Pin, window: Window | None, style: TimeStyle,
+                  handbook: str = "") -> list[str]:
+    """A maintenance pin that holds, as a document states it (ADR-0150): its window
+    open's end, and for a series its schedule beside it — the page's sentence, and the
+    next start after this window or *its last window* (landing 4; decision 3 of #35's
+    note) — named by whoever set the series, and by whoever extended the window where
+    one did, as its block's first row names them."""
+    opened = (style.opened(pin) if pin.schedule is not None
+              and not pin.schedule.is_one_off else None)
+    if opened is None:
+        return _maintenance_lines(depth, pin.note, pin.set_by,
+                                  _window_end(pin, window), style, handbook)
+    sentence = style.words.sentence(pin)
+    series = f"{sentence[:1].lower()}{sentence[1:]}"
+    if opened.next is not None:
+        series += f" · next {style.at(opened.next.start)}"
+    elif opened.last:
+        series += " · its last window"
+    if opened.shut is not None:
+        series += f" · {opened.shut.said(style.at)}"
+    return _maintenance_lines(depth, pin.note, pin.created_by,
+                              _window_end(pin, window), style, handbook,
+                              series=series, extended_by=opened.extended_by)
+
+
 def _maintenance_lines(depth: int, note: str, set_by: str,
                        expires_at: datetime | None, style: TimeStyle,
-                       handbook: str = "") -> list[str]:
+                       handbook: str = "", *, series: str = "",
+                       extended_by: str = "") -> list[str]:
     """One maintenance reading plus its authored Markdown explanation.
 
     Authorship and expiry are structural text; the explanation is source content and
@@ -1081,11 +1375,15 @@ def _maintenance_lines(depth: int, note: str, set_by: str,
 
     The expiry is written through ``style``, offset and all: *until 10:00* in a
     pasted document is worth less than nothing if the reader's ten o'clock is an
-    hour from the one the pin ends at.
+    hour from the one the pin ends at. A series' window says who extended it, and its
+    schedule after it (``series``, :func:`_window_lines`).
     """
     actor = set_by or "an admin"
     until = "" if expires_at is None else f", until {style.at(expires_at)}"
+    if extended_by:
+        until += f", extended by {extended_by}"
     attribution = (f"🛠️ Maintenance — by {actor}{until}"
+                   + (f"; its schedule: {series}" if series else "")
                    ).translate(_MD_INLINE_ESCAPE)
     lines = [_item(depth, attribution)]
     if note and note != NO_NOTE:
@@ -1094,22 +1392,78 @@ def _maintenance_lines(depth: int, note: str, set_by: str,
     return lines
 
 
+def _window_end(pin: Pin, window: Window | None) -> datetime | None:
+    """Where a maintenance pin's time runs out, as a document says it: its window
+    open's end (ADR-0150) — never a series' schedule's end a year away — or its own
+    where the snapshot carries none."""
+    return pin.expires_at if window is None else window.end
+
+
+def _planned_lines(depth: int, planned: Planned, style: TimeStyle,
+                   handbook: str = "") -> list[str]:
+    """A maintenance entry planned, as a document lists it after its part's pins
+    (ADR-0150): *🛠️ Planned — once, from … until …, by anna*, a series' with its next
+    start, *· next …*, and why no window is to open or from when its windows stop,
+    where its holiday list says so — its sentence the page's, its instants with
+    their offset — and its note beneath it, as a pin's is."""
+    pin = planned.pin
+    words = style.words
+    sentence = words.sentence(pin)
+    actor = pin.set_by or "an admin"
+    said = f"🛠️ Planned — {sentence[:1].lower()}{sentence[1:]}, by {actor}"
+    assert pin.schedule is not None
+    if not pin.schedule.is_one_off and planned.next is not None:
+        said += f" · next {style.at(planned.next.start)}"
+    if why := words.why(planned):
+        said += f" · {why}"
+    lines = [_item(depth, said.translate(_MD_INLINE_ESCAPE))]
+    if pin.note and pin.note != NO_NOTE:
+        lines.extend(_markdown_item(depth + 1,
+                                    written_out(pin.note, handbook=handbook)))
+    return lines
+
+
 #: The sign a pasted document gives an acknowledgment (ADR-0142), where the page
 #: draws a ringed check: a checked box, which is no status's sign.
 _ACCEPTED_SIGN = "☑️"
+
+#: The sign a pasted document gives a silence (ADR-0144), where the page draws a bell
+#: struck through: the bell with its stroke, U+1F515.
+_SILENCED_SIGN = "🔕"
+
+
+def _held_at(pin: Pin) -> str:
+    """What a silence holds its part at, in this document's words: *ok ✅*, or *warn
+    ⚠️ at most*."""
+    assert pin.level is not None
+    said = _code_word(pin.level)
+    return said if pin.level is StatusCode.OK else f"{said} at most"
 
 
 def _acknowledgment_lines(depth: int, pin: Pin, style: TimeStyle,
                           handbook: str = "") -> list[str]:
     """An acknowledgment as an outline states it (ADR-0142), as a pin is stated: *☑️
     Seen — by ada at error ⛔, until it changes* — and *or until …* where it was
-    given an end — with its note nested beneath it as its own Markdown."""
+    given an end — a silence *🔕 Silenced — by ada, counting as ok ✅, until …*
+    (ADR-0144), and a done *☑️ Done — by ada, closing error ⛔, until it reads
+    anything else* (ADR-0146), with its note nested beneath it as its own
+    Markdown."""
     actor = pin.set_by or "an admin"
-    at = "" if pin.status is None else f" at {_code_word(pin.status)}"
-    until = ("" if pin.expires_at is None
-             else f", or until {style.at(pin.expires_at)} at the latest")
-    attribution = (f"{_ACCEPTED_SIGN} {pin.kind.capitalize()} — by {actor}{at}, "
-                   f"until it changes{until}").translate(_MD_INLINE_ESCAPE)
+    if pin.kind == SILENCED:
+        assert pin.expires_at is not None
+        attribution = (f"{_SILENCED_SIGN} Silenced — by {actor}, counting as "
+                       f"{_held_at(pin)}, until {style.at(pin.expires_at)}"
+                       ).translate(_MD_INLINE_ESCAPE)
+    elif pin.kind == DONE:
+        closing = "" if pin.status is None else f", closing {_code_word(pin.status)}"
+        attribution = (f"{_ACCEPTED_SIGN} Done — by {actor}{closing}, until it "
+                       f"reads anything else").translate(_MD_INLINE_ESCAPE)
+    else:
+        at = "" if pin.status is None else f" at {_code_word(pin.status)}"
+        until = ("" if pin.expires_at is None
+                 else f", or until {style.at(pin.expires_at)} at the latest")
+        attribution = (f"{_ACCEPTED_SIGN} {pin.kind.capitalize()} — by {actor}{at}, "
+                       f"until it changes{until}").translate(_MD_INLINE_ESCAPE)
     lines = [_item(depth, attribution)]
     if pin.note:
         lines.extend(_markdown_item(depth + 1,

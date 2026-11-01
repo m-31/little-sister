@@ -383,8 +383,8 @@ class ReadoutTests(TestCase):
 
 
 class DrawableTests(TestCase):
-    """Whether a measure has a curve over a series, answered without drawing it
-    (plan item 0d): by the rules the curve itself is drawn by, and reading no further
+    """Whether a measure has a curve over a series, answered without drawing it:
+    by the rules the curve itself is drawn by, and reading no further
     than the first reading that gives the measure a number."""
 
     CASES: ClassVar[dict[str, list[Placed]]] = {
@@ -428,7 +428,7 @@ class DrawableTests(TestCase):
 
 class WrittenTimesTests(TestCase):
     """How a curve writes an instant — a hover strip's title and the axis ends — is
-    its caller's to hand it (plan item 0e): the configured zone and format unless the
+    its caller's to hand it: the configured zone and format unless the
     caller says otherwise, and a page drawing several curves over one series' readings
     hands them all one writer that remembers what it wrote."""
 

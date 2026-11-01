@@ -1,7 +1,7 @@
 # ADR-0137 — A deployment says in a table how a part of its tree counts above it
 
 - **Status:** Accepted
-- **Date:** 2026-10-24
+- **Date:** 2026-11-01 (accepted 2026-10-24)
 - **Related:** [ADR-0032](0032-status-contribution-boundary.md) (the contribution
   boundary these rules act at — rules 5 to 8),
   [ADR-0039](0039-status-rollup-semantics.md) (the roll-up — rule 4 restated),
@@ -24,7 +24,13 @@
   [ADR-0029](0029-per-user-presentation-preferences.md) (`failures`, the budget a
   lowered part does not spend),
   [ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md) (decision 7,
-  `tag:`, the selector's other half)
+  `tag:`, the selector's other half),
+  [ADR-0143](0143-a-handled-part-carries-its-jobs-mark-and-a-rail-in-the-color-it-counts-as.md)
+  (how a handled part looks — decision 10 amended),
+  [ADR-0144](0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md)
+  (*silenced*, which a rule meets by the stricter cap — decision 7 amended),
+  [ADR-0146](0146-an-event-marked-done-shows-ok-until-its-line-reads-anything-else.md)
+  (*done*, which counts its line over a rule on lines)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -160,8 +166,12 @@ the first rule whose change still reaches the parent: an ERROR held at WARN coun
 under `{WARN: OK}` by damping, since without the hold it would count ERROR, and WARN
 under `{ERROR: WARN}` by the table, which would count WARN without the hold. The
 contract's *one per node, the first of these that applies* holds, read as the first
-whose change the parent sees. A rule's name, table and note are the page's to say,
-never a field a client switches on.
+whose change the parent sees. Where a person's silence and a configured rule stand on
+one part, the one that counts the part for less counts, the rule where both count it
+the same, and `contribution.by` names the one that decided
+([ADR-0144](0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md)
+decision 3). A rule's name, table and note are the page's to say, never a field a client
+switches on.
 
 ### 6. Every part keeps its true color, and a rule on lines changes what their node shows
 
@@ -171,7 +181,10 @@ parent counts of it. A rule on lines changes what their node shows, as a line's 
 does, each line keeping its color and the node showing what they count as: a line is a
 child of its node (ADR-0032 decision 8), and what a part shows is never transformed,
 one level down. A pinned line is the pin's — no rule's mark stands on it, and it counts
-toward no count.
+toward no count. A line a person marked seen or done counts as OK in its node over a
+rule on the node's lines
+([ADR-0146](0146-an-event-marked-done-shows-ok-until-its-line-reads-anything-else.md)
+decision 4).
 
 A node all of whose parts are left out — its every line by a rule on its lines, or its
 every child by `under: <node>/*` — counts nothing and reads UNDEFINED, *nothing
@@ -191,7 +204,10 @@ node's own boundary having nothing to count; an N of at least 2, below which the
 would never apply; and a table, since `counts_as: nothing` with a count would leave a
 healthy node's parts out too, where `{WARN: OK, ERROR: OK}` says what is meant. A pinned
 line counts toward no count, and the instance's own branch is no child of the root's
-that a rule counts.
+that a rule counts. A part a person holds — silenced or seen — counts toward a count as
+it reads, the part itself counting as it is held, so that a held child lowers how many
+fail no more than a held line does; a line marked done counts as the OK it shows, its
+event being over (ADR-0144 decision 3, ADR-0146 decision 4).
 
 ### 8. What cannot apply is said at the start, and what changes nothing now beside the rule
 
@@ -224,9 +240,14 @@ by what. What a part shows is never transformed.
 ### 10. On the page a configured rule is §, its block where it acts, and *By a rule*
 
 A configured rule's mark is §, drawn as a path at the cues' height (ADR-0135
-decision 1). Its block says one sentence — what it makes of its part, where, while fewer
-than its count fail and how many do, and by which rule — each status drawn as its sign
-(ADR-0133 decision 5): *{error} counts as {warn} above, by the rule develop advises*;
+decision 1), in the color its table gives the part — amber for a cap, red for a floor,
+the undefined ink where it counts as nothing: on a line at its top right, beside a rail
+in that color down the line's right edge, and on a node whose count a rule changes
+beside its head's state, the node's box drawing the rail
+([ADR-0143](0143-a-handled-part-carries-its-jobs-mark-and-a-rail-in-the-color-it-counts-as.md)
+decisions 2 to 4). Its block says one sentence — what it makes of its part, where, while
+fewer than its count fail and how many do, and by which rule — each status drawn as its
+sign (ADR-0133 decision 5): *{error} counts as {warn} above, by the rule develop advises*;
 *On its lines, {warn} counts as {ok}*; *Of its children, {error} counts as {warn} while
 fewer than 2 fail — 1 does*; on a child counted, *Among /web's children, …*. The tally
 says how many fail — *7 do*, *none does*, and *12 do* on the page of a count reached —
@@ -236,15 +257,15 @@ is configured — *Configured in config/aggregation.yaml since 2026-09-05* — s
 where it is changed.
 
 Standing on whatever fill its node's status gives it, where maintenance's block stands
-on its own tint, its dashes are its ink at 75 %, as a head's squares' edges are, and its
-note mark washes at 8 % under the pointer, a ring saying which is open: at maintenance's
-65 % and 12 % a block on an amber or a green node fell under the non-text bar and AA in
-four themes (`tests/sweep_contrast.py`). *Built so.*
+on its own tint, its dashes are its ink at 75 %, as a head's squares' edges are, and on
+the wall, where it is a link, it washes at 8 % under the pointer: at maintenance's 65 %
+and 12 % a block on an amber or a green node fell under the non-text bar and AA in four
+themes (`tests/sweep_contrast.py`). *Built so.*
 
 - **On the wall** a block stands only while its rule changes a count, so that a block
-  and ◇ follow one predicate (ADR-0135 decision 5), its note behind the note mark. A
-  line it changes carries § before its words, its tooltip and its hidden text saying
-  what the line counts as and by which rule.
+  and ◇ follow one predicate, and while the browser's *◇ details* is on (ADR-0135
+  decision 5). A line it changes carries its § at its top right, the mark's tooltip and
+  its accessible name saying what the line counts as and by which rule.
 - **On a node's page** every rule that picks a place at the node stands at the head
   whether it acts now or not, *changes nothing now* beside it where it does not, with
   the rules it decides over.

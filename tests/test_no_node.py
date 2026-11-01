@@ -281,8 +281,13 @@ class WhatIsKnownTests(_Estate):
         beneath = _words(self._said(f"/status/{GONE}/eu"))
         self.assertNotIn("the job is being moved", beneath)
         self.assertNotIn("another job", _words(self._said(f"/status/{GONE}")))
-        self.assertNotIn("the job is being moved",
-                         self.client.get("/status/batch").get_data(as_text=True))
+        # the node it stands beside lists it, the pin standing whether or not its
+        # node is reported now — counted there as what stands beneath, never as that
+        # node's own (ADR-0147 decision 2)
+        batch = self.client.get("/status/batch").get_data(as_text=True)
+        self.assertNotIn("the job is being moved", _words(
+            batch.split('<div id="status-grid">', 1)[0]))
+        self.assertIn("2 handled: 2 nodes in maintenance", batch)
 
     def test_a_viewer_reads_the_pin_without_buttons(self) -> None:
         _pin(self.tree, "/batch/export", "being moved to the new queue")

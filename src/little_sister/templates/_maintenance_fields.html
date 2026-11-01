@@ -17,17 +17,31 @@
 
     **A ringed check's fields** (`ending`, ADR-0142) are the same two, the second an
     end the acknowledgment may be given: blank, it has none, and ends as what it
-    accepted changes. -#}
-{% macro kept_hint(maintenance_default, ending=false) -%}
+    accepted changes.
+
+    **A window's start** (ADR-0150): where `starts` is given — the form for a new
+    window, and a planned window's editor — *Starts* stands before the end, in the end
+    field's grammar and read as it is, blank meaning now; a duration in the end field
+    then counts from the start, and the end is at most a year from now. A planned
+    window's editor passes its start twice, as `starts` and `starts_was`, as it does
+    its end, and the route keeps the stored instant while the two agree. A maintenance
+    entry's editor is `schedule_fields` below, whose *Starts* an open one-off keeps
+    too, blank, since its start has passed and a repeat chosen starts the windows to
+    come at it: with script it shows once a repeat is chosen, and without it stands
+    with its hint to leave it blank unless one is. -#}
+{% from '_schedule_preview.html' import schedule_preview %}
+{% macro kept_hint(maintenance_default, ending=false, starts=false) -%}
 {%- if ending -%}
 Unchanged, it keeps this end; emptied, it has none, and ends as what it accepted changes.
+{%- elif starts -%}
+Unchanged, the window keeps this end; emptied, it runs for the default, {{ maintenance_default }}, from its start.
 {%- else -%}
 Unchanged, the pin keeps this expiry; emptied, it runs for the default, {{ maintenance_default }}, from now.
 {%- endif -%}
 {%- endmacro %}
 {% macro maintenance_fields(note, duration, prefix, maintenance_default,
                             maintenance_timezone, compact=false, expiry_was='',
-                            ending=false) -%}
+                            ending=false, starts=none, starts_was='') -%}
 <div class="mb-2">
     <label class="form-label" for="{{ prefix }}-note">Note</label>
     <textarea class="form-control{% if compact %} form-control-sm{% endif %} maintenance-reason-source"
@@ -35,6 +49,20 @@ Unchanged, the pin keeps this expiry; emptied, it runs for the default, {{ maint
               placeholder="{{ 'what was found?' if ending else 'why?' }}">{{ note }}</textarea>
     <div class="form-text">Markdown is supported; raw HTML is shown as text.</div>
 </div>
+{%- if starts is not none %}
+<div class="mb-2">
+    <label class="form-label" for="{{ prefix }}-starts">Starts</label>
+    <input class="form-control{% if compact %} form-control-sm{% endif %}"
+           id="{{ prefix }}-starts" name="starts" value="{{ starts }}"
+           placeholder="blank: now — or e.g. Sat 22:00"
+           aria-describedby="{{ prefix }}-starts-said">
+    {%- if starts_was %}
+    <input type="hidden" name="starts_was" value="{{ starts_was }}">
+    {%- endif %}
+    <div class="form-text" id="{{ prefix }}-starts-said">
+        {%- if starts_was and starts == starts_was %}Unchanged, the window keeps this start; emptied, it starts now.{% else %}Blank: now.{% endif %} A duration below then counts from the start, and the end is at most a year from now.</div>
+</div>
+{%- endif %}
 <div class="mb-2">
     <label class="form-label" id="{{ prefix }}-duration-label"
            for="{{ prefix }}-duration">{{ 'Until, if it should end sooner' if ending else 'Duration or expiry' }}</label>
@@ -45,14 +73,231 @@ Unchanged, the pin keeps this expiry; emptied, it runs for the default, {{ maint
     {%- if expiry_was %}
     <input type="hidden" name="expiry_was" value="{{ expiry_was }}">
     {%- if duration == expiry_was %}
-    <div class="form-text" id="{{ prefix }}-expiry-kept">{{ kept_hint(maintenance_default, ending) }}</div>
+    <div class="form-text" id="{{ prefix }}-expiry-kept">{{ kept_hint(maintenance_default, ending, starts is not none) }}</div>
     {%- endif %}
     {%- endif %}
-    <div class="form-text" id="{{ prefix }}-expiry-zone">
+    {{ zone_text(prefix ~ '-expiry-zone', maintenance_timezone) }}
+    {{ expiry_help(prefix ~ '-expiry-help') }}
+</div>
+{%- endmacro %}
+
+{#- **A maintenance entry's editor** (ADR-0150, landing 4; #35's note, decisions 4 and
+    6): one column, in the order it is read — *Note*, *Starts*, *Repeats* and the end
+    field, then the rest, then the buttons the form draws after it, so that the
+    sentence is the last thing read before *Set maintenance*.
+
+    The first look keeps what a window set now needs, the end field taking a duration
+    from the start or an end with *Once*; *Repeats* — once, or every N days, weeks or
+    months — turns it into *Length*, `8h` exact and `1d` calendar days. A later start or
+    a repeat opens the rest in place: the repeat's days — weekdays, *weekend* and
+    *working week* one click each; or a day of the month counted from its start or its
+    end, or the first to the fourth or the last of a weekday — *Until*, *Not on* with
+    the holiday list's name, *Times in …*, *Add an interval*, and beneath them what it
+    would set (`_schedule_preview.html`): the month, each day's hours, a click on a day
+    adding or leaving out its window (landing 5), then the windows added and left out,
+    each with ×, the next windows and the sentence. Without script the rest is the
+    browser's own disclosure, shown open where the editor is drawn with any of it, and
+    each of its buttons — *Preview*, *Add an interval*, an ×, *weekend*, *working week*,
+    a day of the month and its paging — sends the editor back with what it did, nothing
+    written; the stylesheet shows each part only where *Repeats* asks for it. With
+    script the rest opens as a repeat or a start is chosen, and what it would set
+    follows the fields (`maintenance-edit.js`).
+
+    `view` is the editor's every field (`app._ScheduleView`): filled from a standing
+    entry, given back from a form, or empty. *Starts*, the end field and *Until* carry
+    what they were filled with and the instant that says it, kept exactly while
+    unchanged. The form's first button is a hidden one that sets, so that Enter in a
+    field sets rather than pressing the first of the rest's buttons. -#}
+{% macro schedule_fields(view, prefix, maintenance_default, maintenance_timezone,
+                         compact=false) -%}
+{%- set sm = ' form-control-sm' if compact else '' -%}
+{%- set selects = ' form-select-sm' if compact else '' -%}
+{%- set choices = not_on_choices() -%}
+{%- set day_names = ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday') -%}
+{%- set day_keys = ('MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU') -%}
+<button class="ls-default-submit" type="submit" tabindex="-1" aria-hidden="true"></button>
+<div class="mb-2">
+    <label class="form-label" for="{{ prefix }}-note">Note</label>
+    <textarea class="form-control{{ sm }} maintenance-reason-source"
+              id="{{ prefix }}-note" name="note" rows="3" placeholder="why?">{{ view.note }}</textarea>
+    <div class="form-text">Markdown is supported; raw HTML is shown as text.</div>
+</div>
+<div class="mb-2{% if view.open_once %} ls-starts-open-once{% endif %}">
+    <label class="form-label" for="{{ prefix }}-starts">Starts</label>
+    <input class="form-control{{ sm }}"
+           id="{{ prefix }}-starts" name="starts" value="{{ view.starts }}"
+           placeholder="blank: now — or e.g. Sat 22:00"
+           aria-describedby="{{ prefix }}-starts-said">
+    {%- if view.starts_was %}
+    <input type="hidden" name="starts_was" value="{{ view.starts_was }}">
+    <input type="hidden" name="starts_at" value="{{ view.starts_at }}">
+    {%- endif %}
+    {%- if view.open_once %}
+    <input type="hidden" name="open_once" value="1">
+    {%- endif %}
+    <div class="form-text" id="{{ prefix }}-starts-said">
+        {%- if view.open_once %}This window is open, and its start has passed: leave it blank. With a repeat, it is when the windows to come start — blank, now.
+        {%- elif view.starts_was and view.starts == view.starts_was %}Unchanged, the window keeps this start; emptied, it starts now. A duration below then counts from the start, and the end is at most a year from now.
+        {%- else %}Blank: now. A duration below then counts from the start, and the end is at most a year from now. With a repeat, its windows start at this time of day, the first on the first day on or after it that the repeat picks.{% endif %}</div>
+</div>
+<div class="mb-2 ls-repeats">
+    <label class="form-label" for="{{ prefix }}-repeat">Repeats</label>
+    <div class="ls-repeats__row">
+        <select class="form-select{{ selects }} ls-repeats__select" id="{{ prefix }}-repeat" name="repeat">
+            {%- for value, word in (('once', 'Once'), ('daily', 'Daily'), ('weekly', 'Weekly'), ('monthly', 'Monthly')) %}
+            <option value="{{ value }}"{% if view.repeat == value %} selected{% endif %}>{{ word }}</option>
+            {%- endfor %}
+        </select>
+        <span class="ls-when-repeat ls-every">
+            <label for="{{ prefix }}-interval">every</label>
+            <input class="form-control{{ sm }} ls-every__count" id="{{ prefix }}-interval"
+                   name="interval" type="number" min="1" step="1" inputmode="numeric"
+                   value="{{ view.interval }}">
+            {%- set one = view.interval.strip() == '1' %}
+            <span class="ls-every__unit"><span class="ls-when-daily" data-unit="daily">{{ 'day' if one else 'days' }}</span><span class="ls-when-weekly" data-unit="weekly">{{ 'week' if one else 'weeks' }}</span><span class="ls-when-monthly" data-unit="monthly">{{ 'month' if one else 'months' }}</span></span>
+        </span>
+    </div>
+</div>
+<div class="mb-2">
+    <label class="form-label" id="{{ prefix }}-duration-label"
+           for="{{ prefix }}-duration"><span class="ls-when-once">Duration or expiry</span><span class="ls-when-repeat">Length</span></label>
+    {%- set once_said = 'e.g. 2h or Friday — default ' ~ maintenance_default %}
+    {%- set length_said = 'a length, e.g. 8h or 1d' %}
+    <input class="form-control{{ sm }}"
+           id="{{ prefix }}-duration" name="duration" value="{{ view.duration }}"
+           placeholder="{{ length_said if view.repeat and view.repeat != 'once' else once_said }}"
+           data-once-said="{{ once_said }}" data-length-said="{{ length_said }}"
+           aria-describedby="{{ prefix }}-length-said {{ prefix }}-expiry-zone">
+    {%- if view.expiry_was %}
+    <input type="hidden" name="expiry_was" value="{{ view.expiry_was }}">
+    {%- if view.duration == view.expiry_was %}
+    <div class="form-text ls-when-once" id="{{ prefix }}-expiry-kept">{{ kept_hint(maintenance_default, false, view.starts_was != '') }}</div>
+    {%- endif %}
+    {%- endif %}
+    <div class="form-text ls-when-repeat" id="{{ prefix }}-length-said">With a repeat, how long each window is: 8h exact, across a clock change too, or 1d for whole days.</div>
+    {#- a length is in no zone, and *Times in* names the one a repeat reads -#}
+    {{ zone_text(prefix ~ '-expiry-zone', view.zone or maintenance_timezone, 'ls-when-once') }}
+    {{ expiry_help(prefix ~ '-expiry-help') }}
+</div>
+<details class="ls-schedule-rest"{% if view.rest_open %} open{% endif %}>
+    <summary>Its days, until when, holidays, time zone — and what it sets</summary>
+    <div class="ls-schedule-rest__body">
+        <fieldset class="mb-2 ls-when-weekly ls-days">
+            <legend class="form-label">On</legend>
+            <div class="ls-days__row">
+                {%- for key in day_keys %}
+                <label class="ls-day"><input type="checkbox" name="weekday" value="{{ key }}"{% if key in view.weekdays %} checked{% endif %}><span>{{ day_names[loop.index0][:3] }}</span><span class="visually-hidden">{{ day_names[loop.index0][3:] }}</span></label>
+                {%- endfor %}
+            </div>
+            <div class="ls-days__picks">
+                <button class="btn btn-sm btn-outline-secondary ls-pick" type="submit" name="pick" value="weekend" data-ls-nowrite>weekend</button>
+                <button class="btn btn-sm btn-outline-secondary ls-pick" type="submit" name="pick" value="week" data-ls-nowrite>working week</button>
+            </div>
+            <div class="form-text">None ticked: the weekday of its start.</div>
+        </fieldset>
+        <fieldset class="mb-2 ls-when-monthly ls-month">
+            <legend class="form-label">On</legend>
+            <div class="ls-month__row">
+                <input class="form-check-input" type="radio" name="month_by" value="day" id="{{ prefix }}-month-by-day"{% if view.month_by != 'weekday' %} checked{% endif %}>
+                <label for="{{ prefix }}-month-by-day">day</label>
+                <input class="form-control{{ sm }} ls-month__day" type="number" min="1" max="31" step="1" inputmode="numeric" name="month_day" value="{{ view.month_day }}" aria-label="the day of the month" placeholder="its start's">
+                <select class="form-select{{ selects }} ls-month__from" name="month_from" aria-label="counted from">
+                    <option value="start"{% if view.month_from != 'end' %} selected{% endif %}>from the month's start</option>
+                    <option value="end"{% if view.month_from == 'end' %} selected{% endif %}>from the month's end</option>
+                </select>
+            </div>
+            <div class="ls-month__row">
+                <input class="form-check-input" type="radio" name="month_by" value="weekday" id="{{ prefix }}-month-by-weekday"{% if view.month_by == 'weekday' %} checked{% endif %}>
+                <label for="{{ prefix }}-month-by-weekday">the</label>
+                <select class="form-select{{ selects }}" name="month_nth" aria-label="which of them">
+                    {%- for value, word in (('1', 'first'), ('2', 'second'), ('3', 'third'), ('4', 'fourth'), ('-1', 'last')) %}
+                    <option value="{{ value }}"{% if view.month_nth == value %} selected{% endif %}>{{ word }}</option>
+                    {%- endfor %}
+                </select>
+                <select class="form-select{{ selects }}" name="month_weekday" aria-label="weekday">
+                    {%- for key in day_keys %}
+                    <option value="{{ key }}"{% if view.month_weekday == key %} selected{% endif %}>{{ day_names[loop.index0] }}</option>
+                    {%- endfor %}
+                </select>
+            </div>
+        </fieldset>
+        <div class="mb-2 ls-when-repeat">
+            <label class="form-label" for="{{ prefix }}-until">Until</label>
+            <input class="form-control{{ sm }}"
+                   id="{{ prefix }}-until" name="until" value="{{ view.until }}"
+                   placeholder="its last date, e.g. 2027-03-27"
+                   aria-describedby="{{ prefix }}-until-said">
+            {%- if view.until_was %}
+            <input type="hidden" name="until_was" value="{{ view.until_was }}">
+            <input type="hidden" name="until_at" value="{{ view.until_at }}">
+            {%- endif %}
+            <div class="form-text" id="{{ prefix }}-until-said">
+                {%- if view.kept %}Required: its last date, at most a year from the start of the window open now, {{ view.kept }}, which keeps its end. A date alone takes in that day.
+                {%- else %}Required: its last date, at most a year from now. A date alone takes in that day.{% endif %}</div>
+        </div>
+        {%- set readable = choices.lists %}
+        {%- set named_unreadable = view.not_on and view.not_on not in (readable | map('first') | list) %}
+        {%- if readable | length == 1 and not named_unreadable %}
+        <div class="mb-2 form-check ls-when-repeat ls-not-on">
+            <input class="form-check-input" type="checkbox" name="not_on" value="{{ readable[0][0] }}" id="{{ prefix }}-not-on"{% if view.not_on == readable[0][0] %} checked{% endif %}>
+            <label class="form-check-label" for="{{ prefix }}-not-on">Not on {{ readable[0][1] }}</label>
+        </div>
+        {%- elif readable and not named_unreadable %}
+        <div class="mb-2 ls-when-repeat ls-not-on">
+            <label class="form-label" for="{{ prefix }}-not-on">Not on</label>
+            <select class="form-select{{ selects }}" id="{{ prefix }}-not-on" name="not_on">
+                <option value=""{% if not view.not_on %} selected{% endif %}>no list: every day the repeat picks</option>
+                {%- for key, name in readable %}
+                <option value="{{ key }}"{% if view.not_on == key %} selected{% endif %}>{{ name }}</option>
+                {%- endfor %}
+                {%- for key, why in choices.unreadable %}
+                <option value="{{ key }}" disabled>{{ key }} — it cannot be read</option>
+                {%- endfor %}
+            </select>
+        </div>
+        {%- elif choices.unreadable or choices.broken or named_unreadable %}
+        {%- set why = choices.broken or (choices.unreadable[0][1] if choices.unreadable else 'no holiday list ' ~ view.not_on ~ ' can be read') %}
+        <div class="mb-2 form-check ls-when-repeat ls-not-on">
+            <input class="form-check-input" type="checkbox" id="{{ prefix }}-not-on" disabled{% if view.not_on %} checked{% endif %} aria-describedby="{{ prefix }}-not-on-said">
+            <label class="form-check-label" for="{{ prefix }}-not-on">Not on {{ view.not_on or (choices.unreadable[0][0] if choices.unreadable else 'holidays') }}</label>
+            <div class="form-text" id="{{ prefix }}-not-on-said">It cannot be read: {{ why }}.{% if view.not_on %} Saved here, it leaves out no list's days.{% endif %}</div>
+        </div>
+        {%- endif %}
+        <div class="mb-2">
+            <label class="form-label" for="{{ prefix }}-zone">Times in</label>
+            <input class="form-control{{ sm }}" id="{{ prefix }}-zone" name="zone"
+                   value="{{ view.zone or maintenance_timezone }}" list="ls-zones"
+                   autocomplete="off" spellcheck="false" aria-describedby="{{ prefix }}-zone-said">
+            {{ zone_list() }}
+            <div class="form-text" id="{{ prefix }}-zone-said">An IANA name, such as {{ maintenance_timezone }}: <em>Starts</em> and every time typed here are read in it, and its windows follow its clock.</div>
+        </div>
+        <fieldset class="mb-2 ls-add">
+            <legend class="form-label">Add an interval</legend>
+            <div class="ls-add__row">
+                <input class="form-control{{ sm }}" name="add_begins" value="{{ view.add_begins }}" aria-label="the interval's start" placeholder="from, e.g. Sat 09:00">
+                <input class="form-control{{ sm }}" name="add_ends" value="{{ view.add_ends }}" aria-label="the interval's end" placeholder="until, e.g. 2h or 12:00">
+                <button class="btn btn-sm btn-outline-secondary ls-add__button" type="submit" name="add" value="1" data-ls-nowrite>Add an interval</button>
+            </div>
+            <div class="form-text">A window of its own beside the repeat's, its start and its end read as the end field reads them.</div>
+        </fieldset>
+        <div class="ls-schedule-preview" id="{{ prefix }}-preview"
+             data-preview="{{ url_for('maintenance_preview') }}" data-prefix="{{ prefix }}">{{ schedule_preview(view, prefix) }}</div>
+        <button class="btn btn-sm btn-outline-secondary ls-preview-button" type="submit" name="preview" value="1" data-ls-nowrite>Preview</button>
+    </div>
+</details>
+{%- endmacro %}
+
+{#- The sentence under an end's field that says which timezone a time without one is
+    read in, and the click-opened table of what the field takes — one grammar for a
+    window's expiry, a *seen*'s end and a silence's deadline. -#}
+{% macro zone_text(id, maintenance_timezone, shown='') -%}
+<div class="form-text{% if shown %} {{ shown }}{% endif %}" id="{{ id }}">
         Timezone: {{ maintenance_timezone }} — used when the input has no
         <code>Z</code> or numeric offset.
     </div>
-    <details class="maintenance-expiry-help" id="{{ prefix }}-expiry-help">
+{%- endmacro %}
+{% macro expiry_help(id) -%}
+<details class="maintenance-expiry-help" id="{{ id }}">
         <summary>Which formats can I use?</summary>
         <div class="maintenance-expiry-help__table-wrap">
             <table class="maintenance-expiry-help__table">
@@ -72,5 +317,80 @@ Unchanged, the pin keeps this expiry; emptied, it runs for the default, {{ maint
             </table>
         </div>
     </details>
+{%- endmacro %}
+
+{#- **A done's field** (ADR-0146): its note, which says what was found. The event it
+    closes is its line's, which the form carries as `occurrence`, so that a line that
+    reads another since closes nothing; it has no end. Its id differs from the other
+    kinds' under one `prefix`, so that one editor carries every kind's fields. -#}
+{% macro done_fields(note, prefix, compact=false, occurrence='') -%}
+<div class="mb-2">
+    <label class="form-label" for="{{ prefix }}-done-note">Note</label>
+    <textarea class="form-control{% if compact %} form-control-sm{% endif %} maintenance-reason-source"
+              id="{{ prefix }}-done-note" name="note" rows="3"
+              placeholder="what was found?">{{ note }}</textarea>
+    <div class="form-text">Markdown is supported; raw HTML is shown as text.</div>
 </div>
+{%- if occurrence %}
+<input type="hidden" name="occurrence" value="{{ occurrence }}">
+{%- endif %}
+{%- endmacro %}
+
+{#- **A silence's fields** (ADR-0144): its note, which says what is being done; the
+    level it holds its part at above — counting as ok, or at most as a warning — its
+    radio sending `level`; and its deadline, which it always has: blank takes the
+    deployment's default, `silence_default`, and none lies more than thirty days
+    away. An edit passes the stored deadline twice, as `deadline` and `deadline_was`,
+    as an expiry's is, and the route keeps the stored instant while the two agree.
+    A silence that stands asks what changed (`changing`): a save that moves its
+    deadline later is refused without the sentence, and any save that has one keeps
+    it as a note of its own. Its ids differ from `maintenance_fields`' under one
+    `prefix`, so that the ringed check's editor carries both kinds' fields. -#}
+{% macro silence_fields(note, deadline, level, prefix, silence_default,
+                        maintenance_timezone, compact=false, deadline_was='',
+                        changing=false, changed='') -%}
+<div class="mb-2">
+    <label class="form-label" for="{{ prefix }}-silence-note">Note</label>
+    <textarea class="form-control{% if compact %} form-control-sm{% endif %} maintenance-reason-source"
+              id="{{ prefix }}-silence-note" name="note" rows="3"
+              placeholder="what is being done?">{{ note }}</textarea>
+    <div class="form-text">Markdown is supported; raw HTML is shown as text.</div>
+</div>
+<fieldset class="mb-2 silence-level">
+    <legend class="form-label">Counts above as</legend>
+    <div class="form-check form-check-inline">
+        <input class="form-check-input" type="radio" name="level" value="ok"
+               id="{{ prefix }}-level-ok"{% if level != 'warn' %} checked{% endif %}>
+        <label class="form-check-label" for="{{ prefix }}-level-ok">ok</label>
+    </div>
+    <div class="form-check form-check-inline">
+        <input class="form-check-input" type="radio" name="level" value="warn"
+               id="{{ prefix }}-level-warn"{% if level == 'warn' %} checked{% endif %}>
+        <label class="form-check-label" for="{{ prefix }}-level-warn">at most a warning</label>
+    </div>
+</fieldset>
+<div class="mb-2">
+    <label class="form-label" for="{{ prefix }}-deadline">Deadline</label>
+    <input class="form-control{% if compact %} form-control-sm{% endif %}"
+           id="{{ prefix }}-deadline" name="deadline" value="{{ deadline }}"
+           placeholder="e.g. 3d or Friday — default {{ silence_default }}, at most 30 days"
+           aria-describedby="{{ prefix }}-deadline-zone">
+    {%- if deadline_was %}
+    <input type="hidden" name="deadline_was" value="{{ deadline_was }}">
+    {%- if deadline == deadline_was %}
+    <div class="form-text" id="{{ prefix }}-deadline-kept">Unchanged, it keeps this deadline; emptied, it runs for the default, {{ silence_default }}, from now.</div>
+    {%- endif %}
+    {%- endif %}
+    {{ zone_text(prefix ~ '-deadline-zone', maintenance_timezone) }}
+    {{ expiry_help(prefix ~ '-deadline-help') }}
+</div>
+{%- if changing %}
+<div class="mb-2">
+    <label class="form-label" for="{{ prefix }}-changed">What changed</label>
+    <textarea class="form-control{% if compact %} form-control-sm{% endif %}"
+              id="{{ prefix }}-changed" name="changed" rows="2"
+              placeholder="asked when the deadline moves later">{{ changed }}</textarea>
+    <div class="form-text">Kept as a note of its own beside this one, with the deadline and the level saved; a deadline moved later asks for it.</div>
+</div>
+{%- endif %}
 {%- endmacro %}

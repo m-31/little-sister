@@ -1,11 +1,12 @@
 """A pin is one block on what it silences, and it is edited there (ADR-0104).
 
 The leaf page's half of that decision: the node's block a row at the head of the
-frame the page draws the node in, which runs round its lines (decision 8, backlog
-#91 §3.5), a line's block beneath its line, the controls that set a pin where its
-block will stand, the editor that opens in the block, and the expiry an edit shows
-and keeps. A card on the wall and a branch's head are `tests/test_wall_pins.py`'s;
-what every editor of a pin shares is the expiry rule, and that is here.
+frame the page draws the node in, which runs round its lines (decision 8), a line's
+block beneath its line, the doors that open the node's *Notes*
+tab, where a pin is set (decision 3 as ADR-0147 amends it), the editor that opens in
+the block, and the expiry an edit shows and keeps. A card on the wall and a branch's
+head are `tests/test_wall_pins.py`'s; what every editor of a pin shares is the expiry
+rule, and that is here.
 
 The page is read as a tree (`tests/page_tree.py`) wherever the claim is about
 *where* something stands.
@@ -21,6 +22,7 @@ from zoneinfo import ZoneInfo
 os.environ.setdefault("SECRET_KEY", "test-key")
 
 from little_sister import app as app_module
+from little_sister import instants
 from little_sister.checks import Unit
 from little_sister.pins import MAINTENANCE, Pin
 from little_sister.status import StatusCode
@@ -230,14 +232,19 @@ class PinBlockTests(_LeafCase):
                 self.assertEqual(app_module._time_left(now + left), said)
         self.assertEqual(app_module._time_left(None), "expired")
 
-    def test_a_pin_past_its_expiry_says_expired(self):
-        # until the sweep takes it, which is the engine's tick and not the page's
+    def test_a_pin_past_its_end_is_ended_by_the_page_that_asks(self):
+        # open and closed are decided at the moment a snapshot is asked (ADR-0150):
+        # the page that asks after the end ends the pin, as the tick would have a
+        # moment later, and says nothing of it
         self._workflows()
-        entry = self._pin_node(left=timedelta(seconds=-30))
-        until = app_module._localtime(entry.expires_at)
-        self.assertEqual(
-            self._stated(self._page())[0].one("rule-block__what").text(),
-            f"This node is in maintenance by lex until {until} · expired")
+        entry = self._pin_node(left=timedelta(minutes=5))
+        assert entry.expires_at is not None
+        later = entry.expires_at + timedelta(seconds=30)
+        with mock.patch.object(instants, "now", lambda: later):
+            stated = self._stated(self._page())
+        self.assertEqual(stated, [])
+        self.assertIsNone(self.tree.maintenance_entry(PATH))
+        self.assertEqual(self.tree.recent_events()[-1].cause, "pin-ended")
 
     @staticmethod
     def _whole(said: Element) -> list[str]:
@@ -245,7 +252,7 @@ class PinBlockTests(_LeafCase):
         return [span.text() for span in said.all("text-nowrap")]
 
     def test_the_expiry_keeps_its_date_and_its_time_whole(self):
-        # #89's B12: where a card was narrow the sentence ended a line after a
+        # Where a card was narrow the sentence ended a line after a
         # hyphen of the date — *until 2026-10-* — and the day stood on the next
         # one with the time.
         self._workflows()
@@ -353,7 +360,8 @@ class PinBlockTests(_LeafCase):
         self._pin_node()
         self._pin_line()
         blocks = self._page().all("rule-block")
-        self.assertGreater(len(blocks), 2)        # stated ones and editors
+        # the node's and the line's: no editor of a new pin stands here (ADR-0147)
+        self.assertEqual(len(blocks), 2)
         for block in blocks:
             self.assertEqual(block.attrs.get("data-rule"), "maintenance")
 
@@ -400,170 +408,96 @@ class PinBlockTests(_LeafCase):
 
 
 class SetControlTests(_LeafCase):
-    """Decision 3: a pin is set where its block will stand."""
+    """Decision 3, as ADR-0147 decision 1 amends it: a pin is set on the node's *Notes*
+    tab, which the head's door opens, and each member line's own ◇ with its form on
+    that line — and nothing new is set on the node's page."""
 
     def _setters(self, page: Element) -> list[Element]:
         return [summary for summary in page.all(tag="summary")
                 if summary.text(shown=True) == "Set maintenance"]
 
-    def test_set_maintenance_is_one_button_in_the_pages_head(self):
-        # beneath the head's row, where the node's block will stand
+    def test_the_page_s_head_sets_nothing_its_door_opens_the_tab(self):
         self._workflows()
         page = self._page()
-        buttons = self._setters(page)
-        self.assertEqual(len(buttons), 1)
-        button = buttons[0]
-        self.assertTrue(button.within(self._card(page)))
-        self.assertLess(self._row(page).order, button.order)
-        setter = button.parent
-        assert setter is not None
-        # the browser's own disclosure, closed until asked
-        self.assertEqual(setter.tag, "details")
-        self.assertNotIn("open", setter.attrs)
-        block = setter.one("rule-block")
-        self.assertTrue(block.has("rule-block--node"))
-        self.assertEqual(self._hidden(block.one(tag="form")),
-                         {"path": FORM_PATH, "action": "set", "set_at": ""})
+        self.assertEqual(self._setters(page), [])
+        self.assertEqual(page.all("rule-setter"), [])
+        (door,) = [link for link in self._row(page).all(tag="a")
+                   if link.attrs.get("data-control") == "door"]
+        self.assertEqual(door.attrs.get("href"), "/notes/ci/actions")
 
     def test_a_pinned_node_has_edit_and_clear_instead(self):
         self._workflows()
         self._pin_node()
         self.assertEqual(self._setters(self._page()), [])
 
-    def test_the_nodes_editor_says_first_what_it_covers(self):
-        self._workflows()
-        block = self._page().one("rule-setter").one("rule-block")
-        said = block.first()
-        self.assertTrue(said.has("rule-block__scope"))
-        self.assertEqual(
-            said.text(),
-            "Maintenance for this node. Puts all 6 lines and any that "
-            "appear in maintenance; the check keeps running and counts again when "
-            "the pin clears.")
-
-    def test_the_nodes_sentence_counts_the_lines_the_node_has(self):
-        self._workflows({"only": "one finding"})
-        self.assertEqual(
-            self._page().one("rule-setter").one("rule-block__scope").text(),
-            "Maintenance for this node. Puts its one line and any that "
-            "appear in maintenance; the check keeps running and counts again when "
-            "the pin clears.")
-
-    def test_a_node_whose_lines_cannot_be_pinned_is_not_counted_in_lines(self):
-        # prose is one condition in several sentences, not several findings
-        self.tree.upsert("/db", StatusCode.ERROR,
-                         ["check error: unreachable", "Traceback…"])
-        self.assertEqual(
-            self._page("/db").one("rule-setter").one("rule-block__scope").text(),
-            "Maintenance for this node. It will not alarm before the pin "
-            "expires; the check keeps running and counts again when the pin "
-            "clears.")
-
-    def test_each_member_line_ends_in_a_pause_mark(self):
+    def test_each_member_line_ends_in_its_door(self):
         self._workflows()
         self._pin_line("mobile-build")
         page = self._page()
-        setters = page.all("reason-pin")
-        self.assertEqual(len(setters), len(LINES) - 1)
-        for setter in setters:
-            self.assertEqual(setter.tag, "details")
-            self.assertNotIn("open", setter.attrs)
-            mark = setter.first()
-            self.assertEqual(mark.tag, "summary")
-            self.assertTrue(mark.all(tag="svg"))
-            # a mark, with its name for a reader who cannot see it: the words on
-            # every line were a column of the same two down a long node
-            self.assertEqual(mark.text(shown=True), "")
-            self.assertEqual(mark.text(), "Set maintenance for this line")
-            self.assertEqual(mark.attrs.get("title"),
-                             "Set maintenance for this line")
+        doors = page.all("line-door")
+        self.assertEqual(len(doors), len(LINES) - 1)
+        for door in doors:
+            # a mark, with its name for a reader who cannot see it
+            self.assertEqual(door.tag, "a")
+            self.assertTrue(door.all(tag="svg"))
+            self.assertEqual(door.text(shown=True), "")
+            self.assertEqual(door.attrs.get("title"), "Handle this line")
+            self.assertEqual(door.attrs.get("aria-label"),
+                             "handle this line of /ci/actions")
         for slug in LINES:
             with self.subTest(line=slug):
-                self.assertEqual(
-                    len(self._line(page, slug).all("reason-pin")),
-                    0 if slug == "mobile-build" else 1)
+                found = self._line(page, slug).all("line-door")
+                if slug == "mobile-build":
+                    # where something handles the line its mark is its door
+                    self.assertEqual(found, [])
+                    continue
+                self.assertEqual([door.attrs.get("href") for door in found],
+                                 [f"/notes/ci/actions?reason={slug}#add-note"])
 
-    def test_a_mark_has_its_seat_in_the_rail(self):
+    def test_a_door_has_its_seat_in_the_rail(self):
         # the rail it shares with the line's other actions keeps the place the
-        # mark is drawn in, so no action sits under it and no text runs into it
+        # door is drawn in, so no action sits under it and no text runs into it —
+        # on a pinned line too, whose ‖ stands in the seat ◇ stood in (ADR-0143)
         self._workflows()
         self._pin_line("mobile-build")
         page = self._page()
         for slug in LINES:
             with self.subTest(line=slug):
-                rail = self._line(page, slug).one("check-reason__rail")
-                self.assertEqual(rail.has("check-reason__rail--seat"),
-                                 slug != "mobile-build")
-        # a margin as wide as the mark, and a height the rail has even when no
+                line = self._line(page, slug)
+                rail = line.one("check-reason__rail")
+                self.assertTrue(rail.has("check-reason__rail--seat"))
+                self.assertEqual(len(line.all("line-pin")),
+                                 1 if slug == "mobile-build" else 0)
+        # a margin as wide as the door, and a height the rail has even when no
         # action fills it: a float of no height would let the text run under
         css = self._css()
         seat = css_rule(css, ".check-reason__rail--seat")
         self.assertIn("margin-right", seat)
         self.assertIn("min-height", seat)
-        self.assertIn("position: absolute", css_rule(css, ".reason-pin > summary"))
+        self.assertIn("position: absolute",
+                      css_rule(css, ".check-reason__box > .line-door"))
 
-    def test_a_lines_editor_opens_beneath_its_line(self):
+    def test_a_line_s_door_opens_the_form_on_the_line(self):
         self._workflows()
-        page = self._page()
-        line = self._line(page, "web-build")
-        setter = line.one("reason-pin")
-        # in the line, after its text, and out of the rail: the panel it replaces
-        # hung from the rail and floated over the lines beneath
-        self.assertFalse(setter.within(line.one("check-reason__rail")))
-        self.assertLess(line.one("check-reason__body").order, setter.order)
-        block = setter.one("rule-block")
-        self.assertTrue(block.has("rule-block--line"))
-        self.assertEqual(
-            self._hidden(block.one(tag="form")),
-            {"path": FORM_PATH, "slug": "web-build", "action": "set",
-             "set_at": ""})
-        css = self._css()
-        self.assertEqual(css_rules_naming(css, ".reason-pin__panel"), [])
-        for body in css_rules_naming(css, ".rule-block"):
-            self.assertNotIn("position: absolute", body)
+        tab = parse(self.client.get("/notes/ci/actions?reason=web-build")
+                    .get_data(as_text=True))
+        (form,) = [form for form in tab.all("ls-kind-form")
+                   if form.attrs.get("data-kind") == MAINTENANCE]
+        (on,) = [select for select in form.all(tag="select")
+                 if select.attrs.get("name") == "slug"]
+        chosen = [option.attrs.get("value") for option in on.all(tag="option")
+                  if "selected" in option.attrs]
+        self.assertEqual(chosen, ["web-build"])
+        self.assertEqual(form.attrs.get("action"), "/pins/maintenance")
 
-    def test_a_lines_editor_says_first_what_it_covers(self):
-        self._workflows()
-        block = self._line(self._page(), "web-build").one("reason-pin").one(
-            "rule-block")
-        said = block.first()
-        self.assertTrue(said.has("rule-block__scope"))
-        self.assertEqual(
-            said.text(),
-            "Maintenance for this line only. The other 5 keep alarming.")
-
-    def test_the_lines_sentence_counts_the_lines_still_alarming(self):
-        lines = {"first": "the first finding", "second": "the second finding"}
-
-        def said() -> str:
-            for line in self._page().all("check-reason"):
-                if line.one("check-reason__body").text() == lines["first"]:
-                    return line.one("reason-pin").one("rule-block__scope").text()
-            raise AssertionError("the first line is gone")
-
-        self._workflows(lines)
-        self.assertEqual(
-            said(), "Maintenance for this line only. The other one keeps "
-                    "alarming.")
-        # a line that is silenced already is not one that keeps alarming
-        self._pin_line("second")
-        self.assertEqual(
-            said(), "Maintenance for this line only. No other line is left "
-                    "to alarm.")
-        # and under the node's pin nothing alarms, so it says what the pin is for
-        self._pin_node()
-        self.assertEqual(
-            said(), "Maintenance for this line only. It stays in maintenance when "
-                    "the node's pin ends.")
-
-    def test_prose_and_a_viewer_get_no_mark(self):
+    def test_prose_and_a_viewer_get_no_seat(self):
         self.tree.upsert("/db", StatusCode.ERROR,
                          ["check error: unreachable", "Traceback…"])
-        self.assertEqual(self._page("/db").all("reason-pin"), [])
+        self.assertEqual(self._page("/db").all("line-door"), [])
         self._workflows()
         self._viewer()
         page = self._page()
-        self.assertEqual(page.all("reason-pin"), [])
+        self.assertEqual(page.all("line-door"), [])
         self.assertEqual(page.all("check-reason__rail--seat"), [])
         self.assertEqual(self._setters(page), [])
 
@@ -652,20 +586,7 @@ class PinAboveTests(_LeafCase):
             self._stated(page, "line")[0].one("rule-block__what").text(),
             f"This line is also in maintenance on its own by anna until "
             f"{self._until(entry)} · 5h 29m left")
-        # and a line's editor says what its pin is for under it
-        self.assertEqual(
-            self._line(page, "web-build").one("rule-block__scope").text(),
-            "Maintenance for this line only. It stays in maintenance when the pin "
-            "above the node ends.")
 
-    def test_the_nodes_editor_says_its_pin_outlasts_the_one_above(self):
-        self._workflows()
-        self._pin_at("/ci")
-        self.assertEqual(
-            self._page().one("rule-setter").one("rule-block__scope").text(),
-            "Maintenance for this node. It stays in maintenance when the pin above it "
-            "ends; the check keeps running and counts again when every pin on it "
-            "has cleared.")
 
     def test_a_viewer_reads_it_too(self):
         self._workflows()
@@ -733,8 +654,25 @@ class EditorTests(_LeafCase):
             (FORM_PATH, "set", entry.token))
         self.assertNotIn("slug", hidden)
         self.assertEqual(form.one(tag="textarea").source(), NOTE)
-        self.assertEqual([button.text() for button in form.all(tag="button")],
+        # the editor's own buttons stand before its two, behind the hidden one Enter
+        # in a field presses, which sets (ADR-0150, landing 4)
+        buttons = form.all(tag="button")
+        self.assertTrue(buttons[0].has("ls-default-submit"))
+        self.assertEqual([button.text() for button in buttons[-2:]],
                          ["Save changes", "Cancel"])
+
+    @staticmethod
+    def _shown_first(form: Element) -> Element:
+        """The first element of an editor's form that every page shows: above it only
+        the line that says the page waits for the editor, *updates paused*, which the
+        stylesheet shows on a page that refreshes alone (ADR-0147 decision 4)."""
+        line = form.first()
+        if not line.has("ls-paused"):
+            return line
+        assert line.text() == "updates paused", line
+        return next(child for child in form.children
+                    if isinstance(child, Element) and child is not line
+                    and child.tag != "input")
 
     def test_who_pinned_it_stands_at_the_top_of_the_editor(self):
         self._workflows()
@@ -742,7 +680,7 @@ class EditorTests(_LeafCase):
 
         def record() -> str:
             block = self._stated(self._page())[0]
-            said = self._editor(block).one(tag="form").first()
+            said = self._shown_first(self._editor(block).one(tag="form"))
             self.assertTrue(said.has("rule-block__record"))
             return said.text()
 
@@ -772,7 +710,7 @@ class EditorTests(_LeafCase):
             expires_at=now + timedelta(days=1),
             created_at=pinned, created_by="ada")})
         block = self._stated(self._page())[0]
-        said = self._editor(block).one(tag="form").first()
+        said = self._shown_first(self._editor(block).one(tag="form"))
         self.assertTrue(said.has("rule-block__record"))
         first = str(app_module._localtime(pinned))
         last = str(app_module._localtime(changed))
@@ -855,9 +793,6 @@ class EditorTests(_LeafCase):
         rule = css_rule(css, ".rule-block__edit[open]")
         self.assertIn("flex-basis: 100%", rule)
         self.assertIn("min-width: 0", rule)
-        # the node's setter stands beneath the head's row, a block of its own and
-        # no flex item, and no wider than the head either
-        self.assertIn("min-width: 0", css_rule(css, ".viewed-head > .rule-setter"))
 
     def test_the_notes_field_shows_the_whole_note(self):
         # where the browser sizes a field by its content; a field sized that way
@@ -912,8 +847,11 @@ class KeptExpiryTests(_LeafCase):
         self.assertEqual(app_module._expiry_input(None), "")
 
     def test_a_new_pins_field_is_empty_and_keeps_nothing(self):
+        # a new pin is set on the node's Notes tab (ADR-0147 decision 1): the node's
+        # page carries no field of one, and the tab's are empty
         self._workflows()
-        raw = self._body()
+        self.assertNotIn('name="duration"', self._body())
+        raw = self.client.get("/notes/ci/actions").get_data(as_text=True)
         self.assertNotIn('name="expiry_was"', raw)
         self.assertNotIn("the pin keeps this expiry", raw)
         fields: dict[str, list[Element]] = {}
@@ -921,11 +859,9 @@ class KeptExpiryTests(_LeafCase):
             for box in form.all(tag="input"):
                 if box.attrs.get("name") == "duration":
                     fields.setdefault(form.attrs.get("action", ""), []).append(box)
-        # the node's, and a line's each — maintenance's, and seen's, every line
-        # failing
+        # one form of each kind, its *On* the node, a line, or every failure
         self.assertEqual({action: len(boxes) for action, boxes in fields.items()},
-                         {"/pins/maintenance": 1 + len(LINES),
-                          "/pins/seen": 1 + len(LINES)})
+                         {"/pins/maintenance": 1, "/pins/seen": 1})
         for box in [box for boxes in fields.values() for box in boxes]:
             self.assertEqual(box.attrs.get("value"), "")
 
@@ -979,6 +915,9 @@ class KeptExpiryTests(_LeafCase):
     def test_the_hour_a_clock_change_repeats_cannot_refuse_it(self):
         # 02:30 on the night the clocks go back happens twice in Berlin, and the
         # field's text cannot say which; the stored instant can
+        # the day before, so that the window holds (ADR-0150)
+        self.enterContext(mock.patch.object(
+            instants, "now", lambda: datetime(2026, 10, 24, 12, tzinfo=UTC)))
         self._workflows()
         second = datetime(2026, 10, 25, 2, 30, fold=1,
                           tzinfo=ZoneInfo("Europe/Berlin"))
@@ -1194,15 +1133,17 @@ class EveryEditorTests(_LeafCase):
         self.assertIn("the pin keeps this expiry", raw)
 
     def test_a_cards_editor_is_filled_with_the_expiry_it_keeps(self):
-        # every card has an editor of its own, drawn with its pin: the field, what
-        # the field was filled with and the sentence that says so are the server's
+        # the card a node's page draws at depth 0, its own head, has an editor of its
+        # own, drawn with its pin: the field, what the field was filled with and the
+        # sentence that says so are the server's — the wall's card has none, its block
+        # the link that opens the drawer at it (ADR-0147 decision 7)
         self.tree.upsert("/db/ping", StatusCode.OK)
         entry = self.tree.set_maintenance(
             "/db", "planned", expires_at=datetime.now(UTC) + timedelta(hours=2),
             set_by="ada").current
         assert entry is not None
         was = app_module._expiry_input(entry.expires_at)
-        card = parse(self.client.get("/status").get_data(as_text=True)).one(
+        card = parse(self.client.get("/status/db?depth=0").get_data(as_text=True)).one(
             "status-card")
         form = card.one("rule-block__edit").one(tag="form")
         self.assertEqual(self._expiry_field(form).attrs.get("value"), was)
@@ -1210,12 +1151,15 @@ class EveryEditorTests(_LeafCase):
         self.assertIn("the pin keeps this expiry", form.text())
 
     def test_an_unpinned_card_carries_no_expiry(self):
-        # a pin still to be set: the field is empty, which is the default, and
-        # there is no expiry to keep — in the page's one editor, which an admin's
-        # ‖ clones into the card
+        # a pin still to be set is set on the node's Notes tab, which the card's door
+        # opens (ADR-0147 decision 1): the wall carries no field, and the tab's is
+        # empty, which is the default, with no expiry to keep
         self.tree.upsert("/db/ping", StatusCode.OK)
-        page = parse(self.client.get("/status").get_data(as_text=True))
-        form = page.one("pin-setter").one(tag="form")
+        self.assertNotIn('name="duration"',
+                         self.client.get("/status").get_data(as_text=True))
+        tab = parse(self.client.get("/notes/db").get_data(as_text=True))
+        (form,) = [form for form in tab.all("ls-kind-form")
+                   if form.attrs.get("data-kind") == MAINTENANCE]
         self.assertEqual(self._expiry_field(form).attrs.get("value"), "")
         self.assertNotIn("expiry_was", self._hidden(form))
         self.assertNotIn("the pin keeps this expiry", form.text())
@@ -1225,6 +1169,9 @@ class EveryEditorTests(_LeafCase):
         script = self.client.get(
             "/static/js/maintenance-edit.js").get_data(as_text=True)
         self.assertIn('document.addEventListener("focusin"', script)
-        self.assertIn('namedItem("expiry_was")', script)
+        # an expiry's kept value by its field, and a silence's deadline's (ADR-0144)
+        self.assertIn('duration: "expiry_was"', script)
+        self.assertIn('deadline: "deadline_was"', script)
+        self.assertIn("namedItem(KEPT[field.name])", script)
         self.assertIn("field.value === was.value", script)
         self.assertIn("field.select()", script)

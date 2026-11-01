@@ -1,0 +1,82 @@
+{#- **What is handled beneath a branch**, as its *why* card lists it (ADR-0135 decision
+    7): the ringed diamond and the total, grouped by job under its mark, each rule with
+    the part it stands on, what that reads where it fails, who set it and until when,
+    linked to where it stands — each list showing its first `open` rows and folding the
+    rest, the browser's own disclosure, as History folds its earlier periods. `why` is
+    the branch's `_Why`.
+
+    A node's *Notes* tab lists the same beneath it **part by part** (ADR-0147 decision
+    2, `parts_beneath`): each part once, whatever handles it, grouped by the job that
+    decides how it counts, its rules said one after the other, in every state the node
+    is in — under the number its door, ◇, says, which counts the node's own parts and
+    its lines' too. -#}
+{%- from '_rule_block.html' import rule_mark, handled_mark with context %}
+{#- Where a rule stands: a line of a node, linked to it on its node's page, with its
+    words — or, where the node does not report the line now, saying so after a comma,
+    which keeps it the line's and not a node that is gone, as its page does when asked
+    at it — or the node. Where no node stands at its path now (`row.gone`) the node is
+    what is not reported now, and it says so without the comma, a line of it with it;
+    its links open the page of its path, which says what is known of it (ADR-0116). -#}
+{%- macro why_where(row) -%}
+{% if row.slug %}<a href="{{ url_for('status', branch=row.path | url_branch, reason=row.slug) }}#pinned-reason">a line</a> of <a href="{{ url_for('status', branch=row.path | url_branch) }}">{{ row.name }}</a>{% if row.line %} — {{ row.line | markdown_inline(node=row.path) }}{% elif row.gone %} not reported now{% else %}, not reported now{% endif %}{% else %}<a href="{{ url_for('status', branch=row.path | url_branch) }}">{{ row.name }}</a>{% if row.gone %} not reported now{% endif %}{% endif %}
+{%- endmacro %}
+{#- What a rule says of its part, after where it stands: what the part reads where it
+    fails (`reads`), and what the rule makes of it, by whom and until when — a
+    maintenance pin until its window open ends (`row.ends`, ADR-0150). -#}
+{%- macro why_said(row, reads=true) -%}
+{%- if reads and row.reads %}, reads {{ row.reads.name.lower() }}{% endif %}
+{%- if row.rule %}, counts {{ row.rule.counts.name.lower() if row.rule.counts else 'nothing' }} · by the rule <strong>{{ row.rule.rule.name }}</strong> since {{ row.rule.rule.since.isoformat() }}
+{%- elif row.entry and row.entry.kind == 'done' %} · done by <strong>{{ row.entry.set_by or 'an admin' }}</strong>, closing {{ row.entry.status.name.lower() }} · until it reads anything else
+{%- elif row.job == 'seen' %} · seen by <strong>{{ row.entry.set_by or 'an admin' }}</strong> at {{ row.entry.status.name.lower() }} · until it changes{% if row.entry.expires_at %} or {{ row.entry.expires_at | localtime }} · {{ row.entry.expires_at | time_left }}{% endif %}
+{%- elif row.job == 'silenced' %} · silenced by <strong>{{ row.entry.set_by or 'an admin' }}</strong>, counting as {{ row.entry.level.name.lower() }}{% if row.entry.level.name == 'WARN' %} at most{% endif %} · until {{ row.entry.expires_at | localtime }} · {{ row.entry.expires_at | time_left }}
+{%- else %} · by <strong>{{ row.entry.set_by or 'an admin' }}</strong> until {{ row.ends | localtime }} · {{ row.ends | time_left }}{% endif %}
+{%- endmacro %}
+{%- macro why_rule(row) -%}
+<li>{{ why_where(row) }}{{ why_said(row) }}</li>
+{%- endmacro %}
+{#- One part a *Notes* tab lists beneath its node (`tree.HandledPart`): where it
+    stands and what its first rule — the one that decides how it counts — says of it,
+    and after it every other rule that handles it. -#}
+{%- macro why_part(part) -%}
+<li>{{ why_where(part.rules[0]) }}{{ why_said(part.rules[0]) }}
+{%- for also in part.rules[1:] %} <span class="why-also">— and{{ why_said(also, reads=false) }}</span>{% endfor %}</li>
+{%- endmacro %}
+{#- A list of the card's, its first `open` rows open and the rest folded beneath
+    *N more*. -#}
+{%- macro why_list(rows, row_macro, open) -%}
+<ul class="why-list">
+{%- for row in rows[:open] %}
+    {{ row_macro(row) }}
+{%- endfor %}
+</ul>
+{%- if rows | length > open %}
+<details class="why-more">
+    <summary class="small text-muted">{{ rows | length - open }} more</summary>
+    <ul class="why-list">
+    {%- for row in rows[open:] %}
+        {{ row_macro(row) }}
+    {%- endfor %}
+    </ul>
+</details>
+{%- endif %}
+{%- endmacro %}
+{%- macro job_said(job) -%}
+{{ 'In maintenance' if job == 'maintenance' else 'Accepted' if job == 'seen' else 'Silenced' if job == 'silenced' else 'By a rule' }}
+{%- endmacro %}
+{%- macro handled_beneath(why) -%}
+<p class="mb-1 why-card__handled">{{ handled_mark() }}{{ why.handled | length }} handled beneath it</p>
+{%- for job, rows in why.by_job %}
+<p class="mb-1 why-card__job">{{ rule_mark(job) }}{{ job_said(job) }}</p>
+{{ why_list(rows, why_rule, why.open) }}
+{%- endfor %}
+{%- endmacro %}
+{#- What a *Notes* tab lists beneath its node (`tab.beneath`), part by part: each
+    job's parts under its mark and its word. How many parts are handled the tab says
+    above what stands, the door's number, which counts the node and its lines as well
+    (`notes.html`). -#}
+{%- macro parts_beneath(tab) -%}
+{%- for job, parts in tab.beneath_by_job %}
+<p class="mb-1 why-card__job">{{ rule_mark(job) }}{{ job_said(job) }}</p>
+{{ why_list(parts, why_part, tab.open) }}
+{%- endfor %}
+{%- endmacro %}

@@ -25,9 +25,12 @@
     follows — and it paints its own maintenance tint, like every other maintenance
     surface, so it does not depend on the card fill under it. A card's head names
     the node, so the sentence opens with what was done to it (`bare`). On the wall
-    the block is the lighter one (`wall`, ADR-0135 decisions 3 to 5): its note
-    behind its mark, its buttons marks; the card a node's own page draws at depth 0
-    is that node's statement, and states it whole.
+    the block is the button that opens the drawer at it (`wall`, ADR-0147 decision
+    7), and it stands only while *◇ details* is on (`handled_details`, decision 6):
+    off, the wall says a handled part by its color and its mark alone, and nothing of
+    the block is drawn. The card drawn at depth 0 — the viewed node's, the root's on
+    the overview — is that node's own head, and states it whole either way: the
+    overview's is the root's own page, the one place a pin on the root is changed.
 
     ``pinning`` is what every pin on the page shares: whether the reader may write
     one, the address a write comes back to, and the count that gives each editor
@@ -40,24 +43,25 @@
 {%- endif -%}
 {%- if node.acknowledgment -%}
 {%- set pinning.count = pinning.count + 1 -%}
-{{ pin_block(node.acknowledgment, 'node', node.path, '', 'seen-' ~ pinning.count, pinning.may, next=pinning.back, of=node.path, bare=true, wall=wall) }}
+{{ pin_block(node.acknowledgment, 'node', node.path, '', 'seen-' ~ pinning.count, pinning.may, next=pinning.back, of=node.path, bare=true, wall=wall, fails=node.own_code.name in ('WARN', 'ERROR')) }}
 {%- endif -%}
-{{ rules_stated(node, pinning) }}
+{{ rules_stated(node, pinning, wall=wall) }}
 {%- endmacro %}
 {#- A configured rule where it acts (ADR-0137): its block on the box or the card
     whose part it changes the count of, while it does — what the node passes up,
     how its children count in it, how its lines count in it — beneath a pin's, and
     none on a node it picks and changes nothing of now: a configured rule stands for
     good, and the wall shows what is now (ADR-0135 decision 9). A node's own page
-    and *Handled* state it always. -#}
-{% macro rules_stated(node, pinning) -%}
+    and *Handled* state it always; the card drawn at depth 0 (`wall` false) states it
+    whole, as it states a pin. -#}
+{% macro rules_stated(node, pinning, wall=true) -%}
 {%- for at, place in [(node.rule, 'node'), (node.children_rule, 'children')] if at and at.changes -%}
 {%- set pinning.count = pinning.count + 1 -%}
-{{ config_block(at, place, node.path, 'rule-' ~ pinning.count, wall=true) }}
+{{ config_block(at, place, node.path, 'rule-' ~ pinning.count, wall=wall) }}
 {%- endfor -%}
 {%- for at in lines_rules(node) if at.changes -%}
 {%- set pinning.count = pinning.count + 1 -%}
-{{ config_block(at, 'lines', node.path, 'rule-' ~ pinning.count, wall=true) }}
+{{ config_block(at, 'lines', node.path, 'rule-' ~ pinning.count, wall=wall) }}
 {%- endfor -%}
 {%- endmacro %}
 {#- A coded line (ADR-0042) carries the entry's **own** claim: its state class, a
@@ -67,7 +71,11 @@
     of the problem (the is-quiet lesson: ink-on-whatever fails the bar). A quiet
     (pinned) line keeps the maintenance tint whatever its code says: suppression is
     the louder fact. `is-running` marks work in flight — italic, display only; the
-    line's words still say it, so no meaning rides on the italic alone.
+    line's words still say it, so no meaning rides on the italic alone. A handled line
+    keeps all of that and carries its job's mark at its top right, which is its door —
+    a link to its node's *Notes* tab at what handles it (ADR-0147 decision 7) — and a
+    rail on its right edge wherever its node counts it as something other than it
+    shows, in the color it counts as instead (ADR-0143).
 
     **The block's lines come failing first** (ADR-0127 decision 6): errors, then
     warnings, then the rest, each group in the check's order, a pinned line among the
@@ -86,7 +94,13 @@
 <div class="reason-block" id="lines{{ node.path }}" style="--reason-lines: {{ cap }}"
      data-reason-node="{{ node.path }}" data-reason-total="{{ total }}">
 {%- for line in node.reasons | failing_first %}
-    <div class="status-node__reason md-body{% if line.code %} is-coded s-{{ line.code | status_slug }}{% endif %}{% if line.running %} is-running{% endif %}{% if line.quiet %} is-quiet{% endif %}{% if line.rule and line.rule.changes %} is-ruled{% endif %}"{% if line_healthy(node, line) %} data-healthy{% if folded %} data-fold-drawn{% endif %}{% endif %}><span class="reason-actions">{{ slot('reason.actions', node=node, reason=line.text, line=line, index=loop.index0, surface='grid') }}</span>{% if line.code %}{{ status_cue(line.code, labeled=true, use=true) }}{% endif %}{% if line.accepted %}{{ line_ack_mark(line) }}{% endif %}{% if line.rule and line.rule.changes %}{{ line_rule_mark(line.rule) }}{% endif %}{{ line.text | shorten(400) | markdown(node=node.path) }}</div>
+    {%- set rail = line_rail(node, line) %}
+    {%- set marked = line_marked(line) %}
+    {#- A line marked done shows ok, with the failure it closed beside its cue
+        (ADR-0146), its words the failure's own and set off from it by the same
+        separator: *· error · run 7 failed*. -#}
+    {%- set closed = line.accepted and line.acknowledgment.kind == 'done' %}
+    <div class="status-node__reason md-body{% if closed %} is-coded s-ok is-done{% elif line.code %} is-coded s-{{ line.code | status_slug }}{% endif %}{% if line.running %} is-running{% endif %}{% if line.quiet %} is-quiet{% endif %}{% if line.rule and line.rule.changes %} is-ruled{% endif %}{% if marked %} has-mark{% endif %}{% if rail %} has-rail rail-{{ rail }}{% endif %}"{% if line_healthy(node, line) %} data-healthy{% if folded %} data-fold-drawn{% endif %}{% endif %}><span class="reason-actions">{{ slot('reason.actions', node=node, reason=line.text, line=line, index=loop.index0, surface='grid') }}</span>{% if closed %}{{ status_cue(line_shows(node, line), labeled=true, use=true) }}<span class="status-reported line-closed">· {{ (line.code if line.code is not none else node.reported_code).name.lower() }} ·</span> {% elif line.code %}{{ status_cue(line.code, labeled=true, use=true) }}{% endif %}{{ line.text | shorten(400) | markdown(node=node.path) }}{% if marked %}{{ line_mark(node, line, rail) }}{% endif %}</div>
 {%- endfor %}
 </div>
 {#- *⌄ all N* (ADR-0127 decision 3): beneath the lines, where the budget's fade is,
@@ -111,43 +125,43 @@
 {#- A pin's block and its editor are the rule's own (ADR-0104), imported with the
     context for the deployment's default window and its timezone that an editor's
     fields print — so the refresh's fragment is handed both, as the page is. -#}
-{% from '_rule_block.html' import pin_block, pins_above_stated, rule_mark, handled_mark, config_block, line_rule_mark, line_ack_mark with context %}
+{% from '_rule_block.html' import pin_block, pins_above_stated, handled_mark, config_block, line_mark, line_marked with context %}
 {#- A node's own lines as its own page lists them — a leaf's and, here, a branch's
-    head and its depth-0 card: in full, each with its record and for an admin the
-    pin control at its end (ADR-0036 decision 12). -#}
+    head and its depth-0 card: in full, each with its record and, for whoever may
+    set something there, its one seat at its end (ADR-0036 decision 12, ADR-0147
+    decision 1). -#}
 {% from '_own_lines.html' import own_lines with context %}
 {#- What every head shares — its state, its time, its controls and icons — and the
     head of a node's page, which `check.html` draws too: one partial of macros, so
     the two pages cannot drift apart (`_node_head.html`). -#}
-{% from '_node_head.html' import reported_suffix, card_time, chips_drawn, node_icons, node_controls, frame_head, ok_mark with context %}
-{#- Maintenance pip: a click-to-open marker on a card whose subtree holds a
-    pinned node but which is not itself pinned — a glance at any depth shows where to
-    drill, and a click opens a popover (maintenance.js) listing that card's pins as
-    links. A real <button> (keyboard-reachable, announced as a popup control); the
-    hidden <template> carries the card-scoped pin list the popover clones. Solid
-    maintenance-blue so it reads on any card fill. -#}
-{#- One popover row: **one node**, never one line (ADR-0036). The popover is capped,
-    so a node with twenty pinned findings contributes one row carrying a count — the
-    same thing its card says in the grid — rather than twenty rows that would evict
-    every other node from the list. The count is what makes "maintenance under this
-    card" honest for an entry pin: without it the pip would claim a node is pinned
-    when it is not. `quiet` is zero on a plain node pin, and that picks the wording.
+{% from '_node_head.html' import reported_suffix, head_marks, card_time, chips_drawn, node_icons, node_controls, frame_head, ok_mark, state_door with context %}
+{#- One row of the band's pill's popover (ADR-0056, maintenance.js): **one node**,
+    never one line (ADR-0036). The popover is capped, so a node with twenty pinned
+    findings contributes one row carrying a count — the same thing its card says in
+    the grid — rather than twenty rows that would evict every other node from the
+    list. The count is what makes the row honest for an entry pin: without it the row
+    would claim a node is pinned when it is not. `quiet` is zero on a plain node pin,
+    and that picks the wording. A card's own diamond, the pip, went with the door
+    (ADR-0147 decision 2): ◇ on its head counts what is handled at and beneath it, and
+    opens it.
 
     An entry row links with `?reason=<slug>` (ADR-0036 decision 12's addressing
     shape) and the fixed `#pinned-reason` anchor the page puts on the line it was
     asked for — one id, only when asked, and never the slug in a fragment, which is
     not fragment-safe. Only a **sole** entry pin can carry it; several have no one
-    line to point at. -#}
+    line to point at.
+
+    A pin on a line the node does not report now is none of its reasons: the row
+    counts it apart, *1 of 3 reasons, 1 line not reported now*, and a sole one's
+    link lands on the node's page saying that line is no longer reported. A node not
+    reported now — its check no longer returns it, or has not written it since the
+    start — has no reasons to count its pins against: its row says *not reported
+    now*, and its link lands on the page of its path, which says what is known of it
+    (ADR-0116). -#}
 {% macro maintenance_row(row) -%}
 {%- set href = url_for('status', branch=row.path | url_branch, reason=row.slug) ~ '#pinned-reason' if row.slug else url_for('status', branch=row.path | url_branch) -%}
-<li class="maintenance-pop__item"><span class="maintenance-pop__row"><a class="maintenance-pop__path" href="{{ href }}">{{ row.path }}</a>{% if row.quiet %} <span class="maintenance-pop__lines">{% if row.pinned %}+ {{ row.quiet }} reason{{ 's' if row.quiet != 1 else '' }}{% elif row.quiet >= row.total %}all {{ row.total }} reason{{ 's' if row.total != 1 else '' }}{% else %}{{ row.quiet }} of {{ row.total }} reasons{% endif %}</span>{% endif %} <span class="maintenance-pop__left">{% if row.quiet > 1 and not row.pinned %}next {% endif %}{{ row.remaining }}</span></span>{% if row.note and row.note != 'maintenance' %}<span class="maintenance-pop__reason">{{ row.note | markdown_inline(node=row.path) }}</span>{% endif %}{% if row.set_by %}<span class="maintenance-pop__by">{{ row.set_by }}</span>{% endif %}</li>
-{%- endmacro %}
-{% macro maintenance_pip(card_path, rows) -%}
-<button type="button" class="maintenance-pip" aria-haspopup="true" aria-expanded="false" aria-label="show what is handled under {{ card_path }}" title="handled under {{ card_path }}"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><path d="M8 1.8 14.2 8 8 14.2 1.8 8Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.7" fill="currentColor"/></svg></button><template class="maintenance-pop-src" data-pop-for="{{ card_path }}"><ul class="maintenance-pop__list">
-{%- for row in rows if row.path.startswith(card_path ~ '/') %}
-{{ maintenance_row(row) }}
-{%- endfor %}
-</ul></template>
+{%- set shown = row.quiet - row.away -%}
+<li class="maintenance-pop__item"><span class="maintenance-pop__row"><a class="maintenance-pop__path" href="{{ href }}">{{ row.path }}</a>{% if row.suspended %} <span class="maintenance-pop__lines">not reported now</span>{% elif row.quiet %} <span class="maintenance-pop__lines">{% if shown %}{% if row.pinned %}+ {{ shown }} reason{{ 's' if shown != 1 else '' }}{% elif shown >= row.total %}all {{ row.total }} reason{{ 's' if row.total != 1 else '' }}{% else %}{{ shown }} of {{ row.total }} reasons{% endif %}{% endif %}{% if row.away %}{{ ', ' if shown else '+ ' if row.pinned else '' }}{{ row.away }} line{{ 's' if row.away != 1 else '' }} not reported now{% endif %}</span>{% endif %} <span class="maintenance-pop__left">{% if row.quiet > 1 and not row.pinned %}next {% endif %}{{ row.remaining }}</span></span>{% if row.note and row.note != 'maintenance' %}<span class="maintenance-pop__reason">{{ row.note | markdown_inline(node=row.path) }}</span>{% endif %}{% if row.set_by %}<span class="maintenance-pop__by">{{ row.set_by }}</span>{% endif %}</li>
 {%- endmacro %}
 {#- A chip's counts (ADR-0127 decision 2): what is beneath the node and in it,
     taken by `tree.chip_counts` on the unfiltered snapshot. One total and no glyph
@@ -177,8 +191,8 @@
     and the chip's chrome at its size — and the largest count of leaves among its
     branches, which `tree.js` keeps room for when it measures the names in the
     chip's own font and sets the width in pixels (`app._chip_room`). The column decides too: a run whose level has
-    room for one of them only wraps as it comes (backlog #91's note, §2,
-    2026-10-17). Wrapped runs size nothing, and carry neither. -#}
+    room for one of them only wraps as it comes. Wrapped runs size
+    nothing, and carry neither. -#}
 {% macro chip_room_of(children) -%}
 {%- if look_values.chip_runs == 'aligned' -%}
 {%- set room = chip_room(children, chip_leaves) %} style="--chip-w: {{ room.estimate }}" data-leaves="{{ room.leaves }}"
@@ -234,7 +248,8 @@
 <div class="tree-node{% if level is even %} is-stepped{% endif %}" data-node="{{ child.path }}" data-state="{{ 'closed' if closed else 'open' }}" data-order="{{ loop.index0 }}"{% if has_kids %} data-chips="{{ chips_drawn(kid_faces) }}"{% endif %}{% if folds %} data-ok="true"{% endif %}{% if child.path in drawn.budget %} data-budget{% endif %}{% if child.show_when_quiet %} data-swq{% endif %}{% if healthy(child) %} data-healthy{% if parent_folds and not child.show_when_quiet %} data-fold-drawn{% endif %}{% endif %}{% if failing(child) %} data-failing{% endif %}>
     <a class="tree-chip s-{{ child.code | status_slug }}" href="{{ url_for('status', branch=child.path | url_branch) }}" data-path="{{ child.path }}" title="{{ counts.words }}" aria-label="{{ child.name }}: {{ counts.words }}"{% if not closed %} hidden{% endif %}>{{ status_cue(child.code, use=true) }}<span class="tree-chip__name">{{ child.name | breakable }}</span>{{ tree_counts(child, counts) }}</a>
     <div class="tree-hold"{% if closed %} hidden="until-found"{% endif %}>
-    <div class="status-node s-{{ child.code | status_slug }}{% if node_dim %} dim{% endif %} tree-box">
+    {%- set rail = node_rail(child) %}
+    <div class="status-node s-{{ child.code | status_slug }}{% if node_dim %} dim{% endif %} tree-box{% if rail %} has-rail rail-{{ rail }}{% endif %}">
         {#- The head's row (decision 3), which never wraps: the cue and the name; the
             middle, the title with zero say in line-fitting (basis 0), so it gives way
             first, with an ellipsis; the state cluster; and the controls where the look
@@ -268,11 +283,11 @@
                 card, so the box's one leading cue is decorative and a second cue in
                 here would only duplicate the shape. -#}
             {%- set box_time = child.timestamp | localtime("%H:%M") if child.timestamp else "" -%}
-            {%- call node_controls(child, kid_faces, fold, 'box', middle=middle, pin=pinning.may and not child.maintenance_entry, beneath=child.path in containers, folds=folds) %}
-            <span class="status-node__state">{% if child.stale %}<span class="status-stale">stale{% if not child.children %} · {{ child.age_seconds | elapsed }} ago{% endif %}</span> {% endif %}{{ card_time(child, shown_time) }}{{ child.code.name.lower() }}{{ reported_suffix(child) }}</span>
+            {%- call node_controls(child, kid_faces, fold, 'box', middle=middle, may=pinning.may, folds=folds) %}
+            <span class="status-node__state">{% if child.stale %}<span class="status-stale">stale{% if not child.children %} · {{ child.age_seconds | elapsed }} ago{% endif %}</span> {% endif %}{{ state_door(child, pinning.may) }}{{ card_time(child, shown_time) }}{{ child.code.name.lower() }}{{ reported_suffix(child) }}{{ head_marks(child) }}</span>
             {%- endcall %}
         </div>
-        {{ pin_stated(child, pinning) }}{{ reason_block(child, drawn.caps.get(child.path, reason_cap), folded=folds and not child.show_when_quiet) }}
+        {% if handled_details %}{{ pin_stated(child, pinning) }}{% endif %}{{ reason_block(child, drawn.caps.get(child.path, reason_cap), folded=folds and not child.show_when_quiet) }}
         {%- if has_kids -%}
         <div class="status-node__children node-children tree-kids" data-branch="{{ child.path }}"{{ chip_room_of(child.children) }}>{{ render_nodes(child.children, level + 1, child.path, max_depth, pinning, box_time or shown_time) }}</div>
         {%- endif -%}
@@ -303,26 +318,29 @@
 <script type="application/json" id="node-meta">{{ node_meta | default({}) | tojson }}</script>
 {%- set ruled_parts = ruled_parts | default(0) %}
 {%- set seen_parts = seen_parts | default(0) %}
-{%- if maintenance_rows or ruled_parts or seen_parts or (heartbeat is defined and heartbeat) %}
+{%- set silenced_parts = silenced_parts | default(0) %}
+{%- set done_parts = done_parts | default(0) %}
+{%- if maintenance_rows or ruled_parts or seen_parts or silenced_parts or done_parts or (heartbeat is defined and heartbeat) %}
 {#- Status-strip band (ADR-0056): the self-monitor heartbeat pill and, to its
     left, the maintenance pill — a compact count that folds the always-visible
     index it replaced. Both live in the poll fragment, right-aligned beneath the
     controls, refreshing on the ~10s poll. -#}
 <div class="strip-band">
-{%- if maintenance_rows or ruled_parts or seen_parts %}
+{%- if maintenance_rows or ruled_parts or seen_parts or silenced_parts or done_parts %}
 {#- The pill: the always-visible index folded to a count, in a chip's short form
     (ADR-0135 decision 6) — a ringed diamond and how many pins stand, a node's and
-    a line's, how many failures a person marked seen (ADR-0142), and how many
-    parts a configured rule changes the count of now (ADR-0137), its words naming
-    each. A click opens the shared popover
-    (maintenance.js) over the whole set — the first ``maintenance_cap`` nodes, then
-    a "+N more" to the *Handled* page, which lists every pin as its block, and a row
-    to its *By a rule*. Only shown when something is handled; maintenance-tinted,
-    refreshed in the poll like the strip. -#}
+    a line's, whether or not its part is reported now (ADR-0147 decision 2), how
+    many lines a person marked done (ADR-0146), how many failures they
+    marked seen (ADR-0142) and how many they silenced (ADR-0144), and how many parts a
+    configured rule changes the count of now (ADR-0137), its words naming each. A
+    click opens the shared popover (maintenance.js) over the whole set — the first
+    ``maintenance_cap`` nodes, then a "+N more" to the *Handled* page, which lists
+    every pin as its block, and a row to its *By a rule*. Only shown when something
+    is handled; maintenance-tinted, refreshed in the poll like the strip. -#}
 {%- set held_nodes = maintenance_rows | selectattr('pinned') | list | length -%}
 {%- set held_lines = maintenance_rows | sum(attribute='quiet') -%}
-{%- set held = held_nodes + held_lines + seen_parts + ruled_parts -%}
-{%- set held_words -%}{{ held }} handled: {{ [(held_nodes ~ (' node' if held_nodes == 1 else ' nodes') ~ ' in maintenance') if held_nodes else '', (held_lines ~ (' line' if held_lines == 1 else ' lines') ~ ' in maintenance') if held_lines else '', (seen_parts ~ ' seen') if seen_parts else '', (ruled_parts ~ ' by a rule') if ruled_parts else ''] | select | join(', ') }}{%- endset -%}
+{%- set held = held_nodes + held_lines + done_parts + seen_parts + silenced_parts + ruled_parts -%}
+{%- set held_words -%}{{ held }} handled: {{ [(held_nodes ~ (' node' if held_nodes == 1 else ' nodes') ~ ' in maintenance') if held_nodes else '', (held_lines ~ (' line' if held_lines == 1 else ' lines') ~ ' in maintenance') if held_lines else '', (done_parts ~ ' done') if done_parts else '', (seen_parts ~ ' seen') if seen_parts else '', (silenced_parts ~ ' silenced') if silenced_parts else '', (ruled_parts ~ ' by a rule') if ruled_parts else ''] | select | join(', ') }}{%- endset -%}
 <a class="maintenance-pill" href="{{ url_for('handled') }}" aria-haspopup="true" aria-expanded="false" aria-label="{{ held_words }}" title="{{ held_words }}"><svg class="maintenance-pill__glyph" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><path d="M8 1.8 14.2 8 8 14.2 1.8 8Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.7" fill="currentColor"/></svg><span class="maintenance-pill__count">{{ held }}</span> handled</a><template class="maintenance-pop-src" data-pop-for="__all__"><ul class="maintenance-pop__list">
 {%- for row in maintenance_rows[:maintenance_cap] %}
 {{ maintenance_row(row) }}
@@ -330,8 +348,14 @@
 {%- if maintenance_rows | length > maintenance_cap %}
 <li class="maintenance-pop__more"><a href="{{ url_for('handled') }}">+{{ maintenance_rows | length - maintenance_cap }} more…</a></li>
 {%- endif %}
+{%- if done_parts %}
+<li class="maintenance-pop__more"><a href="{{ url_for('handled') }}#handled-accepted">{{ done_parts }} done…</a></li>
+{%- endif %}
 {%- if seen_parts %}
 <li class="maintenance-pop__more"><a href="{{ url_for('handled') }}#handled-accepted">{{ seen_parts }} seen…</a></li>
+{%- endif %}
+{%- if silenced_parts %}
+<li class="maintenance-pop__more"><a href="{{ url_for('handled') }}#handled-silenced">{{ silenced_parts }} silenced…</a></li>
 {%- endif %}
 {%- if ruled_parts %}
 <li class="maintenance-pop__more"><a href="{{ url_for('handled') }}#handled-rule">{{ ruled_parts }} by a rule…</a></li>
@@ -404,7 +428,7 @@
 {% elif not node.children and not branch %}
     <p class="text-muted">{{ nothing_left | default("") or "No checks reporting yet." }}</p>
 {% else %}
-    {#- **A node's page draws its node in a frame** (backlog #91 §3.5): the page is
+    {#- **A node's page draws its node in a frame** (ADR-0127 decision 8): the page is
         the same tree as the wall, rooted at the node, and the node itself is always
         open — framed with everything that is part of it. Its head is the frame's top
         (`frame_head`, which a leaf's page draws too), with the pins acting on the
@@ -414,7 +438,7 @@
         is the node itself, closed to its head and counts, and is not framed — and on
         the kiosk too, without the icons and the facts, as its heads go without.
 
-        The frame is the page's node in the tree's markup (§7.7): a `.tree-node`
+        The frame is the page's node in the tree's markup: a `.tree-node`
         marked `data-page-root`, always open, its box holding the head, the page's
         grid — its level, whose cards are its children — the healthy fold's count
         and the facts; `data-failing` as on every node, which a close the viewer set
@@ -472,7 +496,8 @@
                 counts (ADR-0127 decision 7): its rolled-up "overall" light. A click
                 opens it to its own lines, as a card's panel opens. -#}
             {%- set counts = chip_counts[node.path] %}
-            <div class="status-card tree-node is-closed s-{{ node.code | status_slug }}{% if node.code.name == 'OK' %} dim{% endif %}" data-node="{{ node.path }}" data-state="closed" data-order="0"{% if node.show_when_quiet %} data-swq{% endif %}{% if healthy(node) %} data-healthy{% endif %}{% if failing(node) %} data-failing{% endif %}>
+            {%- set rail = node_rail(node) %}
+            <div class="status-card tree-node is-closed s-{{ node.code | status_slug }}{% if node.code.name == 'OK' %} dim{% endif %}{% if rail %} has-rail rail-{{ rail }}{% endif %}" data-node="{{ node.path }}" data-state="closed" data-order="0"{% if node.show_when_quiet %} data-swq{% endif %}{% if healthy(node) %} data-healthy{% endif %}{% if failing(node) %} data-failing{% endif %}>
                 <div class="status-card__head" data-path="{{ node.path }}">
                     <a class="status-card__name" data-control="toggle" href="{{ url_for('status', branch=node.path | url_branch) if branch else url_for('status') }}" title="{{ counts.words }}">{{ node.name | breakable }}</a>{{ tree_counts(node, counts) }}
                     {%- set middle %}<span class="status-head__middle">{% set shown = node | node_title %}{% if shown %}<span class="node-title">{{ shown | markdown_inline(node=node.path) }}</span>{% endif %}</span>{% endset %}
@@ -484,30 +509,28 @@
                         deployment's node action vanish at one depth setting while
                         its reason action stayed.
 
-                        At depth 0 this card is where the viewed node's pin stands, so
-                        it is set here too — on a node's page, by ‖. The overview's
-                        card is every node there is, and silencing all of them from a
-                        form is a foot-gun: that pin is not set from the wall. One
-                        that stands is stated like any other, with *Edit* and
-                        *Clear*, as *Handled* states it. -#}
-                    {%- set settable = branch and pinning.may and not node.maintenance_entry %}
-                    {%- call node_controls(node, [], healthy_counts(node), 'card', middle=middle, pin=settable, beneath=node.path in containers, page_root=branch) %}
+                        At depth 0 this card is the viewed node's own head, so ◇ is its
+                        door as on every head (ADR-0147 decision 1) — but on the
+                        overview, whose card is the root, every node there is: the
+                        root has no *Notes* tab and no ◇, and silencing everything from
+                        a form is a foot-gun nobody is offered. A pin that stands is
+                        stated like any other, with *Edit* and *Clear*, as *Handled*
+                        states it. -#}
+                    {%- call node_controls(node, [], healthy_counts(node), 'card', middle=middle, may=pinning.may, page_root=branch) %}
                     <span class="status-card__state">
                         {% if node.stale %}<span class="status-stale">stale</span>{% endif %}
-                        {% if node.path in maintenance_ancestors %}{{ maintenance_pip(node.path, maintenance_rows) }}{% endif %}{{ card_time(node) }}<span class="status-word">{{ status_cue(node.code, use=true) }}{{ node.code.name.lower() }}</span>{{ reported_suffix(node) }}
+                        {{ state_door(node, pinning.may) }}{{ card_time(node) }}<span class="status-word">{{ status_cue(node.code, use=true) }}{{ node.code.name.lower() }}</span>{{ reported_suffix(node) }}{{ head_marks(node) }}
                     </span>
                     {%- endcall %}
                 </div>
                 {#- The panel also carries the pin's block, so a pinned node that
                     reports nothing at all still says who silenced it and why — and
-                    the blocks of the pins above it, which silence it as much. It is
-                    drawn even where the node has nothing to say, since an admin's ‖
-                    clones the pin's editor into it. -#}
+                    the blocks of the pins above it, which silence it as much. -#}
                 <div class="tree-hold" hidden="until-found">
                     {#- On a node's own page the card is its own card, and lists its
                         lines as the head does at every other depth; the overview's
                         is every node there is, and keeps the wall's clamp. -#}
-                    <div class="status-panel">{% if node.reason or node.maintenance_entry or node.acknowledgment or pins_above or (node.rule and node.rule.changes) or (node.children_rule and node.children_rule.changes) %}{{ pins_above_stated(pins_above, 'card-above-maintenance-', bare=true, wall=not branch) }}{{ pin_stated(node, pinning, wall=not branch) }}{% if branch %}{{ own_lines(node, branch, pinning.may, focus, focus_orphan, beneath=node.path in containers, back=pinning.back, surface='grid', prefix='card-line-maintenance-', covered=pins_above | length) }}{% else %}{{ reason_block(node, reason_cap) }}{% endif %}{% endif %}</div>
+                    <div class="status-panel">{% if node.reason or node.maintenance_entry or node.acknowledgment or pins_above or (node.rule and node.rule.changes) or (node.children_rule and node.children_rule.changes) %}{{ pins_above_stated(pins_above, 'card-above-maintenance-', bare=true) }}{{ pin_stated(node, pinning, wall=false) }}{% if branch %}{{ own_lines(node, branch, pinning.may, focus, focus_orphan, beneath=node.path in containers, back=pinning.back, surface='grid', prefix='card-line-maintenance-', covered=pins_above | length) }}{% else %}{{ reason_block(node, reason_cap) }}{% endif %}{% endif %}</div>
                 {%- if healthy_counts(node)[1] %}<button type="button" class="tree-ok" data-control="ok-fold" hidden></button>{% endif %}
                 </div>
             </div>
@@ -528,7 +551,8 @@
             {%- set fold = healthy_counts(system) %}
             {%- set folds = system.path in drawn.folded %}
             {%- set page_folds = node.path in drawn.folded %}
-            <div class="status-card tree-node s-{{ system.code | status_slug }}{% if card_dim %} dim{% endif %}{% if card_closed %} is-closed{% endif %}"
+            {%- set rail = node_rail(system) %}
+            <div class="status-card tree-node s-{{ system.code | status_slug }}{% if card_dim %} dim{% endif %}{% if card_closed %} is-closed{% endif %}{% if rail %} has-rail rail-{{ rail }}{% endif %}"
                  data-node="{{ system.path }}" data-state="{{ 'closed' if card_closed else 'open' }}" data-order="{{ loop.index0 }}"
                  {%- if card_has_kids %} data-chips="{{ chips_drawn(kid_faces) }}"{% endif %}
                  {%- if folds %} data-ok="true"{% endif %}{% if system.path in drawn.budget %} data-budget{% endif %}
@@ -551,20 +575,19 @@
                         lines — which is where it belongs when a node's reasons are
                         prose (ADR-0036). Offered on every card and declined by the
                         filler, like every slot; it collapses to nothing when
-                        nobody fills it. For an admin ‖ ends the icons where the
-                        card has no pin of its own, and clones the page's editor
-                        into the panel, where the pin's block will stand. -#}
-                    {%- set settable = pinning.may and not system.maintenance_entry %}
-                    {%- call node_controls(system, kid_faces, fold, 'card', middle=middle, pin=settable, beneath=system.path in containers, folds=folds) %}
+                        nobody fills it. ◇, the card's door, ends the icons for every
+                        reader, lit with what is handled at and beneath it (ADR-0147
+                        decisions 1 and 2). -#}
+                    {%- call node_controls(system, kid_faces, fold, 'card', middle=middle, may=pinning.may, folds=folds) %}
                     <span class="status-card__state">
                         {% if system.stale %}<span class="status-stale">stale</span>{% endif %}
-                        {% if system.path in maintenance_ancestors %}{{ maintenance_pip(system.path, maintenance_rows) }}{% endif %}{{ card_time(system, shown=head_shown) }}<span class="status-word">{{ status_cue(system.code, use=true) }}{{ system.code.name.lower() }}</span>{{ reported_suffix(system) }}
+                        {{ state_door(system, pinning.may) }}{{ card_time(system, shown=head_shown) }}<span class="status-word">{{ status_cue(system.code, use=true) }}{{ system.code.name.lower() }}</span>{{ reported_suffix(system) }}{{ head_marks(system) }}
                     </span>
                     {%- endcall %}
                 </div>
                 <div class="tree-hold"{% if card_closed %} hidden="until-found"{% endif %}>
                 <div class="status-panel">
-                    {{ pin_stated(system, pinning) }}{{ reason_block(system, drawn.caps.get(system.path, reason_cap), folded=folds and not system.show_when_quiet) }}
+                    {% if handled_details %}{{ pin_stated(system, pinning) }}{% endif %}{{ reason_block(system, drawn.caps.get(system.path, reason_cap), folded=folds and not system.show_when_quiet) }}
                     {% if card_has_kids %}
                     <div class="node-children tree-kids" data-branch="{{ system.path }}"{{ chip_room_of(system.children) }}>{{ render_nodes(system.children, 2, system.path, max_depth, pinning, (system.timestamp | localtime("%H:%M") if system.timestamp else head_shown)) }}</div>
                     {% endif %}
@@ -581,7 +604,7 @@
         frame's fold is in force. -#}
     {%- if framed %}{{ ok_mark(frame_fold, frame_folds) }}{% endif %}
     {#- The viewed node's own facts, **below** its children (ADR-0044 decision 8),
-        last in the frame (backlog #91 §3.5): the head says what this node is, the
+        last in the frame (ADR-0127 decision 8): the head says what this node is, the
         grid says what is under it, and the details come last, every card open — a
         forty-line report above the grid would push the dashboard the reader came for
         off the screen.

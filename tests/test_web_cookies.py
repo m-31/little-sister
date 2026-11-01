@@ -126,14 +126,15 @@ class CookieSecurityTests(TestCase):
         self._login(HTTPS)
         response = self.client.get("/status?depth=3&view=1", base_url=HTTPS)
         headers = response.headers.getlist("Set-Cookie")
-        # hide_ok + hide_idle: the two filters. The depth and density cookies went
-        # with dense mode (ADR-0127 decision 7) — a `depth=` is the viewer's word
-        # for one load and writes none. The count is asserted so that a route
-        # which quietly stopped setting them cannot make this test pass by covering
-        # nothing at all.
-        self.assertEqual(len(headers), 2, headers)
+        # hide_ok + hide_idle: the two filters, and handled_details, *◇ details*
+        # (ADR-0147 decision 6). The depth and density cookies went with dense mode
+        # (ADR-0127 decision 7) — a `depth=` is the viewer's word for one load and
+        # writes none.
+        # The count is asserted so that a route which quietly stopped setting them
+        # cannot make this test pass by covering nothing at all.
+        self.assertEqual(len(headers), 3, headers)
         self.assertEqual(sorted(header.split("=", 1)[0] for header in headers),
-                         ["hide_idle", "hide_ok"])
+                         ["handled_details", "hide_idle", "hide_ok"])
         for header in headers:
             self.assertIn("secure", attributes(header), header)
 
@@ -141,7 +142,7 @@ class CookieSecurityTests(TestCase):
         self._login(HTTP)
         response = self.client.get("/status?depth=3&view=1", base_url=HTTP)
         headers = response.headers.getlist("Set-Cookie")
-        self.assertEqual(len(headers), 2, headers)
+        self.assertEqual(len(headers), 3, headers)
         for header in headers:
             self.assertNotIn("secure", attributes(header), header)
 

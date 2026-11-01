@@ -31,6 +31,7 @@ from little_sister import app as app_module
 from little_sister import slots
 from little_sister.status import StatusCode
 from little_sister.tree import StatusTree
+from tests.browser_binary import chromium
 from tests.browser_looks import looks
 from tests.browser_server import PageServer
 from tests.demo_extension import action, node_action
@@ -39,10 +40,6 @@ try:  # pragma: no cover - environment probe
     from playwright.sync_api import sync_playwright
 except ImportError:  # pragma: no cover
     sync_playwright = None  # type: ignore[assignment]
-
-#: A sandbox pins one browser build; a Playwright from the lock may expect another,
-#: so the one that is there is what runs (as ``tests/sweep_contrast.py`` does).
-_SANDBOX_CHROMIUM = Path("/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
 
 #: Bootstrap as ``tests/sweep_contrast.py`` vendors it (``docs/testing-the-gui.md``,
 #: Mode 4), where there is a copy; the CDN otherwise.
@@ -133,8 +130,7 @@ class ActionTapTests(unittest.TestCase):
         try:
             cls.playwright = sync_playwright().start()
             cls.browser = cls.playwright.chromium.launch(
-                executable_path=(str(_SANDBOX_CHROMIUM) if _SANDBOX_CHROMIUM.is_file()
-                                 else None))
+                executable_path=chromium())
         except Exception as error:  # pragma: no cover - no browser here
             if cls.playwright is not None:
                 cls.playwright.stop()
@@ -260,8 +256,8 @@ class ActionTapTests(unittest.TestCase):
                 self.page.wait_for_url(f"{self.base}{href}", timeout=3000)
 
     def test_a_phone_keeps_every_lines_chips_and_a_heads_in_view(self):
-        # finding 14 of the GUI review, held through the stages of the interactive wall
-        # (backlog #91): on a phone every line keeps its Copy chip, shown outright where
+        # finding 14 of the GUI review, held through the stages of the interactive wall:
+        # on a phone every line keeps its Copy chip, shown outright where
         # nothing hovers, inside the screen, and so does a node's chip in its head —
         # on the wall and on the leaf's own page
         shown = """

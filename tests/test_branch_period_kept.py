@@ -10,18 +10,21 @@
   beneath it have run — also where staleness made it, which the entries cannot say; a
   takeover adopts the holder's. A file written before the key is seeded from its log
   (``test_branch_periods``).
-* The release before reads such a file with its own code, taken from its tag, in every
-  run of the suite: it refuses nothing, and holds what it holds of the same file
+* A release before reads such a file with its own code, taken from its tag, in every
+  run of the suite: the release before this one refuses nothing, and the last release
+  before the key, which knows no ``period``, holds what it holds of the same file
   without the periods.
 """
 from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import tempfile
 import tomllib
@@ -56,9 +59,22 @@ RELEASE_BEFORE_KEYS = {"shows", "reported", "publishes", "since", "before", "was
 #: The project's root, whose tags name the releases.
 ROOT = Path(__file__).resolve().parents[1]
 
+#: The last release before the key, whose entries carry no ``period`` — the release
+#: the kept file's consequence speaks of, which passes over it. Every release since
+#: reads the key, the release before this one among them.
+BEFORE_THE_KEY = "v0.3.21"
+
 
 def _stamp(at):
     return instants.stamp(at)
+
+
+def _libraries() -> str:
+    """Where this interpreter keeps its dependencies — its environment's library
+    directories, joined with ``os.pathsep`` — for the release before to import what it
+    depends on (``release_before_reader.py``)."""
+    paths = sysconfig.get_paths()
+    return os.pathsep.join(dict.fromkeys((paths["purelib"], paths["platlib"])))
 
 
 class TheEntryKeepsThePeriodTests(_Clocked):
@@ -267,7 +283,9 @@ def _version(text):
 class TheReleaseBeforeReadsTheFileTests(_Clocked):
     """The kept file's consequence: a release before reads the keys it knows and
     passes over ``period``, so a rollback restores the file. Proven with that
-    release's own code, taken from its tag, in every run."""
+    release's own code, taken from its tag, in every run — the passing over by the
+    last release before the key (:data:`BEFORE_THE_KEY`), the restoring by the
+    release before this one too, which reads the key."""
 
     def _kept_file(self):
         """A file this release writes, with every entry that could trip a reader that
@@ -324,22 +342,30 @@ class TheReleaseBeforeReadsTheFileTests(_Clocked):
         self.assertIn("stopped_at", payload)
         return payload
 
-    def _release_before(self):
-        """The release before's ``src``, extracted from its tag: the highest ``v*``
-        tag below the version this checkout says it is — release tags sit on main's
-        release commits, which this branch need not contain, so no ``describe``.
-        Skips only where it cannot look: without ``.git``, or without such a tag."""
+    def _release_before(self, tag: str | None = None):
+        """A release's ``src``, extracted from its tag: ``tag``, or the release before
+        — the highest ``v*`` tag below the version this checkout says it is; release
+        tags sit on main's release commits, which this branch need not contain, so no
+        ``describe``. Skips only where it cannot look: without ``.git``, or without
+        such a tag."""
         if not (ROOT / ".git").exists():
             self.skipTest("no .git here, so no tag to read the release before from")
-        version = _version(tomllib.loads((ROOT / "pyproject.toml").read_text(
-            encoding="utf-8"))["project"]["version"])
         tags = subprocess.run(
             ["git", "--no-optional-locks", "-C", str(ROOT), "tag", "--list", "v*",
              "--sort=-v:refname"],
             capture_output=True, text=True, check=True).stdout.split()
-        before = next((tag for tag in tags if (_version(tag) or ()) < version), None)
-        if before is None:
-            self.skipTest(f"no release tag below {version}")
+        if tag is not None:
+            if tag not in tags:
+                self.skipTest(f"no tag {tag} here")
+            before = tag
+        else:
+            version = _version(tomllib.loads((ROOT / "pyproject.toml").read_text(
+                encoding="utf-8"))["project"]["version"])
+            found = next((name for name in tags if (_version(name) or ()) < version),
+                         None)
+            if found is None:
+                self.skipTest(f"no release tag below {version}")
+            before = found
         archive = subprocess.run(
             ["git", "--no-optional-locks", "-C", str(ROOT), "archive",
              "--format=tar", before, "src/little_sister"],
@@ -361,34 +387,54 @@ class TheReleaseBeforeReadsTheFileTests(_Clocked):
                 if "period" in entry:
                     self.assertIsInstance(entry["period"], dict)
 
-    def test_the_release_before_restores_a_file_this_release_wrote(self):
-        work, before = self._release_before()
-        payload = self._kept_file()
-        theirs = dict(payload, nodes=as_before_the_key(payload["nodes"]))
-        broken = json.loads(json.dumps(payload))
-        broken["nodes"]["/"] = {"period": broken["nodes"]["/"]["period"]}
-        names = []
-        for label, content in (("ours", payload), ("theirs", theirs),
-                               ("broken", broken)):
+    def _read(self, work, **files):
+        """What the release extracted in ``work`` holds of each of ``files``, by its
+        label, read with its own code (``release_before_reader.py``)."""
+        names = {}
+        for label, content in files.items():
             name = work / f"{label}.json"
             name.write_text(json.dumps(content), encoding="utf-8")
-            names.append(str(name))
+            names[label] = str(name)
         done = subprocess.run(
             [sys.executable, "-I", "-S",
              str(Path(__file__).with_name("release_before_reader.py")),
-             str(work / "src"), (self.wall + timedelta(minutes=5)).isoformat(),
-             *names],
+             str(work / "src"), _libraries(),
+             (self.wall + timedelta(minutes=5)).isoformat(), *names.values()],
             capture_output=True, text=True, timeout=120)
         self.assertEqual(done.returncode, 0, done.stderr)
         held = json.loads(done.stdout)
-        ours, theirs_held, broken_held = (held[name] for name in names)
+        return {label: held[name] for label, name in names.items()}
+
+    @staticmethod
+    def _broken(payload):
+        """``payload`` with the root's entry holding its period alone, without the two
+        codes every release requires of every entry (ADR-0110 decision 2)."""
+        broken = json.loads(json.dumps(payload))
+        broken["nodes"]["/"] = {"period": broken["nodes"]["/"]["period"]}
+        return broken
+
+    def test_the_release_before_restores_a_file_this_release_wrote(self):
+        work, before = self._release_before()
+        payload = self._kept_file()
+        held = self._read(work, ours=payload, broken=self._broken(payload))
+        self.assertNotIn("refused", held["ours"], f"{before} refused the file")
+        # ... and does read the entries: one without its two codes is refused
+        self.assertIn("refused", held["broken"])
+
+    def test_the_release_before_the_key_passes_over_it(self):
+        work, before = self._release_before(BEFORE_THE_KEY)
+        payload = self._kept_file()
+        without = dict(payload, nodes=as_before_the_key(payload["nodes"]))
+        held = self._read(work, ours=payload, theirs=without,
+                          broken=self._broken(payload))
+        ours, theirs = held["ours"], held["theirs"]
         self.assertNotIn("refused", ours, f"{before} refused the file")
         # it holds what it holds of the same file without the periods ...
-        self.assertEqual(ours["payload"], theirs_held["payload"])
-        for path in sorted(ours["history"].keys() | theirs_held["history"].keys()):
+        self.assertEqual(ours["payload"], theirs["payload"])
+        for path in sorted(ours["history"].keys() | theirs["history"].keys()):
             with self.subTest(path=path):
                 self.assertEqual(ours["history"].get(path, []),
-                                 theirs_held["history"].get(path, []))
+                                 theirs["history"].get(path, []))
         # ... and does read the entries: one without its two codes is refused
-        self.assertIn("refused", broken_held)
+        self.assertIn("refused", held["broken"])
 

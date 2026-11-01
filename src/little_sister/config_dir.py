@@ -97,6 +97,10 @@ BUILTIN_ASPECTS: dict[str, Aspect] = {
     # where a node's handbook is stated (ADR-0133 decision 3) and never found by a
     # node's path. `little_sister.handbooks` is the loader.
     "handbook": Aspect("handbook", as_file=False, as_directory=True),
+    # The deployment's holidays (ADR-0149): one file, named lists of the days nobody
+    # works, every root's read, a list named in two of them the later root's, whole.
+    # `little_sister.holidays` is the loader.
+    "holidays": Aspect("holidays", as_file=True, as_directory=False),
     "nodes": Aspect("nodes", as_file=True, as_directory=False),
     "settings": Aspect("settings", as_file=True, as_directory=False),
     # The known tags (ADR-0139 decision 3): one file, each tag with a line of what it

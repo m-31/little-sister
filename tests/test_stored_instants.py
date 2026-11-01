@@ -506,9 +506,11 @@ class SpelledInTheFilesTests(TestCase):
             kept = _pins_file(directory)
         for raw in (_row(kept), _row(kept, "line")):
             with self.subTest(pin=raw["note"]):
-                self.assertEqual(
-                    (raw["set_at"], raw["created_at"], raw["expires_at"]),
-                    (SPELLED, SPELLED, "2026-10-04T12:51:48.500000Z"))
+                self.assertEqual((raw["set_at"], raw["created_at"]), (SPELLED, SPELLED))
+                # a maintenance entry's end is its schedule's, in UTC as RFC 5545
+                # writes a time, to the second (ADR-0150)
+                self.assertNotIn("expires_at", raw)
+                self.assertIn("DTEND:20261004T125148Z", raw["schedule"])
 
     def test_both_files_spell_through_the_one_function(self) -> None:
         with tempfile.TemporaryDirectory() as directory, \
@@ -517,8 +519,7 @@ class SpelledInTheFilesTests(TestCase):
         self.assertEqual({raw["timestamp"] for raw in log["events"]}, {"spelled"})
         self.assertEqual((log["nodes"][PATH]["since"], log["stopped_at"]),
                          ("spelled", "spelled"))
-        self.assertEqual({_row(pins)[key]
-                          for key in ("set_at", "created_at", "expires_at")},
+        self.assertEqual({_row(pins)[key] for key in ("set_at", "created_at")},
                          {"spelled"})
 
     def test_what_is_read_back_is_the_instant_that_was_written(self) -> None:
@@ -534,8 +535,9 @@ class SpelledInTheFilesTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             node_pins, line_pins, *_rest = PinStore.tables(_pins_file(directory))
         for entry in (node_pins[PATH], line_pins[PATH, "line"]):
+            # the end read back to the second, as the schedule's text writes it
             self.assertEqual((entry.set_at, entry.created_at, entry.expires_at),
-                             (SEEN, SEEN, LATER))
+                             (SEEN, SEEN, LATER.replace(microsecond=0)))
 
     def test_an_offset_other_than_utc_is_read_into_utc(self) -> None:
         # the same instant, spelled as a machine two hours ahead would
@@ -611,9 +613,10 @@ class OneTimeWithoutAZoneTests(_Started):
         self.assertIsNone(stopped_at_of(["not", "a", "log"]))
 
     def test_in_the_pins_file_it_refuses_the_pins(self) -> None:
-        for slug, key in (("", "set_at"), ("", "expires_at"), ("", "created_at"),
-                          ("line", "set_at"), ("line", "expires_at"),
-                          ("line", "created_at")):
+        # a maintenance entry's end is its schedule's, which test_pins.py holds to
+        # the subset (ADR-0150); its two times of its own are refused here
+        for slug, key in (("", "set_at"), ("", "created_at"),
+                          ("line", "set_at"), ("line", "created_at")):
             with self.subTest(slug=slug, key=key), \
                     tempfile.TemporaryDirectory() as directory:
                 pins = _pins_file(directory)
@@ -708,7 +711,7 @@ class BuiltWithAZoneTests(TestCase):
         rows = [event for event in tree.recent_events()
                 if event.cause != "reading"]
         self.assertEqual([event.cause for event in rows],
-                         ["pin-set", "pin-ended", "removed"])
+                         ["line-pin-set", "pin-set", "pin-ended", "removed"])
         self.assertEqual({event.timestamp for event in rows}, {SEEN})
         self.assertEqual(json.loads(json.dumps(tree.events_payload()))
                          ["stopped_at"], SPELLED)

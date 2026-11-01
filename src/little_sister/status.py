@@ -141,7 +141,7 @@ class Status:
         # a container, or one the check reached through a child.
         self.subject: str = ""
         self.record: dict[str, Any] | None = None
-        # Metadata inherited from the check (questions §3.6); set by the tree.
+        # Metadata inherited from the check (ADR-0012); set by the tree.
         self.description: str = ""
         self.frequency_seconds: int | None = None
         # How old this node's reading may get before it is stale, where somebody
@@ -204,7 +204,7 @@ class Status:
         # what a check declared — distinguishable from silence.
         self.show_when_quiet: bool | None = None
         # How many consecutive readings of a **worse** code this node needs before
-        # it publishes that code to its parent (backlog #38 B). `1` is today's
+        # it publishes that code to its parent (ADR-0083). `1` is today's
         # behavior — publish at once — and is what a node nothing configured keeps.
         # Resolved by the engine from the check's own value and the deployment's
         # default, because the tree does not read configuration.

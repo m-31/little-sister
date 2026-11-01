@@ -1,0 +1,43 @@
+{#- **The drawer** (ADR-0147 decisions 3 to 5): what ◇, a line's ◇ and a mark open
+    over the wall — a node's *Notes* tab, framed in its panel mode (`?panel=1`) — in a
+    modal dialog, so that the wall waits behind it, inert, under a shade light enough
+    to read it, the box clicked lit in it. One on every page that draws doors that
+    may be clicked — the wall, a branch's page, a leaf's — outside what the refresh
+    swaps, as the page's other cards are; none on the kiosk, which draws no door to
+    click. Its head is the wall's: `drawer.js` fills it from the box clicked — the
+    node's cue, its name and its state as the box says them — and its links with the
+    node's page and its tab, and makes its frame anew at each opening, after the
+    question, and takes it away at each close, so that a drawer is one page load and
+    leaves nothing in the browser's history. At a desk it stands at one side, at a
+    phone it is a sheet from the foot (`overview.css`). The question asks before a
+    close drops words written in the frame (decision 5).
+
+    Under the node's name the head says *updates paused*, muted, while the page waits
+    for the drawer (decision 4): the stylesheet shows it while the drawer stands open
+    on a page `poll.js` refreshes — the wall, a branch's page — so that a leaf's page,
+    which nothing refreshes and so nothing pauses, never says it. The stamp keeps its
+    width.
+
+    Without the script, and in a browser without the dialog, nothing opens it: every
+    door is a link to the tab. `data-notes` and `data-status` are the routes' own
+    beginnings as the server writes them, from which the script names the node's tab
+    and its page. -#}
+<dialog class="ls-drawer" id="ls-drawer" aria-labelledby="ls-drawer-title" data-notes="{{ url_for('notes', path='-')[:-1] }}" data-status="{{ url_for('status') }}">
+    <div class="ls-drawer__lit" aria-hidden="true"></div>
+    <div class="ls-drawer__panel">
+        <div class="ls-drawer__head">
+            <div class="ls-drawer__who">
+                <h2 class="ls-drawer__title" id="ls-drawer-title"><span class="ls-drawer__name"></span> <span class="ls-drawer__state"></span></h2>
+                <p class="ls-drawer__paused ls-paused">updates paused</p>
+            </div>
+            <a class="ls-drawer__to" data-to="page" href="{{ url_for('status') }}" title="open its page">Status</a>
+            <a class="ls-drawer__to" data-to="tab" href="{{ url_for('status') }}" title="open its tab">Notes</a>
+            <button type="button" class="ls-drawer__close" title="Close" aria-label="Close">&#x2715;</button>
+        </div>
+        <div class="ls-drawer__ask" role="alertdialog" aria-labelledby="ls-drawer-ask" hidden>
+            <p class="ls-drawer__ask-words" id="ls-drawer-ask">Discard what you wrote?</p>
+            <button type="button" class="btn btn-sm ls-drawer__discard" data-ask="discard">Discard</button>
+            <button type="button" class="btn btn-sm btn-primary" data-ask="keep">Keep writing</button>
+        </div>
+    </div>
+</dialog>

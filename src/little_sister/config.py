@@ -40,6 +40,7 @@ from little_sister.state import DEFAULT_KEEPER_INTERVAL, DEFAULT_STATE_INTERVAL
 DEFAULT_TIMEZONE = "Europe/Berlin"
 DEFAULT_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 DEFAULT_MAINTENANCE_EXPIRY = "7d"
+DEFAULT_SILENCE_EXPIRY = "7d"
 DEFAULT_REASON_CAP = 6
 DEFAULT_MAINTENANCE_CAP = 5
 DEFAULT_READING_CAP = 10
@@ -72,6 +73,11 @@ class Config:
     # a duration string parsed where used (kept off this module to stay dependency
     # free). No indefinite — there is always an expiry.
     maintenance_default_expiry: str = DEFAULT_MAINTENANCE_EXPIRY
+    # The deadline a silence takes where an admin gives none (ADR-0144), parsed where
+    # used as maintenance's is. Never past thirty days, the library's bound: a longer
+    # default is not honored, and the silence takes a week, which the log says at
+    # start and the form names.
+    silence_default_expiry: str = DEFAULT_SILENCE_EXPIRY
     # Reason *lines* a dashboard card shows before its header chevron reveals the
     # rest (the reason-overflow budget, ADR-0056 decision 1): the collapsed reason
     # block is clamped to this many lines, so short reasons show that many reasons
@@ -88,6 +94,13 @@ class Config:
     # built-in look decides: open, its healthy shown, but a big level as chips.
     chips: bool | None = None
     fold_ok: bool | None = None
+    # Whether the wall draws the blocks of what handles a part where no browser has
+    # said (ADR-0147 decision 6): the default of *◇ details*, the band's switch beside
+    # *hide ok* and *hide idle*, which a browser keeps in a cookie as it keeps theirs,
+    # and the kiosk's outright, which has no band to say it with. Off in the library:
+    # a handled part says its color and its mark, and its blocks stand on its node's
+    # page and in the drawer. A real boolean; anything else is said and leaves it off.
+    handled_details: bool = False
     # What this instance is called, on `/system` and in whatever a package writes
     # down about the process it is running in (ADR-0074). Empty means the
     # hostname, which in a container is already the task or pod name. Validated
@@ -187,7 +200,7 @@ class Config:
     # long before memory does.
     series_limit: int = SERIES_LIMIT
     # How many consecutive readings of a worse code a node needs before it
-    # publishes that code to its parent (backlog #38 B). A positive integer;
+    # publishes that code to its parent (ADR-0083). A positive integer;
     # default 1, which publishes at once and is what every deployment had before
     # there was a counter. A check may override it for itself.
     escalate_after: int = DEFAULT_ESCALATE_AFTER
@@ -269,6 +282,19 @@ def _valid_switch(name: str, value: object) -> bool | None:
         return value
     logger.warning("config: %s %r is not true or false; leaving it unset", name, value)
     return None
+
+
+def _valid_off_switch(name: str, value: object) -> bool:
+    """A switch that is off unless the file says ``true`` (ADR-0147 decision 6): a
+    real boolean, as :func:`_valid_switch` reads one, and off with a warning where it
+    is anything else — ``values.flag`` would read a quoted ``"false"`` as on — so that
+    a bad value costs the switch and not the start."""
+    if value is None or value is False:
+        return False
+    if value is True:
+        return True
+    logger.warning("config: %s %r is not true or false; leaving it off", name, value)
+    return False
 
 
 def _valid_maintenance_cap(value: object) -> int:
@@ -542,10 +568,12 @@ def settings_files(config_dir: str | Path | None = None) -> list[Path]:
 
 #: Every key ``settings.yaml`` has, which :func:`load_config` reads: anything else in
 #: the file is named at load, since a misspelt key would otherwise do nothing and
-#: say nothing (backlog #91 §7.10).
+#: say nothing.
 SETTINGS_KEYS: tuple[str, ...] = (
-    "timezone", "time_format", "maintenance_default_expiry", "instance",
-    "reason_cap", "chips", "fold_ok", "maintenance_cap", "reading_cap",
+    "timezone", "time_format", "maintenance_default_expiry",
+    "silence_default_expiry", "instance",
+    "reason_cap", "chips", "fold_ok", "handled_details", "maintenance_cap",
+    "reading_cap",
     "retry_interval", "retry_attempts", "stacktrace", "card_status_line",
     "dashboard_columns", "state_interval", "keeper_interval", "max_workers",
     "entry_limit",
@@ -634,10 +662,14 @@ def load_config(path: str | Path | None = None, *,
         maintenance_default_expiry=values.text(
             data, "maintenance_default_expiry",
             default=DEFAULT_MAINTENANCE_EXPIRY),
+        silence_default_expiry=values.text(
+            data, "silence_default_expiry", default=DEFAULT_SILENCE_EXPIRY),
         instance=values.text(data, "instance", default=""),
         reason_cap=_valid_reason_cap(data.get("reason_cap", DEFAULT_REASON_CAP)),
         chips=_valid_switch("chips", data.get("chips")),
         fold_ok=_valid_switch("fold_ok", data.get("fold_ok")),
+        handled_details=_valid_off_switch("handled_details",
+                                          data.get("handled_details")),
         maintenance_cap=_valid_maintenance_cap(
             data.get("maintenance_cap", DEFAULT_MAINTENANCE_CAP)),
         reading_cap=_valid_reading_cap(
@@ -682,9 +714,9 @@ def load_config(path: str | Path | None = None, *,
     if sources:
         logger.info(
             "config: loaded %s — timezone=%s, time_format=%r, reason_cap=%d, "
-            "chips=%s, fold_ok=%s, "
+            "chips=%s, fold_ok=%s, handled_details=%s, "
             "maintenance_cap=%d, reading_cap=%d, "
-            "maintenance_default_expiry=%s, "
+            "maintenance_default_expiry=%s, silence_default_expiry=%s, "
             "retry_interval=%s, retry_attempts=%d, card_status_line=%s, "
             "dashboard_columns=%s, state_interval=%d, keeper_interval=%d, "
             "max_workers=%d, "
@@ -694,7 +726,9 @@ def load_config(path: str | Path | None = None, *,
             cfg.timezone, cfg.time_format, cfg.reason_cap,
             "unset" if cfg.chips is None else cfg.chips,
             "unset" if cfg.fold_ok is None else cfg.fold_ok,
+            cfg.handled_details,
             cfg.maintenance_cap, cfg.reading_cap, cfg.maintenance_default_expiry,
+            cfg.silence_default_expiry,
             cfg.retry_interval or "off", cfg.retry_attempts,
             cfg.card_status_line, cfg.dashboard_columns, cfg.state_interval,
             cfg.keeper_interval, cfg.max_workers, cfg.entry_limit, cfg.memory_share,

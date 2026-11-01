@@ -1,66 +1,306 @@
 <!DOCTYPE html>
 <html>
 <head>
-    {% from '_notes.html' import note_item with context %}
+    {% from '_notes.html' import entry_item, on_said, ended_said with context %}
+    {% from '_rule_block.html' import pin_block, planned_block, pins_above_stated, config_block, rule_mark, note_mark, ack_parts, handled_mark with context %}
+    {% from '_maintenance_fields.html' import maintenance_fields, schedule_fields, silence_fields, done_fields with context %}
+    {% from '_why.html' import parts_beneath with context %}
     {% set page_title = 'Notes' %}
     {% include '_header.html' %}
 
-    {#- A node's Notes view (ADR-0140): what somebody knows about the node, kept
-        beside its status and never part of it (ADR-0047). Every note on the node and
-        on its lines, newest first — notes of their own and its pins' notes, which
-        enter here as a pin is set and stay when it ends — on a tab of its own after
-        History, whose count it carries. An admin adds a note at the top, on the node
-        or on one of its lines, the line's own control having led here with the line
-        chosen (`?reason=<slug>`), and changes the newest note of its own beneath it.
-        A refused write comes back here with why and with the admin's words in the
-        form they were written in. At the Copy page's measure; not polled: notes are
-        read, as History is. -#}
-    <div class="container-fluid mt-3 px-4" style="max-width: 820px">
+    {#- A node's Notes tab, the place to act (ADR-0145): what somebody knows and did
+        about the node, kept beside its status and never part of it (ADR-0047), on a
+        tab of its own after History, whose number counts its entries, standing or not.
+
+        At a desk two columns, on a phone one, in this order: **what fails** at and
+        beneath the node — the parts the ringed check would mark, each linked; **a line
+        on what came before** — how often the part was handled and noted, the last
+        time, and the links its notes carry (decision 7); **what stands** — the pins
+        above it, its own blocks and its lines', as *Handled* words them away from
+        their lines, with *Edit* and *Clear* for whoever may, a pin being changed where
+        its block stands (ADR-0104 decision 4), its configured rules, and what is
+        handled beneath it, each part once, in every state the node is in, a node not
+        reported now among it, beside the nearest node above it that stands — under how
+        many parts are handled at and beneath it, *3 handled*, the number its door, ◇,
+        says in the words it says it (ADR-0147 decision 2), where each part is the
+        grouping's to say; **the form** — one
+        choice over one form per kind the reader may set, each posting to the route of
+        its own act, the stylesheet showing the chosen one's, a browser that cannot
+        tell showing each, every kind's *On* opening on the line the tab opens on where
+        that kind may be set on it, and script carrying the words and a part chosen
+        after across a change of kind (decision 2), each kind's row ending, after the
+        kind's own button, in what a package that files a ticket from the words puts
+        there, `notes.actions`, a line beneath the row saying what it does (ADR-0148)
+        — and beside them **what came before**, every entry whose pin no longer
+        stands, newest first (decision 6). Whoever may set nothing reads it all
+        without the form (decision 3), but for a small one where a package files
+        tickets: *On* and its button, which drafts from the part chosen alone.
+
+        A door opens it (ADR-0147): ◇ on a head at its top, a line's ◇ with its form on
+        that line (`?reason=`), and a mark at the block it marks (`?at=`, `tab.at`),
+        which carries the page's one anchor, `at`, its editor open for whoever may
+        change it. On the wall and on a node's page the door opens it in the drawer,
+        in its panel mode (`?panel=1`, decision 3): the same page without the site's
+        bar, rail and band, its links leaving the frame and its forms staying in it,
+        each sending `panel` with it, so that what answers it is drawn in the panel
+        too, and naming the panel's address as where a write comes back to (`back`),
+        which the drawer closes on.
+
+        A write from the form comes back here; one it refuses comes back with why above
+        the form and the words in it, the kind and the part chosen as they were, and
+        what fails listed as it stands now. A refused edit of a note comes back in the
+        note's editor. Not polled: it is read, as History is (ADR-0140 decision 2). -#}
+    <div class="container-fluid mt-3 px-4 ls-tab" style="max-width: 1300px">
         {% include '_page_band.html' %}
-        {%- if refused %}
-        <div class="alert alert-warning py-2 ls-notes__refused" role="alert">{{ refused }}</div>
-        {%- endif %}
-        {%- if may %}
-        {%- set adding = (refused and not editing) or line %}
-        <details class="ls-notes__add mb-3" id="add-note"{% if adding %} open{% endif %}>
-            <summary>Add a note</summary>
-            <form method="post" action="{{ url_for('notes', path=branch) }}" class="mt-2">
-                <input type="hidden" name="action" value="add">
-                {%- if lines %}
-                <div class="mb-2">
-                    <label class="form-label" for="note-on">On</label>
-                    <select class="form-select form-select-sm" id="note-on" name="slug">
-                        <option value=""{% if not line %} selected{% endif %}>the node</option>
-                        {%- for each in lines %}
-                        <option value="{{ each.slug }}"{% if each.slug == line %} selected{% endif %}>its line: {{ each.text | markdown_inline(node=node.path) | striptags | truncate(90) }}</option>
-                        {%- endfor %}
-                    </select>
-                </div>
+        <div class="row g-4">
+        <div class="col-lg-5 ls-tab__act">
+            {%- if tab.fails %}
+            <section class="ls-tab__fails" aria-labelledby="tab-fails">
+                <h2 class="ls-tab__label" id="tab-fails">What fails here now</h2>
+                {{ ack_parts(tab.fails) }}
+            </section>
+            {%- endif %}
+            {%- set before = tab.before %}
+            {%- if before.since %}
+            <section class="ls-tab__before" aria-labelledby="tab-before">
+                <h2 class="visually-hidden" id="tab-before">What came before, in one line</h2>
+                {%- set times = {1: 'once', 2: 'twice'} %}
+                {%- set handled %}{% if before.handled %}handled {{ times.get(before.handled, before.handled ~ ' times') }}{% endif %}{% endset %}
+                {%- set noted %}{% if before.noted %}noted {{ times.get(before.noted, before.noted ~ ' times') }}{% endif %}{% endset %}
+                {%- set counts = [handled, noted] | select | join(' and ') %}
+                <p class="ls-before__counts"><strong>{{ counts[:1] | upper }}{{ counts[1:] }} here</strong> since {{ before.since | localtime }}.</p>
+                {%- if before.last %}
+                {%- set last = before.last %}
+                <p class="ls-before__last">Last time: {{ last.word | lower }} {{ on_said(last, branch) }}, {% if last.planned %}planned as a {{ last.planned }} {% endif %}by <strong>{{ last.first.created_by or 'unknown' }}</strong> {{ last.started | localtime }}
+                    {%- if last.ran %}: {{ last.ran }}{% elif last.lasted %}, for {{ last.lasted }}{% endif %}
+                    {%- if last.ended %} — ended: {{ ended_said(last.ended, last.ended_by, last.planned) }}{% endif %}.</p>
                 {%- endif %}
-                <div class="mb-2">
-                    <label class="form-label" for="note-text">Note</label>
-                    <textarea class="form-control" id="note-text" name="text" rows="4"
-                              placeholder="What is known: what was found, a ticket, whom to ask">{{ mine if not editing else '' }}</textarea>
-                    <div class="form-text">Markdown is supported; raw HTML is shown as text. A note is kept beside the node's status and changes nothing it shows.</div>
+                {%- if before.links %}
+                <p class="ls-before__links">
+                    {%- for href, words in before.links %}
+                    <a class="ls-before__link" href="{{ href }}" target="_blank" rel="noopener noreferrer">{{ words }} ↗</a>
+                    {%- endfor %}
+                </p>
+                {%- endif %}
+            </section>
+            {%- endif %}
+            <section class="ls-tab__stands" aria-labelledby="tab-stands">
+                <h2 class="ls-tab__label" id="tab-stands">What stands</h2>
+                {%- set ruled = rules_here(node) %}
+                {%- set above = pins_above | length %}
+                {%- set beneath = tab.beneath %}
+                {%- set door = door_of(node) %}
+                {%- if above or node.maintenance_entry or node.acknowledgment or ruled or tab.lines or beneath %}
+                {%- if door.count %}
+                <p class="mb-1 why-card__handled ls-tab__handled">{{ handled_mark() }}{{ door.count }} handled</p>
+                {%- endif %}
+                {%- if above or node.maintenance_entry or node.acknowledgment or ruled or tab.lines %}
+                <ul class="rule-list">
+                    {{- pins_above_stated(pins_above, 'tab-above-', tag='li') }}
+                    {%- if node.maintenance_entry %}
+                    {{ pin_block(node.maintenance_entry, 'node', node.path, '', 'tab-maintenance', may_maintenance, tag='li', subject='<strong>The whole node</strong>' | safe, record=true, next=back, also=above > 0, at=tab.at.on('maintenance'), ran=tab.ran.get('')) }}
+                    {%- endif %}
+                    {%- if node.acknowledgment %}
+                    {{ pin_block(node.acknowledgment, 'node', node.path, '', 'tab-ack', may_done if node.acknowledgment.kind == 'done' else may_seen if node.acknowledgment.kind == 'seen' else may_silence, tag='li', subject=('<strong>Its own part</strong>' if node.acknowledgment.kind == 'silenced' else '<strong>Its own failure</strong>') | safe, record=true, next=back, fails=node.own_code.name in ('WARN', 'ERROR'), at=tab.at.on(node.acknowledgment.kind)) }}
+                    {%- endif %}
+                    {%- for here in ruled %}
+                    {{ config_block(here.at, here.place, node.path, 'tab-rule-' ~ loop.index, this='**this node**', tag='li', parent=here.parent, others=here.others, here=loop.index == tab.at.rule) }}
+                    {%- endfor %}
+                    {%- for line in tab.lines %}
+                    {%- set subject %}{% if line.text %}{{ line.text | markdown_inline(node=node.path) }} — <a href="{{ url_for('status', branch=branch, reason=line.slug) }}#pinned-reason">this line</a>{% else %}<strong>A line not reported now</strong>{% endif %}{% endset %}
+                    {%- if line.maintenance %}
+                    {{ pin_block(line.maintenance, 'line', node.path, line.slug, 'tab-line-' ~ loop.index, may_maintenance, tag='li', also=node.maintenance_entry is not none or above > 0, subject=subject, record=true, next=back, at=tab.at.on('maintenance', line.slug), ran=tab.ran.get(line.slug)) }}
+                    {%- endif %}
+                    {%- if line.acknowledgment %}
+                    {{ pin_block(line.acknowledgment, 'line', node.path, line.slug, 'tab-line-ack-' ~ loop.index, may_done if line.acknowledgment.kind == 'done' else may_seen if line.acknowledgment.kind == 'seen' else may_silence, tag='li', subject=subject, record=true, next=back, fails=line.fails, event=line.occurrence if line.fails else '', at=tab.at.on(line.acknowledgment.kind, line.slug)) }}
+                    {%- endif %}
+                    {%- endfor %}
+                </ul>
+                {%- endif %}
+                {%- if beneath %}
+                <div class="ls-tab__beneath">{{ parts_beneath(tab) }}</div>
+                {%- endif %}
+                {%- else %}
+                <p class="ls-tab__none text-muted small">Nothing stands here now: no pin, nothing a person marked done or seen or silenced, and no rule.</p>
+                {%- endif %}
+            </section>
+            {#- **Planned** (ADR-0150, decision 5 of #35's note): what is planned for the
+                node and its lines, the soonest first, beneath what stands and never
+                among it — a window set ahead or a series between two of its windows
+                holds nothing, so the door, ◇, counts none of it and the list has a
+                count of its own. A planned set lands here, at its block (`tab.at`). -#}
+            {%- set planned = planned_here(node) %}
+            {%- if planned %}
+            <section class="ls-tab__planned" aria-labelledby="tab-planned">
+                <h2 class="ls-tab__label" id="tab-planned">Planned</h2>
+                <p class="mb-1 small text-muted ls-tab__planned-count">{{ planned | planned_count }} planned, the soonest first.</p>
+                <ul class="rule-list">
+                    {%- for item in planned %}
+                    {%- set subject %}{% if not item.slug %}<strong>The whole node</strong>{% elif item.reported %}{{ item.text | markdown_inline(node=node.path) }} — <a href="{{ url_for('status', branch=branch, reason=item.slug) }}#pinned-reason">this line</a>{% else %}<strong>A line not reported now</strong>{% endif %}{% endset %}
+                    {{ planned_block(item.planned, 'line' if item.slug else 'node', node.path, item.slug, 'tab-planned-' ~ loop.index, may_maintenance, tag='li', subject=subject, record=true, next=back, at=tab.at.on('maintenance', item.slug), ran=tab.ran.get(item.slug)) }}
+                    {%- endfor %}
+                </ul>
+            </section>
+            {%- endif %}
+            {%- if tab.offered %}
+            <section class="ls-tab__form" id="add-note" aria-labelledby="tab-form">
+                <h2 class="ls-tab__label" id="tab-form">Handle it</h2>
+                {%- if refused and not editing %}
+                <div class="alert alert-warning py-2 ls-notes__refused" role="alert" tabindex="-1" autofocus>{{ refused }}</div>
+                {%- endif %}
+                {%- set words = mine if not editing else '' %}
+                <div class="ack-choice ls-kind-choice">
+                    {%- if tab.offered | length > 1 %}
+                    <div class="ack-kinds" role="radiogroup" aria-label="What to do">
+                        {%- for each in tab.offered %}
+                        <label class="ack-kind"><input type="radio" name="tab-kind" value="{{ each.kind.name }}"{% if each.kind.name == tab.chosen %} checked{% endif %}>{% if each.kind.name == 'note' %}{{ note_mark() }}{% else %}{{ rule_mark(each.kind.name) }}{% endif %}{{ each.kind.word }}</label>
+                        {%- endfor %}
+                    </div>
+                    {%- endif %}
+                    {%- for each in tab.offered %}
+                    {%- set kind = each.kind %}
+                    {%- set chosen = kind.name == tab.chosen %}
+                    {%- set mine_here = words if chosen else '' %}
+                    <form method="post" action="{{ url_for('notes', path=branch) if kind.name == 'note' else url_for(kind.endpoint) }}"
+                          class="maintenance-editor-form ack-form ls-kind-form" data-kind="{{ kind.name }}"{{ in_frame() }}>
+                        {{- panel_field(back=back if kind.name == 'note' else '') }}
+                        {%- if kind.name == 'note' %}
+                        <input type="hidden" name="action" value="add">
+                        {%- else %}
+                        <input type="hidden" name="path" value="{{ node.path }}">
+                        <input type="hidden" name="action" value="set">
+                        <input type="hidden" name="set_at" value="">
+                        <input type="hidden" name="next" value="{{ back }}">
+                        <input type="hidden" name="from" value="notes">
+                        {%- if kind.on_failures and tab.digest %}
+                        <input type="hidden" name="parts" value="{{ tab.digest }}">
+                        {%- endif %}
+                        {#- the event each line it may close reads as the tab was drawn,
+                            which the route compares (ADR-0146) -#}
+                        {%- if kind.on_events %}
+                        {%- for target in each.targets %}
+                        <input type="hidden" name="occurrence:{{ target.slug }}" value="{{ target.occurrence }}">
+                        {%- endfor %}
+                        {%- endif %}
+                        {%- endif %}
+                        <p class="ack-form__does">{{ kind.does }}</p>
+                        <div class="mb-2">
+                            <label class="form-label" for="form-{{ kind.name }}-on">On</label>
+                            <select class="form-select form-select-sm ls-kind-form__on" id="form-{{ kind.name }}-on" name="slug">
+                                {%- for target in each.targets %}
+                                <option value="{{ target.value }}"{% if target.value == tab.on.get(kind.name) %} selected{% endif %}>
+                                    {%- if target.act and target.own %}its own failure
+                                    {%- elif target.act == 1 %}the one failure listed above
+                                    {%- elif target.act %}all {{ target.act }} failures listed above, each its own
+                                    {%- elif target.slug %}its line: {{ target.line | markdown_inline(node=node.path) | striptags | truncate(90) }}
+                                    {%- elif kind.name == 'maintenance' and node.children %}the node and everything beneath it
+                                    {%- elif kind.on_parts and (target.own or node.children) %}its own part
+                                    {%- else %}the node{% endif %}
+                                    {%- if target.slug in each.entries %} — a schedule stands on it{% endif %}</option>
+                                {%- endfor %}
+                            </select>
+                        </div>
+                        {%- if kind.name == 'note' %}
+                        <div class="mb-2">
+                            <label class="form-label" for="note-text">Note</label>
+                            <textarea class="form-control form-control-sm" id="note-text" name="text" rows="4"
+                                      placeholder="What is known: what was found, a ticket, whom to ask">{{ mine_here }}</textarea>
+                            <div class="form-text">Markdown is supported; raw HTML is shown as text.</div>
+                        </div>
+                        {%- elif kind.name == 'done' %}
+                        {{ done_fields(mine_here, 'form-done', true) }}
+                        {%- elif kind.name == 'seen' %}
+                        {{ maintenance_fields(mine_here, fields.get('duration', '') if chosen else '', 'form-seen', maintenance_default, maintenance_timezone, true, ending=true) }}
+                        {%- elif kind.name == 'silenced' %}
+                        {{ silence_fields(mine_here, fields.get('deadline', '') if chosen else '', (fields.get('level', '') if chosen else '') or 'ok', 'form-silenced', silence_default, maintenance_timezone, true) }}
+                        {%- elif kind.name == 'maintenance' %}
+                        {#- a part an entry stands on carries that entry's token, and a
+                            window set there joins it, or replaces it where chosen
+                            (ADR-0150, landing 4; #35's note, decision 2) -#}
+                        {%- if each.entries %}
+                        {%- for part, standing in each.entries.items() %}
+                        <input type="hidden" name="set_at:{{ part }}" value="{{ standing.token }}">
+                        {%- endfor %}
+                        <fieldset class="mb-2 ls-join">
+                            <legend class="form-label">Where a schedule stands on the part chosen</legend>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="with" value="join" id="form-with-join"{% if fields.get('with', 'join') != 'replace' or not chosen %} checked{% endif %}>
+                                <label class="form-check-label" for="form-with-join">this window joins it, beside its note</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="with" value="replace" id="form-with-replace"{% if chosen and fields.get('with') == 'replace' %} checked{% endif %}>
+                                <label class="form-check-label" for="form-with-replace">this replaces it</label>
+                            </div>
+                        </fieldset>
+                        {%- endif %}
+                        {{ schedule_fields(editor if (editor and chosen) else new_editor(mine_here), 'form-maintenance', maintenance_default, maintenance_timezone, true) }}
+                        {%- endif %}
+                        {#- a package's button that files a ticket from this form, after
+                            the kind's own, which stays the form's default for Enter
+                            (ADR-0148) -#}
+                        {%- set filing = slot('notes.actions', node=node, kind=kind.name, draft_action=url_for('draft', path=branch, kind=kind.name)) %}
+                        <div class="maintenance-editor-form__actions">
+                            <button class="btn btn-sm btn-primary" type="submit">{{ kind.button }}</button>
+                            {%- if filing %}
+                            <span class="notes-actions">{{ filing }}</span>
+                            {%- endif %}
+                        </div>
+                        {%- if filing %}
+                        <p class="form-text mb-0 ls-file-hint">Opens a draft in a new tab, its summary the words' first line. Paste the issue's link into the words before you save.</p>
+                        {%- endif %}
+                    </form>
+                    {%- endfor %}
                 </div>
-                <button class="btn btn-sm btn-primary" type="submit">Add the note</button>
-            </form>
-        </details>
-        {%- endif %}
-        {%- if notes %}
-        <ol class="ls-notes list-unstyled">
-            {%- for shown in notes %}
-            {{ note_item(shown, branch, loop.index, editing=editing, mine=mine) }}
-            {%- endfor %}
-        </ol>
-        {%- else %}
-        <p class="ls-notes__none text-muted">No note is written on this node.</p>
-        {%- endif %}
+            </section>
+            {%- else %}
+            {#- whoever may set no kind still files a ticket, from the part alone, where a
+                package fills the slot: a form of its own that leaves the frame, as the
+                button does (ADR-0148) -#}
+            {%- set filing = slot('notes.actions', node=node, kind='', draft_action=url_for('draft', path=branch)) %}
+            {%- if filing %}
+            <section class="ls-tab__form ls-tab__file" id="add-note" aria-labelledby="tab-file">
+                <h2 class="ls-tab__label" id="tab-file">File it</h2>
+                <form method="post" action="{{ url_for('draft', path=branch) }}" target="_blank" class="ls-file-form">
+                    <div class="mb-2">
+                        <label class="form-label" for="file-on">On</label>
+                        <select class="form-select form-select-sm" id="file-on" name="slug">
+                            {%- for target in tab.files_on %}
+                            <option value="{{ target.slug }}"{% if target.slug == tab.files_choice %} selected{% endif %}>
+                                {%- if target.slug %}its line: {{ target.line | markdown_inline(node=node.path) | striptags | truncate(90) }}
+                                {%- else %}the node{% endif %}</option>
+                            {%- endfor %}
+                        </select>
+                    </div>
+                    <div class="maintenance-editor-form__actions">
+                        <span class="notes-actions">{{ filing }}</span>
+                    </div>
+                    <p class="form-text mb-0 ls-file-hint">Opens a draft of the part chosen in a new tab.</p>
+                </form>
+            </section>
+            {%- endif %}
+            {%- endif %}
+        </div>
+        <div class="col-lg-7 ls-tab__history">
+            <section aria-labelledby="tab-history">
+                <h2 class="ls-tab__label" id="tab-history">What came before</h2>
+                {%- if tab.history %}
+                <ol class="ls-notes ls-history list-unstyled">
+                    {%- for shown in tab.history %}
+                    {{ entry_item(shown, branch, loop.index, editing=editing, mine=mine, refused=refused) }}
+                    {%- endfor %}
+                </ol>
+                {%- else %}
+                <p class="ls-notes__none text-muted">Nothing was handled or noted here before.</p>
+                {%- endif %}
+            </section>
+        </div>
+        </div>
     </div>
 
 {% include '_page_end.html' %}
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='js/rail.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/maintenance-edit.js') }}"></script>
 </body>
 </html>

@@ -44,7 +44,6 @@ from little_sister.checks.ssh.metrics import (
     parse_metrics,
     reading,
     readings,
-    refuse_thresholds,
     unavailable,
     volume_name,
 )
@@ -139,10 +138,10 @@ GRADINGS: dict[str, object] = {
         "warn": 0.8, "error": 1.0},
 }
 
-#: What replaced each aspect of the retired `thresholds:` block, and the unit its
-#: level is written with.
-RETIRED_THRESHOLDS = {"disk": ("max_disk", "%"), "memory": ("max_memory", "%"),
-                      "cpu": ("max_cpu", "%"), "load": ("max_load", "")}
+#: The keys this type's file takes beside every check's, its gradings' and the
+#: connection's (ADR-0151); the retired ``thresholds:`` block is a key it does not
+#: take, refused as any other.
+CONFIG_KEYS = ("profile", "disk_path", "descriptions")
 
 # The leaf nodes this check owns beneath the host node: the peer ``ssh`` transport
 # leaf plus one per metric. ``disk`` may itself fan out per-filesystem, but owning
@@ -219,7 +218,8 @@ class HostMetricsCheck(SshScriptCheck):
         # and the library reads the deployment's levels (ADR-0131), and so is how
         # its levels first look (ADR-0128).
         super().__init__(subnode_defaults=SUBNODE_DEFAULTS, node_defaults=NODE_DEFAULTS,
-                         measure_defaults=MEASURES, gradings=GRADINGS, **kwargs)
+                         measure_defaults=MEASURES, gradings=GRADINGS,
+                         config_keys=CONFIG_KEYS, **kwargs)
         self.descriptions = descriptions or {}
         self.disk_path = disk_path
         self.profile = profile
@@ -229,7 +229,6 @@ class HostMetricsCheck(SshScriptCheck):
                            base_dir: Path) -> dict[str, Any]:
         profile = _parse_profile(config.get("profile"))
         default_script, interpreter = PROFILES[profile]
-        refuse_thresholds(config.get("thresholds"), RETIRED_THRESHOLDS)
         return {
             **cls._connection_from_config(config, base_dir, default_script),
             "interpreter": interpreter,

@@ -26,6 +26,7 @@ from little_sister import app as app_module
 from little_sister.reasons import Entry
 from little_sister.status import HEARTBEAT_PATH, StatusCode
 from little_sister.tree import StatusTree
+from tests.browser_binary import chromium
 from tests.browser_looks import looks
 from tests.browser_server import PageServer
 from tests.test_links_guide import FILLED
@@ -35,10 +36,6 @@ try:  # pragma: no cover - environment probe
     from playwright.sync_api import sync_playwright
 except ImportError:  # pragma: no cover
     sync_playwright = None  # type: ignore[assignment]
-
-#: A sandbox pins one browser build; a Playwright from the lock may expect another,
-#: so the one that is there is what runs (as ``tests/sweep_contrast.py`` does).
-_SANDBOX_CHROMIUM = Path("/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
 
 #: Bootstrap as ``tests/sweep_contrast.py`` vendors it (``docs/testing-the-gui.md``,
 #: Mode 4), where there is a copy; the CDN otherwise.
@@ -155,8 +152,7 @@ class PhoneLayoutTests(unittest.TestCase):
         try:
             cls.playwright = sync_playwright().start()
             cls.browser = cls.playwright.chromium.launch(
-                executable_path=(str(_SANDBOX_CHROMIUM) if _SANDBOX_CHROMIUM.is_file()
-                                 else None))
+                executable_path=chromium())
         except Exception as error:  # pragma: no cover - no browser here
             if cls.playwright is not None:
                 cls.playwright.stop()
@@ -315,8 +311,9 @@ class PhoneLayoutTests(unittest.TestCase):
     # --- what was wider ---------------------------------------------------------------
 
     def test_the_bands_filters_wrap_and_stay_in_reach(self):
-        # the two filters and the three buttons that set every node (ADR-0127
-        # decision 7) — the chips switch and the depth control went with dense mode
+        # the two filters, *◇ details* (ADR-0147 decision 6) and the three buttons
+        # that set every node (ADR-0127 decision 7) — the chips switch and the depth
+        # control went with dense mode
         self._sign_in()
         self.page.goto(f"{self.base}/status")
         self.page.wait_for_selector(".status-filters")
@@ -329,11 +326,11 @@ class PhoneLayoutTests(unittest.TestCase):
               return {left: box.left, right: box.right, top: Math.round(box.top)};
             })
             """)
-        self.assertEqual(len(controls), 5)
+        self.assertEqual(len(controls), 6)
         for control in controls:
             self.assertGreaterEqual(control["left"], 0, controls)
             self.assertLessEqual(control["right"], _WIDTH, controls)
-        # five controls do not fit one line of a phone: they take a second
+        # six controls do not fit one line of a phone: they take a second
         self.assertGreater(len({control["top"] for control in controls}), 1,
                            controls)
         # beneath the stamp, which then has nothing beside it to be ruled off from
@@ -664,19 +661,25 @@ class PhoneLayoutTests(unittest.TestCase):
         self.assert_fits_the_phone("/links with links, its icon names open")
 
     def test_an_open_editor_fits_a_phone(self):
+        # a pin's editor in its block, and the Notes tab's form, where a new one is
+        # set (ADR-0147 decision 1), its kind chosen
         self._sign_in()
-        for route, opener in (
-                ("/handled", ".rule-block__edit > summary"),
-                ("/status/alpha/disk", ".rule-block--node .rule-block__edit > summary"),
-                ("/status/ci/reviews", ".reason-pin > summary")):
+        for route, opener, fields in (
+                ("/handled", ".rule-block__edit > summary", "details[open]"),
+                ("/status/alpha/disk", ".rule-block--node .rule-block__edit > summary",
+                 "details[open]"),
+                ("/notes/ci/reviews", ".ack-kind:has-text('Maintenance')",
+                 ".ls-kind-form[data-kind=maintenance]")):
             with self.subTest(route=route):
                 self.page.goto(f"{self.base}{route}")
                 self.page.locator(opener).first.click()
+                if route.startswith("/notes"):
+                    self.page.locator(f"{fields} textarea[name=note]").click()
                 self.page.wait_for_function(
                     "document.activeElement !== null"
                     " && document.activeElement.name === 'note'")
                 self.assert_fits_the_phone(f"{route}, an editor open")
                 # and with the list of formats its expiry field takes
                 self.page.locator(
-                    "details[open] .maintenance-expiry-help > summary").first.click()
+                    f"{fields} .maintenance-expiry-help > summary").first.click()
                 self.assert_fits_the_phone(f"{route}, the formats open")

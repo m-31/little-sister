@@ -68,6 +68,12 @@ escaped as `\{error}`, it stays as written.
 A non-`OK` result always carries a reason. A failed or timed-out run becomes
 `ERROR` (ADR-0040 / ADR-0001).
 
+**A key nothing takes stops the start**: one at the top of a check's file that no check
+takes, its type does not and none of its gradings is written under — a misspelling such
+as `frequncy: 5m` — and one a `children:` block or a `subnodes:` entry does not take.
+The refusal names the file, the key and what its place takes
+([ADR-0151](../../docs/adr/0151-a-type-states-the-keys-its-file-takes-and-any-other-stops-the-start.md)).
+
 ## What a check grades by
 
 What a check type grades — a disk's use, a file's age, an HTTP status — the type
@@ -94,9 +100,10 @@ it grades
   code, is the sentence the line says after its own text where that grading decided
   it.
 
-A key that does not fit refuses the start, naming the file and the key, and so does
-one of the keys these replaced — `thresholds:`, `warn_mb` and `error_mb`, and the
-`file` check's `max_age` with a level and `stale_code` — naming what to write instead.
+A key that does not fit refuses the start, naming the file and the key. The keys these
+replaced — `thresholds:`, `warn_mb` and `error_mb`, and the `file` check's `stale_code`
+— are keys nothing takes, refused as any other is, and the `file` check's `max_age` with
+a level is refused as a pair's bare key is: it takes nothing but `null`.
 
 ## Node metadata — `config/nodes.yaml`
 

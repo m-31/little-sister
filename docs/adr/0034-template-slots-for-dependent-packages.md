@@ -1,7 +1,7 @@
 # ADR-0034 — Template slots for dependent packages
 
 - **Status:** Accepted
-- **Date:** 2026-10-25 (accepted 2026-08-01)
+- **Date:** 2026-11-01 (accepted 2026-08-01)
 - **Related:** [ADR-0001](0001-in-process-threaded-engine.md) (the import-before-app
   registration slot this reuses), [ADR-0018](0018-markdown-rendering.md) (what a reason
   is made of, and why raw HTML is escaped there), [ADR-0030](0030-curated-links.md) §3 /
@@ -16,8 +16,11 @@
   whose head's toolbar holds a node's actions where decision 3's `head_buttons` look
   stands it, and the frame a node's page stands in),
   [ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
-  (decisions 4 to 6: what a draft made from a node is written with, which both slots
-  hand a filler)
+  (decisions 4 to 6: what a draft made from a node is written with, which every slot
+  hands a filler),
+  [ADR-0148](0148-a-ticket-is-drafted-from-a-notes-words-by-the-package-that-fills-its-slot.md)
+  (the third slot, `notes.actions`, the draft function its filler registers, and the
+  *Notes* tab's address handed to every slot)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -204,17 +207,31 @@ dependent package fills a slot with **a template of its own** plus an optional
     icons they are one toolbar, a single tab stop the arrow keys walk, so the script,
     not a filler, sets their `tabindex`.
 
-12. **Both slots hand a filler what a draft is written with**, beside the node
+12. **Every slot hands a filler what a draft is written with**, beside the node
     ([ADR-0133](0133-a-node-says-what-it-is-in-a-card-and-at-length-in-a-handbook.md)
     decisions 4 to 6): `written_out(text, inline=False)`, a text of the node written out
     as the Copy document writes one — a status its braces name as its word and cue, a
     link in the short form to the absolute address of the node's handbook — and
     `details()`, the rows of the node's *About* card as `(key, value)`, those given down
-    to it among them, each value written out the same way. They are functions, called by
-    a filler for a draft it makes and costing nothing otherwise, since a slot is filled
-    for every node at every render; `reason.actions`' context is
-    `(node, reason, line, index, surface, written_out, details)` and `node.actions`'
-    `(node, surface, place, written_out, details)`, grown additively (decision 1).
+    to it among them, each value written out the same way; and `notes_url()`, the
+    address of the node's *Notes* tab
+    ([ADR-0148](0148-a-ticket-is-drafted-from-a-notes-words-by-the-package-that-fills-its-slot.md)
+    decision 5). They are functions, called by a filler for a draft it makes and costing
+    nothing otherwise, since a slot is filled for every node at every render;
+    `reason.actions`' context is
+    `(node, reason, line, index, surface, written_out, details, notes_url)` and
+    `node.actions`' `(node, surface, place, written_out, details, notes_url)`, grown
+    additively (decision 1).
+
+13. **The third slot is `notes.actions`**, in a node's *Notes* tab: after the kind's own
+    button in every kind's row of its form, and in the small form a reader who may set
+    no kind is given — context `(node, kind, draft_action, written_out, details,
+    notes_url)`. It is the one slot in a form, so its filler's button submits that form,
+    and the filler registers a **draft function** beside its template —
+    `slots.register(…, draft=…)`, which this slot requires and every other refuses —
+    that a route of the library's calls
+    ([ADR-0148](0148-a-ticket-is-drafted-from-a-notes-words-by-the-package-that-fills-its-slot.md)
+    decisions 1 to 3).
 
 ## Consequences
 

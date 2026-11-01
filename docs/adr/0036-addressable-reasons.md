@@ -1,7 +1,7 @@
 # ADR-0036 — Addressable reasons: keyed entries, and maintenance on one of them
 
 - **Status:** Accepted
-- **Date:** 2026-10-25 (accepted 2026-08-01)
+- **Date:** 2026-11-01 (accepted 2026-08-01)
 - **Related:** [ADR-0032](0032-status-contribution-boundary.md) (the contribution
   boundary, amended by this decision to reach one level below a node),
   [ADR-0039](0039-status-rollup-semantics.md) (the roll-up these entries reuse, and
@@ -23,7 +23,10 @@
   [ADR-0124](0124-a-node-whose-lines-are-all-silenced-still-counts-the-nodes-beneath-it.md)
   (what a node whose lines are all pinned cancels: nothing),
   [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md) (decisions 6 and 8: the page
-  that states every pin, at `/handled`, and the pill and the pip that lead to it),
+  that states every pin, at `/handled`, and the pill that leads to it),
+  [ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)
+  (decisions 1 and 2: a line's seat on its node's page, and the door that counts a
+  line's pin on its node's head and on those above it),
   [ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)
   (decision 8's threshold, returned as a configured rule on a node's lines),
   [ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
@@ -33,7 +36,10 @@
   [ADR-0109](0109-a-node-says-its-children-are-complete.md) (decision 1: the prune
   ADR-0007 deferred, as a node's statement that its children are complete),
   [ADR-0140](0140-a-nodes-notes-stand-on-a-tab-of-their-own.md) (decision 6: a pin's
-  text is `note`, in the model, the form and the file)
+  text is `note`, in the model, the form and the file),
+  [ADR-0145](0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)
+  (decision 11: a line's pin written whole —
+  amended)
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -136,9 +142,9 @@ check replaces its whole reason map with `check error: …`, so a delete-on-abse
 would throw away every pin on the node the moment the check has a bad minute. The
 node says a pinned entry is no longer reported;
 [ADR-0014](0014-maintenance-persistence.md)'s expiry stays the backstop that keeps a
-forgotten pin from lasting forever. An expiry that changes what the node shows is an
-event of the node ([ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md)
-decision 1), as decision 11 has it.
+forgotten pin from lasting forever. A pin's expiry is a row of its node
+([ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md) decision 1), as decision
+11 has it.
 
 **7. The entries are virtual children.** Each unsuppressed entry contributes the node's
 reported status; a suppressed one contributes nothing; the node's **own** status is the
@@ -188,41 +194,53 @@ and the node states how many of its entries are quiet — a card clamps its reas
 pinned line may sit below
 the fold and the count is the only thing that always shows
 ([ADR-0032](0032-status-contribution-boundary.md) rule 5). An entry pin **reports**
-everywhere a node pin does — the band's pill and a card's pip, each a ringed diamond,
-and *Handled*, at `/handled`, the page they lead to, which states every pin and where it
-is edited and cleared as well as on its node's page
-([ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) decision 6,
+everywhere a node pin does — the band's pill, a ringed diamond and the number of rules
+that stand; the door, ◇, on its node's head and on those above it, lit with the number
+of parts behind it
+([ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)
+decision 2); and *Handled*, at `/handled`, the page the pill leads to, which states
+every pin and where it is edited and cleared, as its node's page and its *Notes* tab do
+([ADR-0104](0104-a-pin-is-one-block-on-what-it-silences.md) decisions 4 and 6,
 [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
 decisions 6 and 8). `GET /maintenance` answers with *Handled* and its query, so that a
-bookmark and a way back drawn before hold. Setting one is the node's own page's job, a
-leaf's or a branch's (decision 12).
+bookmark and a way back drawn before hold. A pin is set on its node's *Notes* tab, a
+leaf's or a branch's, whose form sets maintenance on the node or on one of its lines
+([ADR-0145](0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)
+decision 2; decision 12).
 
 The **capped popover summarizes per node** — one row with a count (*3 of 20 reasons*,
 or *all 20 reasons* where every member is pinned) — while *Handled* states each
 pin as a block under its node's path. Twenty rows from one node would otherwise evict
-every other node from a capped list. The count is also what keeps the pip honest:
+every other node from a capped list. The count is also what keeps a row honest:
 without it a row would read as a node pin, which it is not.
 
 **11. Events and history keep plain strings.** They carry the map's *values*. A slug
 in a historical event means nothing once the entry is gone, and per-entry events are
 what would flood the log. Whether an entry's appearance is ever recorded is left open.
 
-A line's pin is an event where it changes what its node shows — set, cleared or expired
-([ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md) decisions 1 to 3). It is
-written as the node's change, and its set carries the line by its text and the pin's
-note; nothing is written for a line by itself, so the log keeps plain strings and does
-not fill with lines. A change beneath a line's pin is held back wherever the node does
-not show it, not only where every line is pinned.
+A line's pin is a row of its node for its set, its edit and its end, whatever it does
+to what the node shows
+([ADR-0107](0107-an-event-is-a-change-of-what-a-node-shows.md) decisions 1 to 3,
+[ADR-0145](0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)
+decision 9). It is written as the node's row, the line by its text and the pin with its
+note: the log keeps plain strings, and holds a line's pin whole. A change beneath a
+line's pin is held back wherever the node does not show it, not only where every line
+is pinned.
 
 **12. An entry is addressed in a query parameter or a form field — never in a path
-segment.** The surface is the **node's own page**, a branch's as well as a leaf's. A
-leaf's lists every reason uncapped; a branch's head, and its one card at depth 0, list
-the node's own lines as a leaf's page lists its lines — in full rather than clamped to
-`reason_cap`, each with its record, and where the reader may pin, the pause mark at its
-end and a pinned line's block beneath it — from one template the two pages share. Any
-line takes a pin, whatever it says, as a node does: a pin is an admin's intent, set
-ahead of the work as readily as on a failure. Each line grows an admin control, and the
-write posts `path` plus **`slug`** to `POST /pins/maintenance`
+segment.** A line stands whole on its **node's own page**, a branch's as well as a
+leaf's. A leaf's lists every reason uncapped; a branch's head, and its one card at
+depth 0, list the node's own lines as a leaf's page lists its lines — in full rather
+than clamped to `reason_cap`, each with its record and one seat at its end, and a
+pinned line's block beneath it — from one template the two pages share. The seat holds
+a plain ◇ where nothing handles a member line, for whoever may set something on it, and
+where something does, the mark of what handles it, which is its door
+([ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)
+decision 1). Any line takes a pin, whatever it says, as a node does: a pin is an
+admin's intent, set ahead of the work as readily as on a failure. A line's pin is set on
+its node's *Notes* tab, whose form a line's ◇ opens on that line
+([ADR-0145](0145-a-nodes-notes-tab-is-the-place-to-act-and-every-pin-leaves-an-entry.md)
+decision 2), and the write posts `path` plus **`slug`** to `POST /pins/maintenance`
 ([ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
 decision 4), beside the pin's text in a field of its own, `note`
 ([ADR-0140](0140-a-nodes-notes-stand-on-a-tab-of-their-own.md) decision 6), so the
@@ -231,15 +249,17 @@ this decision fixes is the query parameter (`?reason=<slug>`), a different names
 and it is unaffected.
 
 The **query parameter is built** on the node page rather than as a second route:
-`/status/<branch>?reason=<slug>` — the node stays a path, the slug stays a query value.
+`/status/<branch>?reason=<slug>` — the node stays a path, the slug stays a query value,
+and the node's *Notes* tab reads the same parameter to open its form on that line.
 The index names a line, so its link lands on that line; the page marks the one it was
 asked for with a single fixed `pinned-reason` anchor. A slug in a *fragment* was
 considered and rejected — a declared slug may legally contain `#` or `%`, which a
 fragment silently mis-parses; it would need an id on all 150 lines; and it can only fail
 to scroll. The parameter lets the server say what nothing else could: a pin whose slug
 the current run does not report is **suspended, not deleted** (decision 6), and the page
-says so in words, a branch's as a leaf's. A line's write comes back to the page as it
-was asked for — its depth and its filters — at the line.
+says so in words, a branch's as a leaf's. A line's edit and clear come back to the page
+as it was asked for — its depth and its filters — at the line; a write from the tab's
+form comes back to the tab.
 
 Two reasons, both hard: a percent-encoded `/` does **not** survive a path segment (WSGI
 hands over an already-decoded `PATH_INFO`, so `%2F` and a real separator are

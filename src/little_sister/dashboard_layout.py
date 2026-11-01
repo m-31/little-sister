@@ -20,9 +20,8 @@ heading rows as it has lines of chips at the level's width — under the look
 `boxes: packed` at the width of the one column it stands in (ADR-0138) — and a
 closed top-level card one row (:class:`Priced`).  Nothing beneath a chip is priced.
 A run in a level narrower than two of its columns and their gap wraps as it
-comes (backlog #91's note, §2, 2026-10-17), each chip at its own width — the
-model's column the server's estimate, where the stylesheet's is the column the
-browser draws.
+comes (ADR-0127 decision 12), each chip at its own width — the model's column the
+server's estimate, where the stylesheet's is the column the browser draws.
 """
 
 from __future__ import annotations
@@ -71,8 +70,8 @@ _MAX_CONTENT_WIDTH = _MAX_GRID_WIDTH
 
 # A run of chips (ADR-0127 decision 12): the column gap between its chips,
 # 0.3rem, as overview.css's aligned runs have it; and a chip as the server
-# estimates it before the script measures it (backlog #91's note, §2, 2026-10-17),
-# which the model needs only to tell how many chips share a line, and below two
+# estimates it before the script measures it, which the model needs only to tell
+# how many chips share a line, and below two
 # columns where the run wraps as it comes. Each character of its name and its
 # count is ``CHIP_LETTER`` of a ``0`` of the chip's font — a font's measure and no
 # stylesheet's, a ``0`` of about 0.55em of the chip's 0.8rem in the system faces
@@ -80,7 +79,7 @@ _MAX_CONTENT_WIDTH = _MAX_GRID_WIDTH
 # and border, ``CHIP_EDGE_PX``, its cue and the cue's margin, ``CHIP_CUE_EM``, and
 # where its level counts the counts' margin, ``CHIP_COUNTS_EM``, in ems of that
 # font, ``_CHIP_EM``. A theme drawn in a face of its own says how wide its
-# characters stand (:data:`CHIP_FACES`, 2026-10-18). A level whose estimate is
+# characters stand (:data:`CHIP_FACES`). A level whose estimate is
 # missing takes the stylesheet's fallback, ``12ch``.
 _CHIP_GAP = 48
 _CHIP_CH = 70
@@ -107,8 +106,8 @@ class ChipFace:
 #: The system's proportional faces, every theme's but those named below: a name's
 #: letters run at 0.6 to 0.9 of a ``0``, and a ``0`` is about 0.55em.
 CHIP_FACE = ChipFace(CHIP_LETTER, _CHIP_CH)
-#: The themes drawn in a face of their own (backlog #91's note, §2, 2026-10-18):
-#: cyberpunk's monospace one, where every character is a whole ``0`` of 0.6em.
+#: The themes drawn in a face of their own (ADR-0127 decision 12): cyberpunk's
+#: monospace one, where every character is a whole ``0`` of 0.6em.
 CHIP_FACES: Mapping[str, ChipFace] = {"cyberpunk": ChipFace(1.0, 77)}
 
 
@@ -302,7 +301,7 @@ def _level_columns(width: int, boxes: int, runs: int, packed: bool) -> int:
 def _run_lines(chips: Sequence[int], chip_w: int, width: int) -> int:
     """The lines a run takes at a level ``width`` wide, ``chips`` its chips' own
     widths: as many to a line as columns of ``chip_w`` fit, from two on; below
-    two, the run wraps as it comes (backlog #91's note, §2, 2026-10-17) — each chip
+    two, the run wraps as it comes (ADR-0127 decision 12) — each chip
     at its own width with the gap after it, a line holding what fits and a chip
     wider than the level a line of its own."""
     per_line = (width + _CHIP_GAP) // (chip_w + _CHIP_GAP)

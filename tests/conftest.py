@@ -28,13 +28,31 @@ line in the ``.env`` of the directory the suite runs in, a developer's own, deci
 what the suite logs at, and the tests that read the log failed on ``WARNING`` and
 above. ``setdefault`` is enough for that: the file never replaces what the
 environment holds. A level exported in the shell still stands, as an override does.
+
+**A run that collects this directory leaves the browser files out** — every
+``test_*_browser.py``, by ``collect_ignore_glob`` below. They hold pages against a
+real Chromium, and they run where they are named, as in
+``uv run pytest tests/test_dashboard_browser.py``, never because the environment
+holds the ``browser`` group (``docs/testing-the-gui.md``, Mode 5): pytest collects a
+file named on its command line whatever the list says, though naming ``tests``
+beside it leaves it out again. The list is here rather than an ``--ignore-glob`` in
+``addopts`` because pytest reads an ``addopts`` path from the directory it is started
+in: started inside ``tests/``, as an editor's test runner may start it, such a
+pattern matches nothing and every browser file runs. And a run that names one goes
+in one process, whatever ``-n auto`` in ``addopts`` would give it:
+``pytest_xdist_auto_num_workers`` below answers no workers when the command line
+names a browser file, beside other files or alone, since they have been timed and
+seen to pass in one process only. A number on the command line, ``-n 2``, still
+puts them on workers.
 """
 
+import fnmatch
 import os
 
 # Ahead of every import of the library, the first of which is below: it reads `.env`
-# and then `LOG_LEVEL` (the docstring's last paragraph). An import sorter leaves a
-# line that sets the environment where it stands; nothing of ours may move above it.
+# and then `LOG_LEVEL` (the docstring's paragraph on the level). An import sorter
+# leaves a line that sets the environment where it stands; nothing of ours may move
+# above it.
 os.environ.setdefault("LOG_LEVEL", "INFO")
 
 import pytest
@@ -62,6 +80,23 @@ os.environ.setdefault(
     os.pathsep.join((_USERS_ROOT, os.path.join(_REPO_ROOT, "config"))),
 )
 os.environ.setdefault("SECRET_KEY", "test-key")
+
+# The browser files, out of every run that collects this directory: the docstring's
+# last paragraph. pytest reads a pattern here from this file's directory.
+collect_ignore_glob = ["test_*_browser.py"]
+
+
+# The browser files in one process wherever a run names them: the docstring's last
+# paragraph. `optionalhook`, because the hook is pytest-xdist's to declare.
+@pytest.hookimpl(optionalhook=True)
+def pytest_xdist_auto_num_workers(config: pytest.Config) -> int | None:
+    """No workers for a run that names a browser file; for any other run, nothing,
+    so that pytest-xdist's own count stands."""
+    named = (os.path.basename(arg.split("::", 1)[0]) for arg in config.args)
+    if any(fnmatch.fnmatch(name, pattern)
+           for name in named for pattern in collect_ignore_glob):
+        return 0
+    return None
 
 
 @pytest.fixture(autouse=True)

@@ -27,6 +27,9 @@ from little_sister.status import StatusCode
 
 DEFAULT_MAX_CHARS = 1000
 
+#: The keys this type's file takes beside every check's (ADR-0151).
+CONFIG_KEYS = ("command", "working_dir", "capture", "max_chars", "keep")
+
 
 @register("command")
 class CommandCheck(Check):
@@ -52,7 +55,8 @@ class CommandCheck(Check):
         # Reading it here is safe and deliberate: `this_instance()` resolves on
         # first use and memoises, and a check is constructed after the
         # configuration root exists.
-        super().__init__(subject=instance.this_instance().name, **kwargs)
+        super().__init__(subject=instance.this_instance().name,
+                         config_keys=CONFIG_KEYS, **kwargs)
         self.command = command
         self.working_dir = working_dir
         self.capture = capture

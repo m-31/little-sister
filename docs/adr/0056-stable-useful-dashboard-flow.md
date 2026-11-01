@@ -1,7 +1,7 @@
 # ADR-0056 — Dashboard layout follows stable, useful flow
 
 - **Status:** Accepted
-- **Date:** 2026-10-25 (accepted 2026-08-15)
+- **Date:** 2026-11-01 (accepted 2026-08-15)
 - **Related:** [ADR-0005](0005-dashboard-freshness-and-self-monitoring.md)
   (the `little-sister` heartbeat),
   [ADR-0014](0014-maintenance-persistence.md) (maintenance pins),
@@ -12,10 +12,11 @@
   that replaces dense mode's switch, and the folds that replace `branch_cap`),
   [ADR-0128](0128-where-a-nodes-first-look-comes-from.md) (the first look this prices,
   the built-in one of decision 2 among them),
-  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md) (decisions 6 and 8, the pill,
-  the pip and the page they lead to),
+  [ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md) (decisions 6 and 8, the pill
+  and the page it leads to),
   [ADR-0138](0138-a-viewer-may-pack-a-levels-boxes.md) (a viewer's `boxes: packed`,
-  whose plan this record's bands price as the page will be packed).
+  whose plan this record's bands price as the page will be packed),
+  [ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md) (the door on a card's head, which takes the pip's place — *Maintenance visibility* amended).
 - **Register:** [`../decisions.md`](../decisions.md)
 
 ## Context
@@ -102,9 +103,12 @@ poll swap. The depth control and the chips switch have left the band with their 
 ### Maintenance visibility — decided 2026-07-25
 
 Maintenance is computed from the unfiltered snapshot so shallow depth and hide
-filters cannot erase it. A card whose subtree contains a pin carries an accessible
-maintenance pip, the ringed diamond, opening the card's own list. The global list is
-folded into a live count pill beside the heartbeat, the short form of what is handled
+filters cannot erase it. A card's head carries the door, ◇
+([ADR-0147](0147-one-door-opens-a-nodes-notes-tab-in-a-drawer-over-the-wall.md)
+decisions 1 and 2): lit with the number of parts handled at and beneath the card, read
+from the unfiltered snapshot, it opens the card's *Notes* tab in a drawer whose *what
+stands* lists them. The global list is folded into a live count pill beside the
+heartbeat, the short form of what is handled
 ([ADR-0135](0135-a-handled-part-keeps-its-true-color-and-every-surface-says-by-what.md)
 decision 6): a ringed diamond and the number of rules that stand — *2 handled*, its
 words by job in its name, *2 handled: 1 node in maintenance, 1 line in maintenance*.

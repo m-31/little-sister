@@ -1,7 +1,7 @@
 # ADR-0080 — The envelope is the snapshot, published: `schema_version` 3
 
 - **Status:** Accepted
-- **Date:** 2026-10-25 (accepted 2026-09-06; decision 8 and the minor-version rule of
+- **Date:** 2026-11-01 (accepted 2026-09-06; decision 8 and the minor-version rule of
   decision 1 accepted 2026-06-27, rewritten 2026-08-23)
 - **Related:** [ADR-0002](0002-rlock-snapshot-synchronization.md) (the snapshot this
   publishes), [ADR-0032](0032-status-contribution-boundary.md) (the three statuses and
@@ -35,7 +35,14 @@
   [ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
   (`handled`, `contribution.rule` and `maintenance` gone — `schema_version` 3),
   [ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md) (`seen`,
-  a second kind of pin in `handled`)
+  a second kind of pin in `handled`),
+  [ADR-0144](0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md)
+  (`silenced`, a third kind in `handled` — amended),
+  [ADR-0146](0146-an-event-marked-done-shows-ok-until-its-line-reads-anything-else.md)
+  (`done`, a fourth kind in `handled` — amended),
+  [ADR-0150](0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md)
+  (a maintenance item's window open, its schedule's end and its sentence, and a node's
+  `planned` — 3.1.0)
 - **Register:** [`../decisions.md`](../decisions.md)
 - **Contract:** [`../api/openapi.yaml`](../api/openapi.yaml) — the normative schema.
 
@@ -95,8 +102,15 @@ that put them in the snapshot, `schema_version` stayed 2 and the spec moved to 2
 ([ADR-0082](0082-a-line-carries-what-it-is-about-and-what-it-read.md)). So did a node's
 periods (2.9.0) and every entry's `contribution` (2.11.0), which decision 2 says, and a
 node's `handbook` and `details` (2.10.0) and its `tags` (2.12.0), which decision 10
-says. `observed_at` is still unpublished, for the reason above — nothing can emit it
-yet.
+says; and under `schema_version` 3, in 3.1.0, what stands on a part not reported now,
+which decision 11 says, and what maintenance is planned: a maintenance item's window
+open, `starts_at` and `expires_at`, its schedule's end, `until`, and `sentence`, the
+page's words for it, and `planned`, beside a node's `handled` and never among it — its
+own maintenance entry and its entries' that stand and hold nothing now, each with its
+next window, as ADR-0141 decision 3 lists them
+([ADR-0150](0150-a-maintenance-entry-is-its-schedule-and-holds-while-a-window-of-it-is-open.md)
+decision 12). `observed_at` is still unpublished, for the reason above — nothing can
+emit it yet.
 
 **The rule has a second half, and it is an obligation rather than a rule.** One
 envelope is written down — `src/little_sister/contract/envelope-3.json`, generated from
@@ -144,7 +158,10 @@ published: what this node's **parent accumulated**, and the rule that made it so
   ([ADR-0083](0083-a-node-may-wait-before-it-escalates.md)), `seen` for a failure a
   person accepted as it stands, which the parent counts as OK
   ([ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md)
-  decision 8), and `aggregation` for a rule the deployment configured, its code what
+  decision 8), `silenced` for a failure a person silenced until a deadline, which the
+  parent counts at the silence's level, OK or a warning at most
+  ([ADR-0144](0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md)
+  decision 11), and `aggregation` for a rule the deployment configured, its code what
   the parent counts or null where it counts nothing
   ([ADR-0137](0137-a-deployment-says-in-a-table-how-a-part-counts-above-it.md)
   decision 12) — and a further rule is a further name, an added enum value and
@@ -155,9 +172,13 @@ published: what this node's **parent accumulated**, and the rule that made it so
 
 Every entry carries `contribution` too, the same object, saying what its node counted
 of it — `maintenance` with a null code where the entry is pinned, `seen` where a person
-accepted its failure, `aggregation` where a configured rule on the node's lines changes
-how it counts, and null on the rest — so that the virtual children read as the real
-ones do. A node's and an entry's own `code` stay what they read.
+accepted its failure, `silenced` where a person silenced it, counted at its level,
+`done` where a person closed its failure, an event looked into and over, counted as OK
+until it reads anything else
+([ADR-0146](0146-an-event-marked-done-shows-ok-until-its-line-reads-anything-else.md)
+decision 9), `aggregation` where a configured rule on the node's lines changes how it
+counts, and null on the rest — so that the virtual children read as the real ones do.
+`done` is an entry's alone. A node's and an entry's own `code` stay what they read.
 
 This is [ADR-0032](0032-status-contribution-boundary.md) rule 5 — *a transformed
 contribution is visible and attributable* — reaching the API at last, and it is what
@@ -172,7 +193,8 @@ An object, not an array, because prose and members are different things
 "entries": {
   "addressable": true,
   "items": [{"slug": "stress-api-pr-42", "text": "PR #42 waiting 6d",
-             "code": "WARN", "running": false, "handled": []}]
+             "code": "WARN", "running": false, "handled": []}],
+  "not_reported": []
 }
 ```
 
@@ -183,7 +205,8 @@ entry's own where the check declared one and **null** where it carries the node'
 ([ADR-0042](0042-entries-carry-their-own-code.md)), `running` display-only work in
 flight, `handled` what handles this entry (decision 4). Order is the check's order and
 is never sorted. The bare string array goes; a client that wants the old shape reads
-`items[].text`.
+`items[].text`. Beside `items`, and never among them, `not_reported` lists what stands
+on an entry the node does not report now (decision 11).
 
 ### 4. What handles a part is one list, `handled`
 
@@ -205,7 +228,17 @@ A pin of the kind `seen` is a failure a person accepted as it stands
 ([ADR-0142](0142-a-failure-marked-seen-counts-as-ok-above-until-it-changes.md)
 decision 8): its part keeps its `code`, its item says the `status` it was set at and
 the `occurrence` it is bound to, and its `expires_at` is null where it was given no
-end.
+end. A pin of the kind `silenced` is a failure that flaps, held until a deadline
+([ADR-0144](0144-a-failure-silenced-counts-at-its-level-above-until-its-deadline.md)
+decision 11): its part keeps its `code`, its `counts_as` is its level's table —
+`{"WARN": "OK", "ERROR": "OK"}` or `{"ERROR": "WARN"}` — and its `expires_at`, the
+deadline, is never null. A pin of the kind `done` is an entry's: an event looked into
+and over, closed
+([ADR-0146](0146-an-event-marked-done-shows-ok-until-its-line-reads-anything-else.md)
+decision 9): its `counts_as` is a seen's, `{"WARN": "OK", "ERROR": "OK"}`, its `status`
+the failure it closed, its `occurrence` the event and never null, and its `expires_at`
+null. Each is a further kind, a compatible change in the contract's 3.1.0, and
+`schema_version` stays 3.
 
 **The text is `note`**, in the envelope as in the model
 ([ADR-0047](0047-node-notes-and-their-retention.md) decision 1). The envelope took the
@@ -347,6 +380,22 @@ every node above it, added up — as text, in the order its card lists them
 ([ADR-0139](0139-a-node-carries-every-tag-written-for-it-or-above-it.md) decision 6):
 the node's whole set, so that a subtree fetched by its path says them of its root too.
 Each of the three is absent where the node has none, as `run` is.
+
+### 11. What stands on a part not reported now rides beside what is reported
+
+A pin or a person's acknowledgment can stand on a part that is not reported now: an
+entry its node does not report — a finding that comes and goes, or every entry of a
+node whose check failed — or a node its check no longer returns or has not written
+since the instance started. The snapshot carries such a part for every surface, beside
+what is reported and never among it
+([ADR-0141](0141-every-pin-is-one-thing-with-a-kind-and-the-envelope-lists-what-handles-a-part.md)
+decision 3), so decision 1's rule puts it in the envelope. A node's `entries` carries
+`not_reported` beside `items`: each such entry, its `slug` and its `handled`. A node
+carries `nodes_not_reported` beside `children`: each such node beneath it, listed at the
+nearest node above it that stands, its `path`, its `handled` and its entries'
+`not_reported`. What stands on one holds nothing until its part is reported again, and
+both lists are empty on most nodes. Both are part of 3.1.0, a compatible change at
+`schema_version` 3.
 
 ## Consequences
 

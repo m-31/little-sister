@@ -1,4 +1,4 @@
-"""The Series pages draw only what they show (plan item 0d, backlog #89's B3).
+"""The Series pages draw only what they show.
 
 The index says what every node draws and draws none of it; a Series view draws each
 curve it shows once; a node's page draws the curves that stand on it and no other —
