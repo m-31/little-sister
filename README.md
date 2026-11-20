@@ -595,11 +595,3 @@ git config core.hooksPath hooks
 ```
 
 After that, commits are blocked if lint or tests fail.
-
-## Contributing
-
-Development happens on a private working branch; `main` carries releases only —
-one squashed commit per version. Bug reports and feature requests go through
-[GitHub issues](https://github.com/m-31/little-sister/issues). Pull requests are
-welcome too: an accepted PR is absorbed into the working branch and lands in the
-next release, credited with `Co-authored-by`.
